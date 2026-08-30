@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Estado local do control plane — nunca versionado
+.agentic/state.db
+.agentic/state.db-*
+.agentic/runs/
+.agentic/worktrees/

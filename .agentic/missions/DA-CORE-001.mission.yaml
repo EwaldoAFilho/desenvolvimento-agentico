@@ -1,0 +1,422 @@
+apiVersion: agentic/v1
+kind: Mission
+
+# O plano do MVP escrito no formato do próprio produto.
+# Narrativa e análises: docs/development/MVP-PLAN.md
+
+id: DA-CORE-001
+title: MVP do control plane de Desenvolvimento Agêntico
+objective: >
+  Executar uma missão real de 8 a 15 tasks com dependências, escopos declarados, quality
+  gates e revisão independente, sobre um projeto real, com múltiplos executores simultâneos
+  usando agentes locais já autenticados pela assinatura do usuário, persistindo estado,
+  eventos e evidências, com DAG observável em tempo real e relatório final.
+
+scope:
+  - Formato declarativo de missão, projeto e gates
+  - Graph compiler com validação e análises
+  - Orquestrador, scheduler, gates, isolamento git e integração
+  - Providers de agente locais (porta + mock + Claude Code CLI + Codex CLI)
+  - Runtime de processos locais de agente com saúde e capacidade por fornecedor
+  - CLI e dashboard de observabilidade
+  - Persistência de estado, eventos e evidências
+
+outOfScope:
+  - Multi-tenant, billing, marketplace
+  - Integração com GitHub (issues, PR, CI)
+  - Phase gates, replanejamento em runtime, missões multi-repositório
+  - Contabilidade de custo e token, analytics histórico
+  - Editor visual de missões
+
+constraints:
+  - Domínio não conhece provider, banco, HTTP nem UI
+  - Nenhum provider real exige API key: agentes rodam por CLI local já autenticada
+  - Domínio não contém nome de fornecedor, CLI ou empresa
+  - Nenhuma decisão de estado baseada em relato de agente
+  - Testes do orquestrador não podem depender de LLM real
+  - Sem serviço externo obrigatório (sem Postgres, Redis, fila, container)
+
+acceptanceCriteria:
+  - Missão inválida é recusada com diagnóstico apontando local e causa
+  - Duas tasks concorrentes com escopos sobrepostos nunca executam simultaneamente
+  - Nenhuma task chega a DONE sem evidência de escopo, gate e revisão exigidos
+  - Revisão é feita por identidade diferente da que executou
+  - Revisão cruzada obrigatória nunca é rebaixada em silêncio
+  - START MISSION pelo dashboard despacha todas as tasks READY conforme as políticas
+  - Queda do control plane não perde nem duplica tentativa
+  - Relatório final responde quem fez, quando, o que mudou e qual evidência concluiu
+
+defaults:
+  requireReview: true
+  maxAttempts: 3
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: foundation
+    title: Fundação
+  - id: core
+    title: Núcleo
+  - id: compiler
+    title: Compilador
+  - id: infra
+    title: Adapters
+  - id: engine
+    title: Engine
+  - id: interfaces
+    title: Interfaces
+  - id: quality
+    title: Qualidade
+
+tasks:
+  - id: T01
+    phase: foundation
+    title: Bootstrap do monorepo e fronteiras
+    objective: >
+      Monorepo npm workspaces com TypeScript estrito, vitest, biome, script `verify` e
+      regra de import boundaries que impede o domínio de importar infraestrutura.
+    dependencies: []
+    touches:
+      - package.json
+      - tsconfig.base.json
+      - biome.json
+      - vitest.workspace.ts
+      - .gitignore
+      - scripts/
+    validation:
+      - "`npm run verify` passa no repositório recém-criado"
+      - Import de adapter dentro de packages/domain quebra o lint (teste negativo)
+      - Workspaces globs já declaram packages/* e apps/* (nenhuma task futura edita a raiz)
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T02
+    phase: core
+    title: Domínio, máquinas de estado e portas
+    objective: >
+      Entidades do domínio, máquinas de estado de Task e Run como tabelas de transição
+      explícitas, predicado de conclusão, códigos de falha e as portas de infraestrutura.
+    dependencies: [T01]
+    touches:
+      - packages/domain/
+    validation:
+      - Cada transição da tabela tem teste; transição não listada lança e não altera estado
+      - Predicado DONE testado nos casos com e sem review e com e sem gate
+      - Pacote sem dependência de runtime além de utilitários puros
+      - Resolução de ReviewPolicy testada nos quatro níveis de precedência
+      - Busca por nome de fornecedor, CLI ou empresa no pacote não retorna ocorrência
+    gate: unit
+    risk: medium
+    estimate: 6
+
+  - id: T03
+    phase: core
+    title: Schemas declarativos e contratos de API
+    objective: >
+      Schemas zod de mission.yaml, project.yaml e gates.yaml, parser YAML com localização
+      de erro, e o contrato de leitura consumido por servidor e dashboard.
+    dependencies: [T02]
+    touches:
+      - packages/schemas/
+    validation:
+      - Fixtures válidas e inválidas para os três arquivos
+      - Erro de schema informa caminho do campo e linha/coluna no YAML
+      - Contrato de snapshot, detalhe de task, evento, saúde de provider e comandos de
+        aprovação e START MISSION exportado como tipo
+      - Registry de providers com maxConcurrent, roles e política de revisão validado
+    gate: unit
+    risk: low
+    estimate: 4
+
+  - id: T04
+    phase: core
+    title: Algoritmos de grafo
+    objective: >
+      Grafo genérico sobre ids de string com ordenação topológica determinística, detecção
+      de ciclos com descrição do ciclo, fecho transitivo, caminho mais longo ponderado e
+      agrupamento por earliest start.
+    dependencies: [T01]
+    touches:
+      - packages/graph/
+    validation:
+      - Grafos-fixture com resultado conhecido, incluindo ciclos e grafos desconexos
+      - Mesma entrada produz sempre a mesma ordem (teste de determinismo)
+      - Pacote não importa nada do domínio
+    gate: unit
+    risk: low
+    estimate: 3
+
+  - id: T05
+    phase: compiler
+    title: Graph Compiler
+    objective: >
+      Pipeline parse → schema → semântica → grafo → análises, produzindo CompiledGraph
+      hasheável e o catálogo de diagnósticos DA1xxx/DA2xxx/DA3xxx.
+    dependencies: [T03, T04]
+    touches:
+      - packages/compiler/
+    validation:
+      - Uma fixture por diagnóstico do catálogo, cobrindo severidade e mensagem
+      - Missão de exemplo compila com zero ERROR e produz waves e caminho crítico corretos
+      - specHash estável entre execuções e sensível a qualquer mudança semântica
+      - DA1011 para provider inexistente e DA2008 para revisão cruzada sem segundo fornecedor
+    gate: unit
+    risk: medium
+    estimate: 5
+
+  - id: T16
+    phase: infra
+    title: Process Runtime
+    objective: >
+      Primitivo de sistema operacional para executar processos: spawn com cwd e allowlist
+      de ambiente, streaming de stdout e stderr, timeout, cancelamento com encerramento da
+      árvore de processos e status de saída normalizado.
+    dependencies: [T01]
+    touches:
+      - packages/process/
+    validation:
+      - Processo que trava é encerrado no timeout e nenhum filho sobrevive (verificado por pid)
+      - Cancelamento encerra a árvore de processos e devolve status cancelado, não erro genérico
+      - Variável fora da allowlist não chega ao processo filho
+      - Saída volumosa é truncada com digest, sem estourar memória
+    gate: unit
+    risk: medium
+    estimate: 3
+
+  - id: T06
+    phase: infra
+    title: Persistência SQLite e event log
+    objective: >
+      Implementar RunStore e EventStore sobre SQLite em WAL, com migrations, unidade de
+      trabalho transacional e store de artefatos em disco.
+    dependencies: [T02]
+    touches:
+      - packages/persistence/
+    validation:
+      - Falha no meio da transação não grava estado nem evento (teste de atomicidade)
+      - Leitura concorrente durante escrita retorna estado consistente
+      - Migrations idempotentes; abertura de banco novo e existente
+    gate: unit
+    risk: medium
+    estimate: 5
+
+  - id: T07
+    phase: infra
+    title: Gate Runner
+    objective: >
+      Executar perfis de gate sobre o Process Runtime, no workspace da tentativa,
+      produzindo GateExecution com comando, exit code, duração e saída citável.
+    dependencies: [T03, T16]
+    touches:
+      - packages/gates/
+    validation:
+      - Comando que falha produz FAIL com exit code registrado
+      - Comando que trava produz TIMEOUT sem processo filho sobrevivente
+      - required false registra falha sem reprovar o gate
+      - Gate roda com cwd na worktree da tentativa, não na árvore principal
+    gate: unit
+    risk: medium
+    estimate: 3
+
+  - id: T08
+    phase: infra
+    title: Workspace, isolamento git e integração
+    objective: >
+      WorkspaceProvider nos modos shared e git-worktree, verificação de escopo por diff,
+      commit por tentativa e Integrator com rebase e merge na branch da missão.
+    dependencies: [T02]
+    touches:
+      - packages/workspace/
+    validation:
+      - Em repositório temporário, duas worktrees simultâneas não interferem entre si
+      - Alteração fora de touches é detectada como SCOPE_VIOLATION
+      - Conflito real de merge produz INTEGRATION_CONFLICT e não corrompe a branch da missão
+      - workspaceSetup deixa a worktree apta a rodar o gate; sua falha vira WORKSPACE_ERROR
+        e não é confundida com falha de gate
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: T17
+    phase: infra
+    title: Local Agent Runtime
+    objective: >
+      Ciclo de vida de agentes locais sobre o Process Runtime: descoberta do executável,
+      versão, prontidão, spawn com cwd na worktree, streams, pid, cancelamento, timeout,
+      status de saída e apuração de saúde por fornecedor.
+    dependencies: [T02, T16]
+    touches:
+      - packages/agent-runtime/
+    validation:
+      - probe devolve installed, ready e version, usando unknown quando a CLI não permite apurar
+      - Executável inexistente produz installed false, não exceção não tratada
+      - spawn recusa iniciar sem cwd de worktree válido
+      - Handle expõe pid quando aplicável, cwd, startedAt e status de saída normalizado
+      - Nenhuma credencial de fornecedor é lida, guardada ou injetada no ambiente
+    gate: unit
+    risk: high
+    estimate: 5
+
+  - id: T09
+    phase: infra
+    title: Agent Providers (porta, mock, Claude Code CLI e Codex CLI)
+    objective: >
+      Porta AgentProvider e ProviderRegistry com três adapters, todos sobre runtime local:
+      mock determinístico, Claude Code CLI e Codex CLI, mais capacidade e saúde por
+      fornecedor. Nenhum adapter real exige API key.
+    dependencies: [T17]
+    touches:
+      - packages/providers/
+    validation:
+      - Uma única suíte de contrato roda igual nos três adapters
+      - Mock é determinístico, cobre sucesso, erro, timeout e cancelamento, e não usa rede
+      - Adapters reais validados com stubs de processo e fixtures de saída gravadas, sem
+        consumir quota de nenhum agente
+      - Cada adapter executa no cwd informado e faz streaming de stdout e stderr quando suportado
+      - Cancelamento e timeout produzem status distinto de erro do agente
+      - CLI inexistente vira PROVIDER_UNAVAILABLE e CLI presente porém não autenticada vira
+        PROVIDER_NOT_READY, ambos sem consumir tentativa útil
+      - ProviderRegistry respeita maxConcurrent por fornecedor e reporta running e capacity
+      - capabilities declara readinessProbe suportado ou não, sem inventar suporte inexistente
+    gate: unit
+    risk: high
+    estimate: 7
+
+  - id: T10
+    phase: engine
+    title: Scheduler
+    objective: >
+      Função pura de seleção de tasks despacháveis, com locks de escopo, limites globais,
+      capacidade por fornecedor, prioridade de revisão e ordenação determinística.
+    dependencies: [T05]
+    touches:
+      - packages/orchestrator/src/scheduler/
+    validation:
+      - Tabelas de estado com decisões esperadas
+      - Nunca seleciona par de tasks com touches sobrepostos
+      - Respeita maxParallelTasks, maxExecutors, maxReviewers e maxConcurrent de cada provider
+      - Capacidade de um provider é compartilhada entre execução e revisão
+      - Revisão pendente tem prioridade sobre novo despacho de execução (teste de inanição)
+      - Recebe capacidade como dado de entrada e permanece função pura; saída determinística
+    gate: unit
+    risk: medium
+    estimate: 4
+
+  - id: T11
+    phase: engine
+    title: Orchestrator
+    objective: >
+      Loop de reconciliação que aplica transições, executa gates, seleciona executor e
+      revisor obedecendo política de revisão e capacidade por fornecedor, integra
+      resultados, trata retry e escalonamento, roda o mission gate e recupera tentativas
+      órfãs após queda.
+    dependencies: [T06, T07, T08, T09, T10]
+    touches:
+      - packages/orchestrator/src/engine/
+      - packages/orchestrator/src/application/
+      - packages/orchestrator/src/index.ts
+    validation:
+      - Run completo com provider mock cobrindo caminho feliz, gate FAIL com retry, review
+        FAIL com retry, tentativas esgotadas para BLOCKED, ESCALATE para BLOCKED e mission gate
+      - Executor e revisor nunca coincidem quando requireReview é verdadeiro
+      - cross-provider-required seleciona revisor de outro fornecedor; sem segundo fornecedor
+        apto a task vai para BLOCKED com CROSS_PROVIDER_UNAVAILABLE, nunca rebaixa
+      - cross-provider-preferred rebaixa para fresh-session registrando policyOutcome e evento
+      - Nenhum despacho excede maxConcurrent do fornecedor escolhido
+      - PROVIDER_UNAVAILABLE e PROVIDER_NOT_READY não incrementam attemptCount
+      - Encerrar o processo no meio do run e reiniciar recupera sem duplicar tentativa
+    gate: unit
+    risk: high
+    estimate: 9
+
+  - id: T12
+    phase: interfaces
+    title: CLI agentic
+    objective: >
+      Comandos de init, validate, compile, serve, start, status, pause, resume, stop,
+      inspeção e operações de task, relatório, tail de eventos, providers e doctor, com
+      exit codes significativos e saída --json estável.
+    dependencies: [T05, T11]
+    touches:
+      - apps/cli/
+    validation:
+      - Missão inválida retorna exit code diferente de zero e diagnóstico legível
+      - Saída --json tem formato estável coberto por teste
+      - doctor detecta workspace shared com maxParallelTasks maior que 1
+      - providers mostra installed, ready, version, running e capacity por fornecedor,
+        exibindo unknown quando a CLI não permite apurar
+      - task inspect expõe o caminho da worktree e a branch da tentativa
+      - agentic serve sobe o control plane sem run ativo
+    gate: unit
+    risk: low
+    estimate: 4
+
+  - id: T13
+    phase: interfaces
+    title: Server com read API, SSE e comandos
+    objective: >
+      Servidor local que expõe snapshot do run, detalhe de task, saúde dos providers,
+      stream incremental de eventos e os comandos de aprovação, START MISSION e operação de
+      task, servindo também o build do dashboard.
+    dependencies: [T11]
+    touches:
+      - apps/server/
+    validation:
+      - Snapshot coerente com o estado persistido
+      - Reconexão SSE com since não perde nem duplica evento
+      - START MISSION recusa missão não aprovada e missão com diagnóstico ERROR
+      - START MISSION com WARNING exige aceite explícito, registrado no evento run.started
+      - Aprovação grava actor; não existe caminho de aprovação automática
+      - Comando de mutação sem control plane ativo é recusado com mensagem clara
+    gate: unit
+    risk: medium
+    estimate: 5
+
+  - id: T14
+    phase: interfaces
+    title: Dashboard do DAG
+    objective: >
+      Visualização viva do DAG com agrupamento por fase, ação START MISSION, painel de
+      detalhe da task com evidências e isolamento, painel de providers, stream de eventos e
+      linguagem visual consistente de estados.
+    dependencies: [T03]
+    touches:
+      - apps/web/
+    validation:
+      - Testes de componente sobre fixtures do contrato de leitura
+      - Layout permanece legível com 17 nós e 7 fases; posição dos nós estável entre eventos
+      - Os doze estados são distinguíveis sem depender apenas de cor
+      - Ao concluir uma task na fixture de eventos, dependentes que ficam READY mudam sem reload
+      - Painel de detalhe comporta provider, executor, revisor, tentativa, worktree, branch,
+        duração, dependências, touches, gate, observações, revisão, eventos e razão da falha
+      - START MISSION exige aprovação e confirma explicitamente quando há WARNING
+      - Saúde de provider exibe unknown como unknown
+    gate: web
+    risk: medium
+    estimate: 7
+
+  - id: T15
+    phase: quality
+    title: E2E determinístico, missão real e relatório
+    objective: >
+      Repositório fixture com missão de 8 tasks executada de ponta a ponta com providers
+      mock no CI, incluindo revisão cruzada entre dois fornecedores simulados, roteiro
+      documentado da execução com Claude Code CLI e Codex CLI reais, e gerador do relatório
+      final da missão.
+    dependencies: [T12, T13, T14]
+    touches:
+      - tests/e2e/
+      - examples/
+      - docs/missions/
+    validation:
+      - "`npm run test:e2e` verde e determinístico em duas execuções seguidas"
+      - Relatório contém tentativas, retries, falhas de review, caminho crítico real e evidências citáveis
+      - Cenário de cross-provider-required é exercitado com dois providers mock distintos
+      - Nenhum teste automatizado consome quota de agente real
+      - Roteiro da execução real reproduzido por outra pessoa sem ajuda
+    gate: mission
+    risk: high
+    estimate: 5
+
+missionGate: mission
