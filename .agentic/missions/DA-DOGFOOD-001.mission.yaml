@@ -1,0 +1,91 @@
+apiVersion: agentic/v1
+kind: Mission
+
+id: DA-DOGFOOD-001
+title: O produto corrigindo dois defeitos do proprio produto
+objective: >
+  Executar, pelo proprio Desenvolvimento Agentico e com fornecedor real, duas correcoes
+  verdadeiras apontadas pelas revisoes independentes de DA-CORE-002, provando que a
+  plataforma consegue desenvolver a si mesma com isolamento, gate e evidencia.
+
+scope:
+  - Correcao de dois achados reais das revisoes de DA-CORE-002
+
+outOfScope:
+  - Qualquer mudanca arquitetural
+  - Qualquer funcionalidade nova
+
+constraints:
+  - Nenhuma mudanca de arquitetura; docs/ e docs/adr/ sao a Constituicao
+  - Nao afrouxar assercao existente para ficar verde
+  - Alterar apenas os caminhos declarados em touches
+
+acceptanceCriteria:
+  - Nenhum timestamp fabricado aparece no log do agente
+  - A redacao de segredo tem uma unica implementacao canonica na CLI
+  - npm run verify continua verde
+
+defaults:
+  requireReview: false
+  maxAttempts: 2
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: correcoes
+    title: Correcoes
+
+tasks:
+  - id: T01
+    phase: correcoes
+    title: Nao fabricar timestamp no log do agente
+    objective: >
+      Em packages/orchestrator/src/engine/agent-log.ts, timestampOf converte um ts ausente
+      ou invalido em 0, e a linha gravada fica com 1970-01-01T00:00:00.000Z — indistinguivel
+      de um timestamp real para quem le o JSONL depois. O artefato e evidencia de
+      diagnostico e nao pode fabricar dado. Use o relogio da captura quando o evento nao
+      trouxer ts valido, e marque a linha para que o leitor saiba que o horario foi
+      atribuido por nos.
+    description: >
+      Achado da revisao independente de T209b. Nao mude o formato do JSONL alem do
+      necessario e nao quebre os testes existentes de agent-log.
+    dependencies: []
+    touches:
+      - packages/orchestrator/src/engine/agent-log.ts
+    reads:
+      - packages/orchestrator/src/engine/agent-log.test.ts
+      - packages/orchestrator/src/engine/agent-log-artifact.test.ts
+    validation:
+      - Evento sem ts nao produz mais 1970-01-01 no artefato
+      - A linha gravada permite distinguir horario do evento de horario atribuido
+      - Os testes existentes de agent-log continuam passando sem alteracao de assercao
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T02
+    phase: correcoes
+    title: Uma unica implementacao de redacao de segredo na CLI
+    objective: >
+      apps/cli/src/redact.ts e uma copia de redactSecrets de @agentic/process. A CLI pode
+      importar @agentic/process (ver scripts/boundaries.config.mjs), entao a copia so cria
+      risco de divergencia: corrigir uma regra de mascaramento amanha deixaria a outra para
+      tras. Remova a copia e passe a usar a implementacao canonica.
+    description: >
+      Achado da revisao independente de T209b. Se algum teste depender da copia, ajuste o
+      teste para o canonico sem afrouxar o que ele verifica.
+    dependencies: []
+    touches:
+      - apps/cli/src/redact.ts
+    reads:
+      - packages/process/src/redact.ts
+      - scripts/boundaries.config.mjs
+    validation:
+      - Nao existe mais uma segunda implementacao de mascaramento em apps/cli
+      - A CLI continua mascarando os mesmos padroes de antes
+      - npx biome check apps/cli e node scripts/check-boundaries.mjs continuam limpos
+    gate: unit
+    risk: low
+    estimate: 2
+
+missionGate: unit
