@@ -92,6 +92,9 @@ describe('caminho feliz completo', () => {
       'workspace.acquired',
       'attempt.started',
       'task.dispatched',
+      // O log do executor e gravado antes da observacao: se a tentativa morrer depois,
+      // o diagnostico ja esta no disco.
+      'attempt.log_persisted',
       'attempt.observed',
       'task.verifying',
       'gate.started',
@@ -99,6 +102,7 @@ describe('caminho feliz completo', () => {
       'gate.finished',
       'task.review_requested',
       'review.requested',
+      'attempt.log_persisted',
       'review.finished',
       'task.integrating',
       'workspace.integrated',

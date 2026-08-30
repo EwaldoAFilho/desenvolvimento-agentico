@@ -56,6 +56,14 @@ import type {
   SchedulerInput,
 } from '../scheduler/index.js'
 import { select } from '../scheduler/index.js'
+import {
+  type AgentLogCapture,
+  type AgentLogConfig,
+  type AgentLogRole,
+  agentLogFile,
+  agentLogKind,
+  captureAgentLog,
+} from './agent-log.js'
 import { MISSION_GATE_ARTIFACT } from './artifacts.js'
 import { buildExecuteAssignment, buildReviewAssignment } from './assignment.js'
 import {
@@ -1657,15 +1665,86 @@ export class Orchestrator {
     }
   }
 
+  #agentLogConfig(): AgentLogConfig {
+    return { now: () => this.#deps.clock.now(), ...this.#deps.agentLog }
+  }
+
+  /**
+   * Grava o log do agente como artefato da tentativa e devolve a referencia real.
+   *
+   * NUNCA lanca e NUNCA reprova a tentativa: observabilidade nao e caminho critico
+   * (ARCHITECTURE 10). Falha em persistir fica visivel em `errors` e morre ali.
+   */
+  async #persistAgentLog(
+    inflight: Inflight,
+    capture: AgentLogCapture,
+    role: AgentLogRole,
+  ): Promise<string | undefined> {
+    try {
+      const captured = await capture.finish()
+      const directory = attemptDirectory(inflight.spec.id, inflight.attempt.attemptNumber)
+      const record = await this.#deps.artifacts.write({
+        runId: this.#runId,
+        kind: agentLogKind(role),
+        relativePath: `${directory}/${agentLogFile(role)}`,
+        content: captured.content,
+      })
+      // A linha do tempo precisa anunciar que existe diagnostico; o artefato sozinho e
+      // invisivel para quem so olha os eventos.
+      await this.#emitLogPersisted(inflight, role, record.path, captured)
+      return record.path
+    } catch (error) {
+      this.#errors.push(error)
+      return undefined
+    }
+  }
+
+  /**
+   * Anuncia na linha do tempo que existe log para a tentativa. Escreve so evento, sem
+   * mudanca de estado — I1 exige o inverso (estado sem evento e proibido), nao isto.
+   * Falhar aqui nunca pode derrubar a tentativa: observabilidade nao e caminho critico.
+   */
+  async #emitLogPersisted(
+    inflight: Inflight,
+    role: AgentLogRole,
+    path: string,
+    captured: { readonly content: string; readonly truncated: boolean },
+  ): Promise<void> {
+    try {
+      await this.#write({
+        events: [
+          this.#event(
+            this.#deps.clock.now(),
+            'attempt.log_persisted',
+            {
+              role,
+              path,
+              bytes: Buffer.byteLength(captured.content, 'utf8'),
+              truncated: captured.truncated,
+            },
+            { taskId: inflight.spec.id, attemptId: inflight.attempt.id },
+          ),
+        ],
+      })
+    } catch (error) {
+      this.#errors.push(error)
+    }
+  }
+
   /** Fora do tick: espera o agente, mede o workspace e devolve o resultado para o loop. */
   async #afterExecutor(inflight: Inflight, handle: AgentHandle): Promise<void> {
+    // O log e consumido EM PARALELO com o desfecho. Transmitir e descartar stdout/stderr
+    // foi exatamente o que deixou tres NO_CHANGES reais sem nenhuma forma de diagnostico.
+    const capture = captureAgentLog(handle, this.#agentLogConfig())
     let outcome: AgentOutcome
     try {
       outcome = await handle.result()
     } catch (error) {
       // Handle que morre sem desfecho (processo do agente arrancado, adapter quebrado) NAO
       // pode virar silencio: sem esta mensagem nada voltaria ao loop e a tentativa ficaria
-      // em RUNNING para sempre, com lock e workspace presos.
+      // em RUNNING para sempre, com lock e workspace presos. O log do que houve ate ali e
+      // justamente o que explica a morte: persistido antes de reprovar.
+      await this.#persistAgentLog(inflight, capture, 'execute')
       this.#push({
         kind: 'observed',
         attemptId: inflight.attempt.id,
@@ -1673,6 +1752,10 @@ export class Orchestrator {
       })
       return
     }
+    // O vinculo duravel do log e a linha em `artifacts` (kind `agent-log`) mais o evento
+    // `attempt.log_persisted` — nao o campo do outcome. Sobrescrever `outcome.logsRef`
+    // aqui era codigo morto: ninguem lia o campo, e a revisao provou por mutacao.
+    await this.#persistAgentLog(inflight, capture, 'execute')
     inflight.phase = 'observing'
     const observed = await observeAttempt({
       workspaces: this.#deps.workspaces,
@@ -1806,11 +1889,14 @@ export class Orchestrator {
   async #afterReviewer(inflight: Inflight, handle: AgentHandle): Promise<void> {
     const startedAt = inflight.reviewStartedAt ?? this.#deps.clock.now().getTime()
     const elapsed = (): number => Math.max(0, this.#deps.clock.now().getTime() - startedAt)
+    // Revisao que reprova sem explicar e o mesmo buraco do executor: o log tambem e artefato.
+    const capture = captureAgentLog(handle, this.#agentLogConfig())
     let outcome: AgentOutcome
     try {
       outcome = await handle.result()
     } catch (error) {
       // Mesma rede do executor: revisao sem desfecho reprova a tentativa, nunca some.
+      await this.#persistAgentLog(inflight, capture, 'review')
       this.#push({
         kind: 'review',
         attemptId: inflight.attempt.id,
@@ -1819,10 +1905,11 @@ export class Orchestrator {
       })
       return
     }
+    const logsRef = await this.#persistAgentLog(inflight, capture, 'review')
     this.#push({
       kind: 'review',
       attemptId: inflight.attempt.id,
-      outcome,
+      outcome: logsRef === undefined ? outcome : { ...outcome, logsRef },
       durationMs: elapsed(),
     })
   }

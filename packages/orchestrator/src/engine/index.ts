@@ -1,3 +1,20 @@
+export type {
+  AgentLogCaptureResult,
+  AgentLogConfig,
+  AgentLogRole,
+} from './agent-log.js'
+export {
+  AGENT_LOG_FILE,
+  AGENT_LOG_KIND,
+  AgentLogCapture,
+  agentLogFile,
+  agentLogKind,
+  captureAgentLog,
+  DEFAULT_AGENT_LOG_GRACE_MS,
+  DEFAULT_AGENT_LOG_MAX_BYTES,
+  REVIEW_LOG_FILE,
+  REVIEW_LOG_KIND,
+} from './agent-log.js'
 export {
   COMPILE_REPORT_ARTIFACT,
   MISSION_ARTIFACT,

@@ -55,6 +55,7 @@ import {
 } from '../application/index.js'
 import { systemClock } from '../runtime/clock.js'
 import { ulidGenerator } from '../runtime/ids.js'
+import type { AgentLogConfig } from './agent-log.js'
 import { CommandRefusedError } from './errors.js'
 import { SharedTreeIntegrator } from './integration.js'
 import {
@@ -89,6 +90,8 @@ export interface ControlPlaneConfig {
   readonly providerFactories?: Readonly<Record<string, ProviderFactory>>
   readonly gateRunner?: GateExecutor
   readonly agentEnvAllow?: readonly string[]
+  /** Teto, redacao e espera do log do agente gravado por tentativa (ARCHITECTURE 6.1). */
+  readonly agentLog?: AgentLogConfig
   readonly safetyIntervalMs?: number
 }
 
@@ -288,6 +291,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       },
       missionGateId: run.missionGateId,
       agentEnv,
+      ...(config.agentLog === undefined ? {} : { agentLog: config.agentLog }),
       safetyIntervalMs: config.safetyIntervalMs,
     }
     const orchestrator = new Orchestrator(engineDeps, runId)

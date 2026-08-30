@@ -1,6 +1,15 @@
 import type { CompileReportDto, DiagnosticDto, ProviderHealthDto } from '@agentic/schemas'
-import { type JSX, useState } from 'react'
+import { type JSX, useEffect, useRef, useState } from 'react'
 import { ProvidersPanel } from './ProvidersPanel.js'
+
+/** Partida tem tres estados visiveis — e um clique so cria um run (DASHBOARD 2.1). */
+export type StartPhase = 'idle' | 'starting' | 'running'
+
+const START_LABEL: Record<StartPhase, string> = {
+  idle: 'START MISSION',
+  starting: 'iniciando…',
+  running: 'run em andamento',
+}
 
 export interface StartMissionProps {
   readonly report: CompileReportDto
@@ -9,6 +18,8 @@ export interface StartMissionProps {
   readonly providers: readonly ProviderHealthDto[]
   readonly busy?: boolean
   readonly error?: string
+  /** Fase informada por quem conhece o run; a guarda interna vale de qualquer forma. */
+  readonly startPhase?: StartPhase
   readonly onApprove: (actor: string, note: string) => void
   readonly onStart: (acceptWarnings: boolean, actor: string) => void
 }
@@ -53,12 +64,50 @@ export function StartMission({
   providers,
   busy = false,
   error,
+  startPhase,
   onApprove,
   onStart,
 }: StartMissionProps): JSX.Element {
   const [actor, setActor] = useState('')
   const [note, setNote] = useState('')
   const [confirming, setConfirming] = useState(false)
+  const [pressed, setPressed] = useState(false)
+  /**
+   * Idempotencia do clique: o `ref` fecha a janela entre dois cliques no mesmo tick, antes
+   * de qualquer re-render. Dois cliques nunca viram dois `POST /api/runs`.
+   */
+  const fired = useRef(false)
+
+  // Partida que falhou volta a ser possivel: o erro fica a vista e o botao destrava.
+  useEffect(() => {
+    if (error === undefined) return
+    fired.current = false
+    setPressed(false)
+  }, [error])
+
+  /**
+   * Quem controla o run pode devolver a fase para `idle` (a partida falhou). Sem isto, uma
+   * segunda falha com a MESMA mensagem nao mudaria `error` e o botao ficaria travado.
+   */
+  useEffect(() => {
+    if (startPhase !== 'idle') return
+    fired.current = false
+    setPressed(false)
+  }, [startPhase])
+
+  const phase: StartPhase =
+    startPhase === 'running'
+      ? 'running'
+      : startPhase === 'starting' || pressed || busy
+        ? 'starting'
+        : 'idle'
+
+  const fireStart = (acceptWarnings: boolean): void => {
+    if (phase !== 'idle' || fired.current) return
+    fired.current = true
+    setPressed(true)
+    onStart(acceptWarnings, actor.trim())
+  }
 
   const errors = bySeverity(report, 'ERROR')
   const warnings = bySeverity(report, 'WARNING')
@@ -153,10 +202,15 @@ export function StartMission({
               <button
                 type="button"
                 className="btn btn--primary"
-                disabled={busy}
-                onClick={() => onStart(true, actor.trim())}
+                data-testid="confirm-start"
+                data-phase={phase}
+                aria-busy={phase === 'starting'}
+                disabled={phase !== 'idle'}
+                onClick={() => fireStart(true)}
               >
-                {`confirmar partida com ${warnings.length} aviso(s)`}
+                {phase === 'idle'
+                  ? `confirmar partida com ${warnings.length} aviso(s)`
+                  : START_LABEL[phase]}
               </button>
               <button type="button" className="btn btn--ghost" onClick={() => setConfirming(false)}>
                 cancelar
@@ -166,15 +220,26 @@ export function StartMission({
             <button
               type="button"
               className="btn btn--primary btn--start"
-              disabled={busy || !approved || actor.trim().length === 0}
+              data-testid="start-mission"
+              data-phase={phase}
+              aria-busy={phase === 'starting'}
+              disabled={phase !== 'idle' || !approved || actor.trim().length === 0}
               onClick={() => {
+                if (phase !== 'idle') return
                 if (warnings.length > 0) setConfirming(true)
-                else onStart(false, actor.trim())
+                else fireStart(false)
               }}
             >
-              START MISSION
+              {START_LABEL[phase]}
             </button>
           )}
+          <p className="start__phase" role="status" data-testid="start-phase">
+            {phase === 'idle'
+              ? 'pronta para partir'
+              : phase === 'starting'
+                ? 'iniciando o run — aguarde a confirmação do control plane'
+                : 'run em andamento'}
+          </p>
           {approved ? null : <p className="start__hint">START MISSION exige missão APPROVED.</p>}
         </section>
       )}

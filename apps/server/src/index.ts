@@ -38,7 +38,17 @@ export { registerMissionRoutes } from './routes/missions.js'
 export type { HealthBody } from './routes/read.js'
 export { loadRunOr404, registerReadRoutes } from './routes/read.js'
 export { registerStreamRoutes } from './routes/stream.js'
-export type { CreateServerInput, RunningServer } from './server.js'
-export { createServer, startServer } from './server.js'
+export type { AgentSlot, InFlightAgent, RunningTally } from './running.js'
+export {
+  applyPersistedRunning,
+  EMPTY_TALLY,
+  IN_FLIGHT_TASK_STATUSES,
+  inFlightAgents,
+  LIVE_RUN_STATUSES,
+  persistedRunning,
+  tallyOf,
+} from './running.js'
+export type { AttachServerInput, CreateServerInput, RunningServer } from './server.js'
+export { attachServer, createServer, startServer } from './server.js'
 export { HEARTBEAT_FRAME, SSE_HEADERS, SseChannel, sseFrame } from './sse.js'
 export { isApiPath, MISSING_BUILD_MESSAGE, pathnameOf, registerStatic, safeJoin } from './static.js'

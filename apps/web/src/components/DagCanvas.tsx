@@ -11,6 +11,7 @@ import {
 } from '../lib/dag-layout.js'
 import { classifyEdge, criticalPathEdges, EDGE_LABEL, edgeKey } from '../lib/edges.js'
 import type { TaskStatus } from '../lib/status.js'
+import { waitingReasons } from '../lib/waiting.js'
 import { BandNode, type BandNodeData } from './BandNode.js'
 import { TaskNode, type TaskNodeData } from './TaskNode.js'
 
@@ -36,6 +37,8 @@ function buildNodes(
   )
   const critical = new Set(snapshot.graph.criticalPath)
   const titleOf = new Map(snapshot.graph.nodes.map((n) => [n.id, n]))
+  // Motivo de espera e projecao: entra como rotulo do no, nunca como posicao (DASHBOARD 6).
+  const waiting = waitingReasons(snapshot)
 
   const bands: Node[] = layout.bands.map((band) => ({
     id: `band:${band.index}`,
@@ -61,6 +64,7 @@ function buildNodes(
       durationMs: durationOf.get(laid.id),
       onCriticalPath: critical.has(laid.id),
       picked: laid.id === selectedTaskId,
+      waiting: waiting.get(laid.id)?.summary,
     }
     return {
       id: laid.id,

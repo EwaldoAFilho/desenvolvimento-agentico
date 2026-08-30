@@ -712,3 +712,145 @@ body {
   height: 100%;
   color: var(--fg-muted);
 }
+
+/* ---------- foco visivel ---------- */
+
+/*
+ * Nenhum caminho de teclado pode ficar invisivel: o anel de foco e desenhado sobre qualquer
+ * fundo e nao depende de cor sozinha (tem espessura e deslocamento proprios).
+ */
+:focus-visible {
+  outline: 2px solid var(--st-blue-strong);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.react-flow__node:focus-visible .task-node {
+  outline: 2px solid var(--st-blue-strong);
+  outline-offset: 3px;
+}
+
+/* ---------- espera, atividade e falha ---------- */
+
+.task-node__foot--waiting {
+  justify-content: flex-start;
+}
+
+.task-node__waiting {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail__waiting {
+  color: var(--fg-muted);
+}
+
+.group--wait {
+  border-left: 3px solid var(--st-amber);
+  padding-left: 8px;
+}
+
+.group--fail {
+  border-left: 3px solid var(--st-red);
+  padding-left: 8px;
+}
+
+.group--block {
+  border-left: 3px solid var(--st-amber);
+  padding-left: 8px;
+}
+
+.activity {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.activity li {
+  display: grid;
+  grid-template-columns: 14px 66px minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+}
+
+.activity__icon {
+  color: var(--st-blue);
+}
+
+.activity__ts {
+  color: var(--fg-dim);
+}
+
+.activity__source {
+  grid-column: 3;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.logrefs {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.logrefs__label {
+  display: block;
+  color: var(--fg-muted);
+}
+
+/* ---------- ambiente do provider ---------- */
+
+.providers__env td {
+  padding-bottom: 6px;
+  color: var(--fg-muted);
+}
+
+.providers__env-item {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-right: 14px;
+  flex-wrap: wrap;
+}
+
+.providers__env-label {
+  color: var(--fg-dim);
+}
+
+.providers__env-item[data-tone="unknown"] code {
+  color: var(--fg-muted);
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.providers__env-item--bad {
+  color: var(--st-amber);
+}
+
+.providers__diagnostic {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.providers__diagnostic-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.providers__diagnostic-target,
+.providers__diagnostic-fix {
+  color: var(--fg-muted);
+}
+
+.start__phase {
+  margin: 0;
+  color: var(--fg-muted);
+}

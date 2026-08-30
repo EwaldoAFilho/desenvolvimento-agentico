@@ -1,4 +1,4 @@
-import type { ProviderHealthDto, Tristate } from '@agentic/schemas'
+import type { ProviderDiagnosticDto, ProviderHealthDto, Tristate } from '@agentic/schemas'
 import type { JSX } from 'react'
 
 /**
@@ -16,6 +16,11 @@ export function tristateTone(value: Tristate): 'ok' | 'bad' | 'unknown' {
   return value ? 'ok' : 'bad'
 }
 
+/** `resolvedPath` tambem pode ser o literal `unknown`: nao vira caminho nem vira verde. */
+export function unknownableTone(value: string | undefined): 'neutral' | 'unknown' {
+  return value === 'unknown' ? 'unknown' : 'neutral'
+}
+
 function slots(provider: ProviderHealthDto): string {
   const capacity = provider.capacity
   if (capacity === null) return `${provider.running} em execução`
@@ -27,6 +32,83 @@ function dots(provider: ProviderHealthDto): string {
   if (capacity === null) return ''
   const filled = Math.min(provider.running, capacity)
   return '●'.repeat(filled) + '○'.repeat(Math.max(0, capacity - filled))
+}
+
+/**
+ * No cabecalho o espaco e caro: la so o diagnostico aparece, porque e o que exige acao.
+ * Caminho resolvido e origem da prontidao ficam no painel completo.
+ */
+function hasEnvironment(provider: ProviderHealthDto, compact: boolean): boolean {
+  if (compact) return provider.diagnostic !== undefined
+  return (
+    provider.resolvedPath !== undefined ||
+    provider.readinessSource !== undefined ||
+    provider.diagnostic !== undefined
+  )
+}
+
+function DiagnosticLine({
+  diagnostic,
+}: {
+  readonly diagnostic: ProviderDiagnosticDto
+}): JSX.Element {
+  return (
+    <span className="providers__diagnostic">
+      <span className="providers__diagnostic-kind">{diagnostic.kind}</span>
+      <span>{diagnostic.detail}</span>
+      {diagnostic.target === undefined ? null : (
+        <span className="providers__diagnostic-target">{`alvo ${diagnostic.target}`}</span>
+      )}
+      {diagnostic.remediation === undefined ? null : (
+        <span className="providers__diagnostic-fix">{`conserto: ${diagnostic.remediation}`}</span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * Linha de ambiente: `resolvedPath`, `readinessSource` e `diagnostic`. Existe porque
+ * `installed: false` sozinho nao distingue "nunca instalado" de "link apontando para uma
+ * instalacao que sumiu" — e a diferenca custa horas de diagnostico.
+ */
+function EnvironmentRow({
+  provider,
+  compact,
+}: {
+  readonly provider: ProviderHealthDto
+  readonly compact: boolean
+}): JSX.Element {
+  return (
+    <tr className="providers__env" data-testid={`provider-${provider.providerId}-env`}>
+      <td colSpan={5}>
+        {compact || provider.resolvedPath === undefined ? null : (
+          <span className="providers__env-item" data-tone={unknownableTone(provider.resolvedPath)}>
+            <span className="providers__env-label">resolvedPath</span>
+            <code data-testid={`provider-${provider.providerId}-path`}>
+              {provider.resolvedPath}
+            </code>
+          </span>
+        )}
+        {compact || provider.readinessSource === undefined ? null : (
+          <span className="providers__env-item">
+            <span className="providers__env-label">readinessSource</span>
+            <span data-testid={`provider-${provider.providerId}-readiness-source`}>
+              {provider.readinessSource}
+            </span>
+          </span>
+        )}
+        {provider.diagnostic === undefined ? null : (
+          <span
+            className="providers__env-item providers__env-item--bad"
+            data-testid={`provider-${provider.providerId}-diagnostic`}
+          >
+            <span className="providers__env-label">diagnostic</span>
+            <DiagnosticLine diagnostic={provider.diagnostic} />
+          </span>
+        )}
+      </td>
+    </tr>
+  )
 }
 
 export interface ProvidersPanelProps {
@@ -48,9 +130,9 @@ export function ProvidersPanel({ providers, compact = false }: ProvidersPanelPro
             <th scope="col">running/capacity</th>
           </tr>
         </thead>
-        <tbody>
-          {providers.map((provider) => (
-            <tr key={provider.providerId} data-testid={`provider-${provider.providerId}`}>
+        {providers.map((provider) => (
+          <tbody key={provider.providerId}>
+            <tr data-testid={`provider-${provider.providerId}`}>
               <th scope="row" className="providers__id">
                 {provider.providerId}
               </th>
@@ -68,8 +150,11 @@ export function ProvidersPanel({ providers, compact = false }: ProvidersPanelPro
                 <span>{slots(provider)}</span>
               </td>
             </tr>
-          ))}
-        </tbody>
+            {hasEnvironment(provider, compact) ? (
+              <EnvironmentRow provider={provider} compact={compact} />
+            ) : null}
+          </tbody>
+        ))}
       </table>
     </section>
   )

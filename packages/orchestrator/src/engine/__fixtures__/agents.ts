@@ -225,3 +225,85 @@ export function brokenHandleFactory(
 ): ProviderFactory {
   return (input) => new BrokenHandleProvider(input, breakOn, step)
 }
+
+/** Como o log do agente pode falhar do lado do adapter, sem que o desfecho falhe junto. */
+export type LogFault = 'throws' | 'breaks' | 'hangs'
+
+function hangingLogs(): AsyncIterable<AgentLogEvent> {
+  return {
+    [Symbol.asyncIterator]: (): AsyncIterator<AgentLogEvent> => ({
+      next: (): Promise<IteratorResult<AgentLogEvent>> =>
+        new Promise<IteratorResult<AgentLogEvent>>(() => undefined),
+    }),
+  }
+}
+
+function breakingLogs(): AsyncIterable<AgentLogEvent> {
+  return {
+    async *[Symbol.asyncIterator](): AsyncGenerator<AgentLogEvent> {
+      yield { ts: new Date(), stream: 'stdout', chunk: 'linha observada antes da falha' }
+      throw new Error('stream de log interrompido no meio')
+    },
+  }
+}
+
+/**
+ * Handle normal em tudo, menos no log: `logs()` falha do jeito escolhido. E o CONTROLE do
+ * requisito — observabilidade quebrada nao pode derrubar a tentativa.
+ */
+class FaultyLogHandle implements AgentHandle {
+  readonly ref: string
+  readonly #inner: AgentHandle
+  readonly #fault: LogFault
+
+  constructor(inner: AgentHandle, fault: LogFault) {
+    this.ref = inner.ref
+    this.#inner = inner
+    this.#fault = fault
+  }
+
+  status(): AgentRunStatus {
+    return this.#inner.status()
+  }
+
+  cancel(reason: string): Promise<void> {
+    return this.#inner.cancel(reason)
+  }
+
+  result(): Promise<AgentOutcome> {
+    return this.#inner.result()
+  }
+
+  logs(): AsyncIterable<AgentLogEvent> {
+    if (this.#fault === 'throws') throw new Error('adapter quebrado: logs() indisponivel')
+    return this.#fault === 'breaks' ? breakingLogs() : hangingLogs()
+  }
+}
+
+export class FaultyLogProvider {
+  readonly id: ProviderId
+  readonly #inner: ScriptedAgentProvider
+  readonly #fault: LogFault
+
+  constructor(input: ProviderFactoryInput, fault: LogFault, step: StepFn) {
+    this.id = input.id
+    this.#fault = fault
+    this.#inner = new ScriptedAgentProvider(input, step)
+  }
+
+  capabilities(): ProviderCapabilities {
+    return this.#inner.capabilities()
+  }
+
+  health(): Promise<ProviderHealth> {
+    return this.#inner.health()
+  }
+
+  async start(assignment: Assignment, ctx: DispatchContext): Promise<AgentHandle> {
+    return new FaultyLogHandle(await this.#inner.start(assignment, ctx), this.#fault)
+  }
+}
+
+export function faultyLogFactory(fault: LogFault, step: StepFn): ProviderFactory {
+  return (input) => new FaultyLogProvider(input, fault, step)
+}

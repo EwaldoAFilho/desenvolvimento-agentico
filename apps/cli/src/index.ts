@@ -1,12 +1,14 @@
 export const PACKAGE_NAME = '@agentic/cli'
 
 export {
+  type CheckStatus,
   capacityCheck,
   type DoctorArgs,
   type DoctorCheck,
   type DoctorData,
   doctorCommand,
   MIN_NODE_MAJOR,
+  providerCheck,
   workspaceCheck,
 } from './commands/doctor.js'
 export { type EventsTailArgs, eventsTailCommand, renderEvent } from './commands/events-tail.js'
@@ -40,10 +42,33 @@ export {
   taskSkipCommand,
   taskUnblockCommand,
 } from './commands/mutations.js'
+export {
+  capacityLabel,
+  PROVIDER_STATES,
+  type ProviderState,
+  type ProviderView,
+  type ProviderViewInput,
+  providerStateOf,
+  providerViewOf,
+  renderProviderView,
+} from './commands/provider-view.js'
 export { type ProvidersArgs, providerRows, providersCommand } from './commands/providers.js'
 export { type RunReportArgs, runReportCommand } from './commands/run-report.js'
 export { SERVER_COMMAND, type ServeArgs, type ServeData, serveCommand } from './commands/serve.js'
-export { type TaskInspectArgs, taskInspectCommand } from './commands/task-inspect.js'
+export {
+  AGENT_ARTIFACT_PREFIX,
+  type AgentLogRef,
+  agentLogsOf,
+  type TaskInspectArgs,
+  type TaskInspectData,
+  taskInspectCommand,
+} from './commands/task-inspect.js'
+export {
+  WAIT_REASONS,
+  type WaitExplanation,
+  type WaitReason,
+  waitExplanationOf,
+} from './commands/task-waiting.js'
 export {
   AGENTIC_DIR,
   compileInputOf,
@@ -58,7 +83,13 @@ export {
   type ProjectOptions,
   readMissionFile,
 } from './context.js'
-export { type CommandDeps, defaultDeps, type GitProbe } from './deps.js'
+export {
+  type BootedServer,
+  type CommandDeps,
+  defaultDeps,
+  type GitProbe,
+  type ServePlaneInput,
+} from './deps.js'
 export { renderDiagnostic, renderDiagnostics, summaryOf } from './diagnostics.js'
 export {
   type ControlPlaneLink,
@@ -82,6 +113,7 @@ export {
 } from './output.js'
 export {
   findMissionRun,
+  noControlPlaneMessage,
   openPlane,
   parseRunId,
   parseTaskId,
@@ -90,6 +122,7 @@ export {
   withPlane,
 } from './plane.js'
 export { buildProgram, execute, main, VERSION } from './program.js'
+export { MASK, sanitize } from './redact.js'
 export {
   CliError,
   type CommandError,
@@ -105,6 +138,13 @@ export {
   usage,
   usageError,
 } from './result.js'
+export {
+  PERSISTED_SOURCE,
+  persistenceOf,
+  type RunningReading,
+  readPersistedRunning,
+  snapshotWithPersistedRunning,
+} from './running.js'
 export {
   EXAMPLE_MISSION_ID,
   GATES_TEMPLATE,

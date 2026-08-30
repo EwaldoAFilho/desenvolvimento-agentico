@@ -62,6 +62,17 @@ export interface EventPayloadMap {
   'attempt.started': { readonly attemptNumber: number; readonly workspace: WorkspaceRef }
   'attempt.finished': { readonly result: AttemptResult; readonly durationMs: number }
   'attempt.observed': { readonly observation: Observation }
+  /**
+   * O log do agente foi gravado como artefato. Existe para que a linha do tempo diga que
+   * ha diagnostico disponivel: sem isso o operador so descobre o arquivo se pensar em
+   * procurar. Nasceu de tres NO_CHANGES reais que ficaram sem explicacao.
+   */
+  'attempt.log_persisted': {
+    readonly role: 'execute' | 'review'
+    readonly path: string
+    readonly bytes: number
+    readonly truncated: boolean
+  }
   'attempt.cancelled': { readonly reason: string }
 
   'gate.started': { readonly gateId: GateId; readonly scope: 'task' | 'mission' }
@@ -154,6 +165,7 @@ export const EVENT_TYPES = [
   'attempt.started',
   'attempt.finished',
   'attempt.observed',
+  'attempt.log_persisted',
   'attempt.cancelled',
   'gate.started',
   'gate.command_finished',

@@ -1,12 +1,13 @@
 import type { TaskDetail } from '@agentic/schemas'
-import { type JSX, useCallback, useEffect, useState } from 'react'
+import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import { getTaskDetail, pauseRun, resumeRun, retryTask, skipTask, unblockTask } from '../api.js'
 import { type RunStreamDeps, useRunStream } from '../hooks/useRunStream.js'
 import type { Grouping } from '../lib/dag-layout.js'
+import { stalledDependents, waitingReasonOf } from '../lib/waiting.js'
 import { DagCanvas } from './DagCanvas.js'
 import { EventStream } from './EventStream.js'
 import { RunHeader } from './RunHeader.js'
-import { TaskDetailPanel } from './TaskDetailPanel.js'
+import { TaskDetailPanel, type TaskPanelContext } from './TaskDetailPanel.js'
 
 /** Relogio de parede do cabecalho. Nao e polling de dados: o estado vem todo do SSE. */
 function useNow(intervalMs = 1000): number {
@@ -59,6 +60,19 @@ export function RunDashboard({
     }
   }, [runId, selected, loadTaskDetail])
 
+  /**
+   * Contexto do painel: motivo de espera e dependentes parados sao **projecao** do snapshot
+   * (nada de estado novo). Ficam aqui porque so o dashboard tem o snapshot inteiro.
+   */
+  const context = useMemo<TaskPanelContext | undefined>(() => {
+    if (state === undefined || selected === undefined) return undefined
+    return {
+      waiting: waitingReasonOf(state.snapshot, selected),
+      stalled: stalledDependents(state.snapshot, selected),
+      now,
+    }
+  }, [state, selected, now])
+
   const run = useCallback(async (action: () => Promise<void>) => {
     setBusy(true)
     try {
@@ -97,6 +111,7 @@ export function RunDashboard({
           task={detail}
           loading={loadingDetail}
           busy={busy}
+          context={context}
           onClose={() => setSelected(undefined)}
           onRetry={(taskId) => void run(() => retryTask(runId, { taskId }))}
           onUnblock={(taskId, note) => void run(() => unblockTask(runId, { taskId, note }))}

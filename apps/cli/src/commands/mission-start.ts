@@ -1,12 +1,18 @@
+import type { ControlPlane } from '@agentic/orchestrator'
 import { compileMission, hasSeverity, toCompileReport } from '@agentic/orchestrator'
 import { StartRunCommandSchema } from '@agentic/schemas'
-import { compileInputOf, loadProjectContext, readMissionFile } from '../context.js'
-import type { CommandDeps } from '../deps.js'
+import {
+  compileInputOf,
+  loadProjectContext,
+  type ProjectContext,
+  readMissionFile,
+} from '../context.js'
+import type { BootedServer, CommandDeps } from '../deps.js'
 import { renderDiagnostics } from '../diagnostics.js'
 import { endpointOf } from '../link.js'
-import { createOutput } from '../output.js'
+import { createOutput, type Output } from '../output.js'
 import { findMissionRun, withPlane } from '../plane.js'
-import { type CommandResult, failure, ok, usageError } from '../result.js'
+import { type CommandResult, failure, messageOf, ok, usageError } from '../result.js'
 import type { MissionFileArgs } from './mission-validate.js'
 
 export interface StartArgs extends MissionFileArgs {
@@ -24,6 +30,34 @@ export interface StartData {
   readonly warningsAccepted: boolean
   readonly tasks?: Record<string, number>
   readonly deliveredTo?: string
+}
+
+/**
+ * Sobe a API sobre o plane deste processo. Falhar aqui NAO derruba o run: o run e o
+ * produto, a porta e conveniencia — mas o usuario precisa saber que ficou sem ela.
+ */
+async function publishApi(
+  deps: CommandDeps,
+  context: ProjectContext,
+  plane: ControlPlane,
+  out: Output,
+  port?: number,
+): Promise<BootedServer | undefined> {
+  const serve = deps.servePlane
+  if (serve === undefined) return undefined
+  try {
+    return await serve({
+      plane,
+      project: context.project,
+      projectText: context.projectText,
+      gatesText: context.gatesText,
+      repoRoot: context.repoRoot,
+      ...(port === undefined ? {} : { port }),
+    })
+  } catch (error) {
+    out.warn(`API HTTP indisponivel: ${messageOf(error)}`)
+    return undefined
+  }
 }
 
 export function actorOf(args: { readonly actor?: string }, deps: CommandDeps): string {
@@ -125,14 +159,32 @@ export async function missionStartCommand(
 
     const orchestrator = await plane.open(started.id)
     if (args.serve === true) {
-      out.line('control plane em primeiro plano; Ctrl+C encerra.')
+      // MESMO plane: publicar a API sobre um segundo control plane abriria um segundo
+      // escritor no mesmo banco (I7). Sem HTTP, `mission pause` nao teria a quem falar.
+      const published = await publishApi(deps, context, plane, out, args.port)
       out.line(
-        'a API HTTP e o dashboard vivem em @agentic/server — a CLI nao os importa (fronteira interfaces).',
+        published === undefined
+          ? 'control plane em primeiro plano, SEM API HTTP; Ctrl+C encerra.'
+          : `control plane em primeiro plano; API e dashboard em ${published.url}; Ctrl+C encerra.`,
       )
+      if (published !== undefined) {
+        out.line('`agentic mission pause` e os demais comandos de mutacao alcancam este run.')
+      }
       orchestrator.start()
       await deps.waitForShutdown()
       orchestrator.stop()
+      if (published !== undefined) await published.close().catch(() => undefined)
     } else {
+      // Sem `--serve` nao ha porta: pause, resume, stop, retry, unblock e skip nao alcancam
+      // este run enquanto ele anda. Dizer isso ANTES e mais barato que descobrir na hora.
+      out.line(
+        'modo primeiro plano SEM API HTTP: este run nao pode ser comandado de outro terminal.',
+      )
+      out.line(
+        `use \`agentic mission start ${args.file} --serve\` (ou deixe um \`agentic serve\` no ar)`,
+      )
+      out.line('para poder pausar, retomar ou parar enquanto ele executa. Ctrl+C encerra.')
+      out.line()
       await orchestrator.drain()
     }
 

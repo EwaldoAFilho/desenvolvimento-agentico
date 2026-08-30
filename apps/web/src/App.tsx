@@ -1,8 +1,8 @@
 import type { CompileReportDto, ProviderHealthDto } from '@agentic/schemas'
-import { type JSX, useCallback, useEffect, useState } from 'react'
+import { type JSX, useCallback, useEffect, useRef, useState } from 'react'
 import { approveMission, getCompileReport, getProviders, listRuns, startRun } from './api.js'
 import { RunDashboard } from './components/RunDashboard.js'
-import { StartMission } from './components/StartMission.js'
+import { StartMission, type StartPhase } from './components/StartMission.js'
 
 function queryParam(name: string): string | undefined {
   if (typeof window === 'undefined') return undefined
@@ -21,6 +21,7 @@ export function App(): JSX.Element {
   const [providers, setProviders] = useState<readonly ProviderHealthDto[]>([])
   const [approved, setApproved] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [startPhase, setStartPhase] = useState<StartPhase>('idle')
   const [error, setError] = useState<string | undefined>(undefined)
 
   useEffect(() => {
@@ -62,13 +63,25 @@ export function App(): JSX.Element {
     [report],
   )
 
+  /** Segunda guarda de idempotencia: nem um clique duplo nem um re-render criam dois runs. */
+  const starting = useRef(false)
+
   const onStart = useCallback(
     (acceptWarnings: boolean, actor: string) => {
-      if (report === undefined) return
+      if (report === undefined || starting.current) return
+      starting.current = true
+      setStartPhase('starting')
       setBusy(true)
       startRun({ missionId: report.missionId, acceptWarnings, actor })
-        .then((created) => setRunId(created))
-        .catch((cause: unknown) => setError(String(cause)))
+        .then((created) => {
+          setStartPhase('running')
+          setRunId(created)
+        })
+        .catch((cause: unknown) => {
+          starting.current = false
+          setStartPhase('idle')
+          setError(String(cause))
+        })
         .finally(() => setBusy(false))
     },
     [report],
@@ -91,6 +104,7 @@ export function App(): JSX.Element {
       providers={providers}
       busy={busy}
       error={error}
+      startPhase={startPhase}
       onApprove={onApprove}
       onStart={onStart}
     />

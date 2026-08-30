@@ -174,7 +174,10 @@ export function buildProgram(deps: CommandDeps, state: ProgramState): Command {
     .description('cria o run e orquestra; exige missao APPROVED')
     .argument('<arquivo>', 'caminho do mission.yaml')
     .option('--accept-warnings', 'aceita explicitamente os WARNING pendentes')
-    .option('--serve', 'mantem o control plane em primeiro plano apos a partida')
+    .option(
+      '--serve',
+      'mantem o control plane em primeiro plano E publica a API HTTP: sem isto, pause/resume/stop nao alcancam o run',
+    )
     .option('--actor <nome>', 'quem inicia (default: usuario do ambiente)')
     .action(async (file: string, options: OptionValues) => {
       const opts = base(options)

@@ -27,6 +27,7 @@ import type {
 } from '@agentic/persistence'
 import type { AttemptCommit, AttemptLease } from '@agentic/workspace'
 import type { ProjectReviewPolicy } from '../scheduler/index.js'
+import type { AgentLogConfig } from './agent-log.js'
 
 /**
  * Recorte do `RunStore` que o orquestrador usa. Declarado aqui porque a transacao precisa
@@ -95,6 +96,8 @@ export interface EngineDeps {
   readonly missionGateId?: GateId
   /** Allowlist repassada ao processo do agente. Nenhuma credencial e injetada (P17). */
   readonly agentEnv?: Readonly<Record<string, string>>
+  /** Teto, redacao e espera do log do agente persistido por tentativa (ARCHITECTURE 6.1). */
+  readonly agentLog?: AgentLogConfig
   /** Timer de seguranca do tick. `0` desliga (o teste dirige o loop). */
   readonly safetyIntervalMs?: number
 }

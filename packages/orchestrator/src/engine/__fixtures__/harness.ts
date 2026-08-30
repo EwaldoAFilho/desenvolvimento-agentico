@@ -18,6 +18,7 @@ import { taskId as toTaskId } from '@agentic/domain'
 import type { ProviderFactory } from '@agentic/providers'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseMissionFile, parseProjectFile, toMissionSpec } from '@agentic/schemas'
+import type { AgentLogConfig } from '../agent-log.js'
 import { type ControlPlane, createControlPlane } from '../control-plane.js'
 import type { Orchestrator } from '../orchestrator.js'
 import { type ConcurrencyProbe, pass, review, scriptedFactory, type StepFn } from './agents.js'
@@ -55,6 +56,8 @@ export interface HarnessOptions {
   readonly safetyIntervalMs?: number
   /** Substitui o provider de TODOS os ids do registry — usado pelo executavel falso. */
   readonly factory?: ProviderFactory
+  /** Teto e espera do log do agente: o teste aperta o limite para provar a truncagem. */
+  readonly agentLog?: AgentLogConfig
 }
 
 export interface Harness {
@@ -158,6 +161,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
         options.probe,
         options.factory,
       ),
+      ...(options.agentLog === undefined ? {} : { agentLog: options.agentLog }),
       ...(options.safetyIntervalMs === undefined
         ? {}
         : { safetyIntervalMs: options.safetyIntervalMs }),

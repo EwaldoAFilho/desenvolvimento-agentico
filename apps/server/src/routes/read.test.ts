@@ -233,8 +233,10 @@ describe('GET /api/providers', () => {
     expect(response.payload).toContain('"ready":"unknown"')
 
     const parsed = ProviderHealthDtoSchema.array().parse(raw)
-    expect(parsed[0]?.running).toBe(1)
     expect(parsed[0]?.capacity).toBe(3)
+    // `running: 1` do registry NAO passa: a contagem sai do estado persistido, e este run
+    // nao tem tentativa em voo. Cobertura do numero derivado fica em running.test.ts.
+    expect(parsed[0]?.running).toBe(0)
   })
 
   it('o provider mock real responde saude no contrato', async () => {

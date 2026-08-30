@@ -1,9 +1,18 @@
 import { toProviderHealthDto } from '@agentic/orchestrator'
 import type { ProjectFile, ProviderHealthDto } from '@agentic/schemas'
+import { applyPersistedRunning } from '@agentic/server'
 import { loadProjectContext } from '../context.js'
 import type { CommandDeps } from '../deps.js'
 import { createOutput, pad, table, tristate } from '../output.js'
 import { type CommandResult, failure, ok } from '../result.js'
+import { readPersistedRunning } from '../running.js'
+import {
+  capacityLabel,
+  type ProviderState,
+  type ProviderView,
+  providerViewOf,
+  renderProviderView,
+} from './provider-view.js'
 
 export const MIN_NODE_MAJOR = 22
 
@@ -19,7 +28,17 @@ export interface DoctorCheck {
 export interface DoctorData {
   readonly ok: boolean
   readonly checks: readonly DoctorCheck[]
+  /**
+   * Contrato ja publicado: `ProviderHealthDto` cru, com `running` derivado do banco. O DTO
+   * exige inteiro, entao quando a apuracao falha o numero do processo permanece ali — e
+   * `runningSource` diz que ele nao foi apurado. Quem quer o `unknown` explicito le
+   * `providerStates`.
+   */
   readonly providers: readonly ProviderHealthDto[]
+  /** Os cinco estados, com caminho resolvido, origem da prontidao e diagnostico. */
+  readonly providerStates: readonly ProviderView[]
+  /** De onde saiu `running`: o estado persistido, ou o motivo de nao ter sido apurado. */
+  readonly runningSource: string
 }
 
 function majorOf(version: string): number {
@@ -83,32 +102,35 @@ const MARK: Readonly<Record<CheckStatus, string>> = {
   unknown: 'unknown',
 }
 
-/** Saude do provider: `ready` desconhecido continua desconhecido, nunca vira aprovacao. */
-function providerCheck(health: ProviderHealthDto): DoctorCheck {
-  const base = { id: `provider.${health.providerId}`, title: `fornecedor ${health.providerId}` }
-  if (health.installed === false) {
-    return { ...base, status: 'error', detail: `nao instalado: ${health.detail}` }
-  }
-  if (health.ready === 'unknown' || health.installed === 'unknown') {
-    return {
-      ...base,
-      status: 'unknown',
-      detail: `installed ${tristate(health.installed)} · ready ${tristate(health.ready)} · ${health.detail}`,
-    }
-  }
-  if (health.ready === false) {
-    return { ...base, status: 'error', detail: `instalado mas nao pronto: ${health.detail}` }
-  }
+const CHECK_OF_STATE: Readonly<Record<ProviderState, CheckStatus>> = {
+  READY: 'ok',
+  INSTALLED: 'ok',
+  NOT_READY: 'error',
+  NOT_INSTALLED: 'error',
+  UNKNOWN: 'unknown',
+}
+
+/**
+ * Saude do provider como check: o estado decide, e `unknown` continua desconhecido — nunca
+ * vira aprovacao (R5). O conserto, quando existe, vai junto: quem le o doctor esta com um
+ * problema na mao, nao fazendo auditoria.
+ */
+export function providerCheck(view: ProviderView): DoctorCheck {
+  const parts = [view.state, view.detail]
+  const remediation = view.diagnostic?.remediation
+  if (remediation !== undefined) parts.push(`conserto: ${remediation}`)
   return {
-    ...base,
-    status: 'ok',
-    detail: `versao ${health.version} · capacidade ${health.capacity ?? 'sem teto'}`,
+    id: `provider.${view.provider}`,
+    title: `fornecedor ${view.provider}`,
+    status: CHECK_OF_STATE[view.state],
+    detail: parts.filter((part) => part.length > 0).join(' · '),
   }
 }
 
 /**
  * `doctor`: diagnostico do ambiente antes de gastar tempo de agente. Nunca afirma
- * autenticacao a partir de um `--version` que respondeu (R5).
+ * autenticacao a partir de um `--version` que respondeu (R5), e nunca imprime segredo,
+ * e-mail ou organizacao (ARCHITECTURE 9).
  */
 export async function doctorCommand(args: DoctorArgs, deps: CommandDeps): Promise<CommandResult> {
   const out = createOutput(deps, args.json === true)
@@ -154,9 +176,29 @@ export async function doctorCommand(args: DoctorArgs, deps: CommandDeps): Promis
   checks.push(workspaceCheck(context.project))
   checks.push(capacityCheck(context.project))
 
+  // Agentes em voo saem do BANCO. O livro-caixa do registry so conhece o proprio processo,
+  // e este aqui nao despachou nada — seria zero para tudo, sempre.
+  const reading = await readPersistedRunning(deps, context)
+  checks.push({
+    id: 'state.running',
+    title: 'agentes em voo',
+    status: reading.derived ? 'ok' : 'unknown',
+    detail: reading.derived
+      ? `${reading.tally.agents.length} em voo segundo o ${reading.source}`
+      : reading.source,
+  })
+
   const registry = deps.registry(context.project)
-  const health = (await registry.health()).map(toProviderHealthDto)
-  for (const provider of health) checks.push(providerCheck(provider))
+  const measured = (await registry.health()).map(toProviderHealthDto)
+  const health = reading.derived ? applyPersistedRunning(measured, reading.tally) : measured
+  const views = health.map((entry) =>
+    providerViewOf({
+      health: entry,
+      executable: context.project.providers.registry[entry.providerId]?.command,
+      ...(reading.derived ? { running: entry.running } : {}),
+    }),
+  )
+  for (const view of views) checks.push(providerCheck(view))
 
   out.line(`doctor · ${context.dir}`)
   out.line()
@@ -166,23 +208,40 @@ export async function doctorCommand(args: DoctorArgs, deps: CommandDeps): Promis
     ),
   )
   out.line()
+  out.line('fornecedores')
+  for (const view of views) {
+    out.line()
+    out.lines(renderProviderView(view).map((line) => `  ${line}`))
+  }
+  out.line()
   out.lines(
     table(
-      ['FORNECEDOR', 'INSTALADO', 'PRONTO', 'VERSAO', 'CAPACIDADE'],
-      health.map((provider) => [
-        provider.providerId,
-        tristate(provider.installed),
-        tristate(provider.ready),
-        provider.version,
-        provider.capacity === null ? 'sem teto' : String(provider.capacity),
+      ['FORNECEDOR', 'ESTADO', 'INSTALADO', 'PRONTO', 'VERSAO', 'EM VOO', 'CAPACIDADE'],
+      views.map((view) => [
+        view.provider,
+        view.state,
+        tristate(view.installed),
+        tristate(view.ready),
+        view.version,
+        String(view.running),
+        capacityLabel(view.capacity),
       ]),
     ).map((line) => `  ${line}`),
   )
   out.line()
   out.line('`unknown` significa que nao foi possivel apurar — nunca conte como pronto.')
+  out.line(
+    'INSTALLED = instalado com prontidao nao apurada; READY exige sonda de sessao que aprovou.',
+  )
 
   const errors = checks.filter((check) => check.status === 'error')
-  const data: DoctorData = { ok: errors.length === 0, checks, providers: health }
+  const data: DoctorData = {
+    ok: errors.length === 0,
+    checks,
+    providers: health,
+    providerStates: views,
+    runningSource: reading.source,
+  }
   if (errors.length > 0) {
     return failure(
       'doctor',

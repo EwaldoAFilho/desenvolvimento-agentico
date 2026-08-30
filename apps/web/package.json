@@ -6,6 +6,7 @@
   "description": "Dashboard: DAG vivo, detalhe de task, providers e START MISSION.",
   "scripts": {
     "dev": "vite",
+    "lint": "biome check .",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",

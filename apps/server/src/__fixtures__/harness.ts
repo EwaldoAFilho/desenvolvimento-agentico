@@ -173,3 +173,92 @@ export async function createServerHarness(
     },
   }
 }
+
+/** Marca uma task como em voo no BANCO, sem agente algum: estado + evento na mesma transacao. */
+export interface InFlightSeed {
+  readonly taskId: string
+  readonly providerId: string
+  /** `REVIEW` grava tambem o `review.requested` que identifica o fornecedor do revisor. */
+  readonly status?: 'RUNNING' | 'REVIEW'
+  readonly reviewerProviderId?: string
+  /** Tentativa ja encerrada: o controle de "task em voo mas processo morto". */
+  readonly finished?: boolean
+}
+
+export async function seedInFlightAttempt(
+  harness: ServerHarness,
+  runId: string,
+  seed: InFlightSeed,
+): Promise<string> {
+  const id = runId as RunId
+  const taskId = seed.taskId as never
+  const store = harness.plane.persistence.runs
+  const taskRuns = await store.loadTaskRuns(id)
+  const taskRun = taskRuns.find((task) => task.taskId === taskId)
+  if (taskRun === undefined) throw new Error(`task ${seed.taskId} nao existe no run ${runId}`)
+  const attemptId = `${seed.taskId}-a1-seed` as never // ATTEMPT_ID_PATTERN aceita este formato
+  const startedAt = new Date('2026-01-01T00:00:00.000Z')
+  const status = seed.status ?? 'RUNNING'
+  const executor = {
+    profileId: `${seed.providerId}.executor` as never,
+    providerId: seed.providerId as never,
+    sessionRef: `sessao-${seed.taskId}`,
+    startedAt,
+  }
+
+  await store.withTransaction(async (uow) => {
+    await uow.saveAttempt({
+      id: attemptId,
+      taskRunId: `${runId}:${seed.taskId}` as never,
+      attemptNumber: 1,
+      executor,
+      dispatchReason: {
+        dependenciesSatisfied: [],
+        locksAcquired: [],
+        providerId: seed.providerId as never,
+        slot: 'executor',
+        priority: 1,
+      },
+      workspace: { kind: 'git-worktree', path: `/tmp/${seed.taskId}`, branch: `task/${seed.taskId}` },
+      startedAt,
+      ...(seed.finished === true ? { finishedAt: startedAt, durationMs: 1 } : {}),
+      gateExecutions: [],
+    })
+    await uow.saveTaskRun({
+      ...taskRun,
+      status,
+      attemptCount: 1,
+      currentAttemptId: attemptId,
+      startedAt,
+    })
+    await uow.appendEvent({
+      runId: id,
+      ts: startedAt,
+      type: 'attempt.started',
+      actor: { kind: 'orchestrator' },
+      taskId,
+      attemptId,
+      payload: { attemptNumber: 1, workspace: { kind: 'git-worktree', path: `/tmp/${seed.taskId}` } },
+    })
+    if (status === 'REVIEW') {
+      await uow.appendEvent({
+        runId: id,
+        ts: startedAt,
+        type: 'review.requested',
+        actor: { kind: 'orchestrator' },
+        taskId,
+        attemptId,
+        payload: {
+          policy: 'fresh-session',
+          reviewer: {
+            ...executor,
+            profileId: 'revisor' as never,
+            providerId: (seed.reviewerProviderId ?? seed.providerId) as never,
+            sessionRef: `revisao-${seed.taskId}`,
+          },
+        },
+      })
+    }
+  })
+  return attemptId
+}

@@ -14,6 +14,8 @@ export interface TaskNodeData extends Record<string, unknown> {
   readonly durationMs?: number
   readonly onCriticalPath: boolean
   readonly picked: boolean
+  /** Motivo de espera projetado do snapshot: task parada nao diz so `PENDING`. */
+  readonly waiting?: string
 }
 
 export type TaskFlowNode = Node<TaskNodeData, 'task'>
@@ -42,7 +44,10 @@ export function TaskNodeCard({ data }: { readonly data: TaskNodeData }): JSX.Ele
       style={vars}
       data-testid={`task-node-${data.taskId}`}
       data-status={data.status}
-      aria-label={`${data.taskId} ${data.title} — estado ${style.label}, fase ${data.phase}`}
+      data-waiting={data.waiting}
+      aria-label={`${data.taskId} ${data.title} — estado ${style.label}, fase ${data.phase}${
+        data.waiting === undefined ? '' : `, ${data.waiting}`
+      }`}
     >
       <div className="task-node__top">
         <span className="task-node__id">{data.taskId}</span>
@@ -57,10 +62,22 @@ export function TaskNodeCard({ data }: { readonly data: TaskNodeData }): JSX.Ele
         ) : null}
       </div>
       <div className="task-node__title">{truncate(data.title, 34)}</div>
-      <div className="task-node__foot">
-        <span className="task-node__executor">{data.executor ?? data.phase}</span>
-        <span className="task-node__duration">{formatDuration(data.durationMs)}</span>
-      </div>
+      {data.waiting === undefined ? (
+        <div className="task-node__foot">
+          <span className="task-node__executor">{data.executor ?? data.phase}</span>
+          <span className="task-node__duration">{formatDuration(data.durationMs)}</span>
+        </div>
+      ) : (
+        <div className="task-node__foot task-node__foot--waiting">
+          <span
+            className="task-node__waiting"
+            title={data.waiting}
+            data-testid={`task-waiting-${data.taskId}`}
+          >
+            {truncate(data.waiting, 30)}
+          </span>
+        </div>
+      )}
     </article>
   )
 }

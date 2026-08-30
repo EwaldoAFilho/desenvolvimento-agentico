@@ -13,6 +13,7 @@ import type { ServerDeps } from '../deps.js'
 import { parseRunId, parseTaskId, toRunHeader } from '../dto.js'
 import { badRequest, notFound } from '../errors.js'
 import { optionalInt } from '../query.js'
+import { applyPersistedRunning, persistedRunning } from '../running.js'
 
 export interface HealthBody {
   readonly status: 'ok'
@@ -83,10 +84,14 @@ export function registerReadRoutes(app: FastifyInstance, deps: ServerDeps): void
     return toRunHeader(await loadRunOr404(deps, parseRunId(request.params.id)))
   })
 
+  // `running` do snapshot vem do banco: o painel de providers do dashboard mostra o mesmo
+  // numero que o doctor, e nao o do livro-caixa em memoria de quem respondeu.
   app.get<{ Params: RunParams }>(
     '/api/runs/:id/snapshot',
     async (request): Promise<RunSnapshot> => {
-      return deps.plane.getRunSnapshot(parseRunId(request.params.id))
+      const snapshot = await deps.plane.getRunSnapshot(parseRunId(request.params.id))
+      const tally = await persistedRunning(deps.plane.persistence)
+      return { ...snapshot, providers: applyPersistedRunning(snapshot.providers, tally) }
     },
   )
 
@@ -112,10 +117,16 @@ export function registerReadRoutes(app: FastifyInstance, deps: ServerDeps): void
     return events.map(toEventDto)
   })
 
-  // `unknown` atravessa como `unknown`: a UI mostra `?`, nunca pinta de verde (DASHBOARD 5.1).
+  /**
+   * `unknown` atravessa como `unknown`: a UI mostra `?`, nunca pinta de verde (DASHBOARD 5.1).
+   *
+   * `running` NAO vem do registry: o livro-caixa dele so conhece o que o proprio processo
+   * despachou. A contagem sai do estado persistido, que vale para qualquer leitor.
+   */
   app.get('/api/providers', async (): Promise<ProviderHealthDto[]> => {
     const health = await deps.plane.registry.health()
-    return health.map(toProviderHealthDto)
+    const tally = await persistedRunning(deps.plane.persistence)
+    return applyPersistedRunning(health.map(toProviderHealthDto), tally)
   })
 
   app.get<{ Params: RunParams }>('/api/runs/:id/report', async (request, reply) => {

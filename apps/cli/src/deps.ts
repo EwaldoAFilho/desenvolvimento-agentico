@@ -7,7 +7,7 @@ import {
 } from '@agentic/orchestrator'
 import { createProviderRegistryFromProject } from '@agentic/providers'
 import type { ProjectFile } from '@agentic/schemas'
-import type { ServerConfig } from '@agentic/server'
+import { attachServer, type ServerConfig } from '@agentic/server'
 import { git, isGitRepo } from '@agentic/workspace'
 import { type ControlPlaneLink, connectHttp } from './link.js'
 import type { ExitCode } from './result.js'
@@ -41,6 +41,21 @@ export interface CommandDeps {
   waitForShutdown(): Promise<void>
   /** Sobe a API HTTP+SSE. Injetavel para o teste nao abrir porta de verdade. */
   bootServer?(config: ServerConfig): Promise<BootedServer>
+  /**
+   * Publica a API sobre o control plane que ESTE processo ja abriu (`mission start
+   * --serve`). Nao pode ser `bootServer`: aquele cria um plane proprio, e dois escritores
+   * no mesmo banco quebram I7.
+   */
+  servePlane?(input: ServePlaneInput): Promise<BootedServer>
+}
+
+export interface ServePlaneInput {
+  readonly plane: ControlPlane
+  readonly project: ProjectFile
+  readonly projectText: string
+  readonly gatesText: string
+  readonly repoRoot: string
+  readonly port?: number
 }
 
 /** Recorte de `RunningServer` de @agentic/server que a CLI realmente usa. */
@@ -109,5 +124,6 @@ export function defaultDeps(): CommandDeps {
     connect: (endpoint) => connectHttp(endpoint),
     probeGit: (cwd) => defaultGitProbe(cwd),
     waitForShutdown: defaultShutdown,
+    servePlane: (input) => attachServer(input),
   }
 }

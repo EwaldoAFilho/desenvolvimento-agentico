@@ -450,3 +450,127 @@ export const RUN_SNAPSHOT: RunSnapshot = {
     parallelismRatio: 0.5,
   },
 }
+
+/**
+ * Run PERSISTIDO com tentativas em voo, sem agente nenhum.
+ *
+ * Existe para provar o `running` derivado do banco: um segundo processo (a CLI) precisa
+ * enxergar os agentes que OUTRO processo despachou. O livro-caixa em memoria nunca
+ * enxergaria.
+ */
+export interface InFlightSeed {
+  readonly taskId: string
+  readonly providerId: string
+  readonly status?: 'RUNNING' | 'REVIEW'
+}
+
+const SEED_POLICIES = {
+  maxParallelTasks: 2,
+  maxExecutors: 2,
+  maxReviewers: 1,
+  defaultMaxAttempts: 3,
+  attemptTimeoutMs: 1_800_000,
+  retryBackoffMs: 5_000,
+  workspaceMode: 'git-worktree' as const,
+  enforceTouches: true,
+  denyPaths: ['.agentic/'],
+}
+
+function seedTaskSpec(id: string, touches: string): never {
+  return {
+    id,
+    phase: 'base',
+    title: `task ${id}`,
+    objective: `entregar ${id}`,
+    dependencies: [],
+    touches: [touches],
+    validation: ['o gate passa'],
+    risk: 'low',
+    estimate: 1,
+  } as never
+}
+
+export async function seedPersistedRun(
+  dir: string,
+  seeds: readonly InFlightSeed[],
+  options: { readonly runStatus?: 'RUNNING' | 'COMPLETED' } = {},
+): Promise<string> {
+  const { openPersistence } = await import('@agentic/persistence')
+  const persistence = openPersistence({ baseDir: join(dir, '.agentic') })
+  const createdAt = new Date('2026-01-01T00:00:00.000Z')
+  const tasks = seeds.map((seed, index) => seedTaskSpec(seed.taskId, `src/${index}/`))
+  const run = {
+    id: RUN_ID,
+    missionId: 'TESTE-001',
+    specHash: 'hash-de-teste',
+    graph: { specHash: 'hash-de-teste', tasks, edges: [], topologicalOrder: seeds.map((s) => s.taskId) },
+    status: options.runStatus ?? 'RUNNING',
+    policies: SEED_POLICIES,
+    createdAt,
+    startedAt: createdAt,
+  } as never
+
+  const taskRuns = seeds.map(
+    (seed) =>
+      ({
+        runId: RUN_ID,
+        taskId: seed.taskId,
+        status: 'PENDING',
+        attemptCount: 0,
+        unblockedBy: [],
+      }) as never,
+  )
+
+  try {
+    await persistence.runs.createRun(run, taskRuns)
+    for (const seed of seeds) {
+      const attemptId = `${seed.taskId}-a1`
+      const status = seed.status ?? 'RUNNING'
+      const executor = {
+        profileId: `${seed.providerId}.executor`,
+        providerId: seed.providerId,
+        sessionRef: `sessao-${seed.taskId}`,
+        startedAt: createdAt,
+      }
+      await persistence.runs.withTransaction(async (uow) => {
+        await uow.saveAttempt({
+          id: attemptId,
+          taskRunId: `${RUN_ID}:${seed.taskId}`,
+          attemptNumber: 1,
+          executor,
+          dispatchReason: {
+            dependenciesSatisfied: [],
+            locksAcquired: [],
+            providerId: seed.providerId,
+            slot: 'executor',
+            priority: 1,
+          },
+          workspace: { kind: 'git-worktree', path: `/tmp/${seed.taskId}` },
+          startedAt: createdAt,
+          gateExecutions: [],
+        } as never)
+        await uow.saveTaskRun({
+          runId: RUN_ID,
+          taskId: seed.taskId,
+          status,
+          attemptCount: 1,
+          currentAttemptId: attemptId,
+          unblockedBy: [],
+          startedAt: createdAt,
+        } as never)
+        await uow.appendEvent({
+          runId: RUN_ID,
+          ts: createdAt,
+          type: 'attempt.started',
+          actor: { kind: 'orchestrator' },
+          taskId: seed.taskId,
+          attemptId,
+          payload: { attemptNumber: 1, workspace: { kind: 'git-worktree', path: `/tmp/${seed.taskId}` } },
+        } as never)
+      })
+    }
+  } finally {
+    persistence.close()
+  }
+  return RUN_ID
+}

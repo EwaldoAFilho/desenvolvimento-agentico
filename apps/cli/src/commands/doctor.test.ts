@@ -230,10 +230,11 @@ describe('providers', () => {
     expect(row).not.toMatch(/\bsim\b|\bok\b|\btrue\b/)
   })
 
-  it('mostra instalado, pronto, versao, em uso e capacidade', async () => {
+  it('mostra instalado, pronto, versao, em uso e capacidade — e o `em uso` vem do BANCO', async () => {
     workspace = await createWorkspace()
     const captured = captureDeps({
       cwd: workspace.dir,
+      // `running: 2` e a contabilidade em memoria de OUTRO processo: nao vale como fato.
       registry: () => fakeRegistry([{ ...MOCK_OK, running: 2 }]),
     })
     const result = await providersCommand({}, captured.deps)
@@ -242,7 +243,7 @@ describe('providers', () => {
     expect(text).toContain('FORNECEDOR')
     expect(text).toContain('INSTALADO')
     expect(text).toContain('CAPACIDADE')
-    expect(text).toMatch(/mock\s+sim\s+sim\s+1\.0\.0-mock\s+2\s+4/)
+    expect(text).toMatch(/mock\s+sim\s+sim\s+1\.0\.0-mock\s+0\s+4/)
     expect(result.data).toHaveLength(1)
   })
 

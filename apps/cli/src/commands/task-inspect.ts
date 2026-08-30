@@ -1,9 +1,12 @@
-import type { TaskDetail } from '@agentic/schemas'
+import type { ArtifactRow } from '@agentic/persistence'
+import type { RunSnapshot, TaskDetail } from '@agentic/schemas'
 import { loadProjectContext } from '../context.js'
 import type { CommandDeps } from '../deps.js'
 import { createOutput, duration, type Output, table } from '../output.js'
 import { parseTaskId, resolveRunId, withPlane } from '../plane.js'
 import { type CommandResult, ok } from '../result.js'
+import { persistenceOf, snapshotWithPersistedRunning } from '../running.js'
+import { type WaitExplanation, waitExplanationOf } from './task-waiting.js'
 
 export interface TaskInspectArgs {
   readonly taskId: string
@@ -14,10 +17,63 @@ export interface TaskInspectArgs {
 
 const NONE = '-'
 
-function renderTaskDetail(out: Output, detail: TaskDetail): void {
+/** Artefato de log de agente. Kind livre por design; o prefixo e o que os identifica. */
+export const AGENT_ARTIFACT_PREFIX = 'agent-'
+
+/**
+ * O revisor tambem e um agente, e o log dele e gravado com kind proprio (`review-log`).
+ * Sem esta linha, uma reprovacao de revisao ficaria tao sem evidencia quanto o
+ * `NO_CHANGES` que motivou esta secao. Constante local de proposito: `task inspect` filtra
+ * por kind, nao depende do vocabulario interno do orquestrador.
+ */
+export const REVIEW_ARTIFACT_KIND = 'review-log'
+
+function isAgentArtifact(kind: string): boolean {
+  return kind.startsWith(AGENT_ARTIFACT_PREFIX) || kind === REVIEW_ARTIFACT_KIND
+}
+
+export interface AgentLogRef {
+  readonly kind: string
+  readonly path: string
+  readonly digest: string
+  readonly bytes: number
+}
+
+/**
+ * Logs de agente persistidos desta task.
+ *
+ * Existe por um achado de smoke com agente REAL: tres tentativas falharam com
+ * `NO_CHANGES` e foi impossivel descobrir por que, porque o log do agente nao estava em
+ * lugar nenhum que a interface mostrasse. Quando o artefato existe, o caminho aparece
+ * aqui; quando nao existe, a saida DIZ que nao existe em vez de calar.
+ */
+export function agentLogsOf(rows: readonly ArtifactRow[], taskId: string): AgentLogRef[] {
+  const marker = `/attempts/${taskId}-a`
+  return rows
+    .filter((row) => isAgentArtifact(row.kind) && row.path.includes(marker))
+    .map((row) => ({ kind: row.kind, path: row.path, digest: row.digest, bytes: row.bytes }))
+}
+
+/** `--json` aditivo: todo campo de `TaskDetail` continua onde estava. */
+export interface TaskInspectData extends TaskDetail {
+  readonly agentLogs: readonly AgentLogRef[]
+  readonly waiting?: WaitExplanation
+}
+
+function renderTaskDetail(out: Output, detail: TaskInspectData): void {
   out.line(`${detail.id} ${detail.title} · ${detail.status} · fase ${detail.phase}`)
   out.line(`objetivo: ${detail.objective}`)
   out.line()
+
+  // Task parada sem despacho: dizer apenas PENDING deixa o operador adivinhando.
+  const waiting = detail.waiting
+  if (waiting !== undefined) {
+    out.line('espera')
+    out.line(`  motivo        ${waiting.reason}`)
+    out.line(`  explicacao    ${waiting.detail}`)
+    out.line(`  na frente     ${waiting.blockedBy.join(' ') || NONE}`)
+    out.line()
+  }
 
   out.line('grafo')
   out.line(
@@ -59,6 +115,15 @@ function renderTaskDetail(out: Output, detail: TaskDetail): void {
   out.line(`  commit        ${detail.isolation.commit ?? NONE}`)
   if (detail.isolation.worktreePath !== undefined) {
     out.line(`  abrir         code ${detail.isolation.worktreePath}`)
+  }
+  out.line()
+
+  out.line('log do agente')
+  if (detail.agentLogs.length === 0) {
+    out.line('  (nenhum log de agente persistido para esta task)')
+  }
+  for (const log of detail.agentLogs) {
+    out.line(`  ${log.kind}  ${log.path}  ${log.bytes} bytes  sha256:${log.digest}`)
   }
   out.line()
 
@@ -109,7 +174,10 @@ function renderTaskDetail(out: Output, detail: TaskDetail): void {
   }
 }
 
-/** `task inspect`: detalhe completo, com worktree e branch — e o que abre o editor. */
+/** Task ainda sem despacho: so ai vale gastar uma leitura de snapshot para explicar a espera. */
+const WAITING_STATUSES: readonly string[] = ['PENDING', 'READY']
+
+/** `task inspect`: detalhe completo, com worktree, log do agente e razao de espera. */
 export async function taskInspectCommand(
   args: TaskInspectArgs,
   deps: CommandDeps,
@@ -120,7 +188,23 @@ export async function taskInspectCommand(
   return withPlane(deps, context, async (plane) => {
     const runId = await resolveRunId(plane, args.runId)
     const detail = await plane.getTaskDetail(runId, taskId)
-    renderTaskDetail(out, detail)
-    return ok('task inspect', detail)
+    const artifacts = persistenceOf(plane)?.queries.listArtifacts(runId) ?? []
+
+    let waiting: WaitExplanation | undefined
+    if (WAITING_STATUSES.includes(detail.status)) {
+      const snapshot: RunSnapshot = await snapshotWithPersistedRunning(
+        plane,
+        await plane.getRunSnapshot(runId),
+      )
+      waiting = waitExplanationOf(detail, snapshot)
+    }
+
+    const data: TaskInspectData = {
+      ...detail,
+      agentLogs: agentLogsOf(artifacts, taskId),
+      ...(waiting === undefined ? {} : { waiting }),
+    }
+    renderTaskDetail(out, data)
+    return ok('task inspect', data)
   })
 }

@@ -71,6 +71,31 @@ export async function findMissionRun(
 }
 
 /**
+ * A mensagem que o usuario ve quando nao ha control plane no ar.
+ *
+ * A versao antiga so mandava "suba um com `agentic serve`" e deixava de fora o caso REAL
+ * que acontece: `mission start` SEM `--serve` orquestra em primeiro plano e nao publica
+ * HTTP nenhum. O run esta andando, o usuario tenta pausar, e a CLI respondia como se nao
+ * houvesse run — quando o problema e que aquele processo nao tem porta.
+ *
+ * Recusar continua certo (I7: ninguem escreve no banco por fora do orquestrador). O que
+ * mudou e a mensagem dizer QUAL e o caminho de volta.
+ */
+export function noControlPlaneMessage(endpoint: string): string {
+  return [
+    `nenhum control plane respondendo em ${endpoint}.`,
+    'comando de mutacao nao escreve no banco por fora do orquestrador (I7), entao ele precisa',
+    'de um processo publicando HTTP. Duas causas comuns:',
+    `  1. nao ha control plane no ar        -> \`agentic serve\``,
+    '  2. ha um run rodando em primeiro plano, iniciado com `agentic mission start <arquivo>`',
+    '     SEM `--serve`: esse modo orquestra mas NAO publica HTTP, entao pause, resume, stop,',
+    '     retry, unblock e skip ficam inalcancaveis ate ele terminar (Ctrl+C encerra o run).',
+    '     Para poder comandar o run enquanto ele anda, use `agentic mission start <arquivo> --serve`',
+    '     (ou deixe um `agentic serve` no ar antes de dar o start).',
+  ].join('\n')
+}
+
+/**
  * Mutacao sobre run exige o control plane no ar (ARCHITECTURE 4). Sem processo, a CLI diz
  * isso — nao escreve no banco por fora do unico escritor (I7).
  */
@@ -81,12 +106,6 @@ export async function requireLink(
 ): Promise<ControlPlaneLink> {
   const endpoint = endpointOf(context.project, port)
   const link = await deps.connect(endpoint)
-  if (link === undefined) {
-    throw new CliError(
-      'NO_CONTROL_PLANE',
-      `nenhum control plane respondendo em ${endpoint}: suba um com \`agentic serve\` antes.\n` +
-        'comando de mutacao nao escreve no banco por fora do orquestrador (I7).',
-    )
-  }
+  if (link === undefined) throw new CliError('NO_CONTROL_PLANE', noControlPlaneMessage(endpoint))
   return link
 }

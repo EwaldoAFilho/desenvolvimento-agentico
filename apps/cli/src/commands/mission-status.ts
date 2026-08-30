@@ -4,6 +4,7 @@ import type { CommandDeps } from '../deps.js'
 import { createOutput, duration, type Output, table, tristate } from '../output.js'
 import { resolveRunId, withPlane } from '../plane.js'
 import { type CommandResult, ok } from '../result.js'
+import { snapshotWithPersistedRunning } from '../running.js'
 
 export interface RunTargetArgs {
   readonly runId?: string
@@ -46,6 +47,8 @@ export function renderSnapshot(out: Output, snapshot: RunSnapshot): void {
   out.line(`waves: ${snapshot.graph.waves.map((wave) => wave.join('+')).join(' -> ')}`)
   out.line(`caminho critico: ${snapshot.graph.criticalPath.join(' -> ')}`)
   out.line()
+  // `EM USO` sai do estado persistido: um `agentic mission status` roda em OUTRO processo,
+  // e o livro-caixa em memoria do registry dele nunca viu despacho nenhum.
   out.lines(
     table(
       ['FORNECEDOR', 'INSTALADO', 'PRONTO', 'EM USO', 'CAPACIDADE'],
@@ -74,7 +77,7 @@ export async function missionStatusCommand(
   const context = await loadProjectContext(deps, args)
   return withPlane(deps, context, async (plane) => {
     const runId = await resolveRunId(plane, args.runId)
-    const snapshot = await plane.getRunSnapshot(runId)
+    const snapshot = await snapshotWithPersistedRunning(plane, await plane.getRunSnapshot(runId))
     renderSnapshot(out, snapshot)
     return ok('mission status', snapshot)
   })
