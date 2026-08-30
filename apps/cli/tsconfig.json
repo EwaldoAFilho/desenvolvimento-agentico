@@ -4,8 +4,13 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src/**/__fixtures__/**"],
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/__fixtures__/**"
+  ],
   "references": [
     {
       "path": "../../packages/domain"
@@ -39,6 +44,9 @@
     },
     {
       "path": "../../packages/process"
+    },
+    {
+      "path": "../../apps/server"
     }
   ]
 }

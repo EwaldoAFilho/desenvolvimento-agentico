@@ -39,6 +39,9 @@ export const ALLOWED = {
     'orchestrator',
     'agent-runtime',
     'process',
+    // ARCHITECTURE 4: `agentic serve` sobe o control plane. cli -> server e dependencia
+    // entre interfaces, sem ciclo (server nao conhece cli) e sem tocar o dominio.
+    'server',
   ],
   server: ['domain', 'schemas', 'compiler', 'persistence', 'orchestrator', 'graph'],
   web: ['schemas'],

@@ -31,6 +31,7 @@
     "@agentic/orchestrator": "*",
     "@agentic/agent-runtime": "*",
     "@agentic/process": "*",
-    "commander": "^14.0.0"
+    "commander": "^14.0.0",
+    "@agentic/server": "*"
   }
 }

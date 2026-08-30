@@ -1,0 +1,113 @@
+import nodeProcess from 'node:process'
+import type { ProviderRegistry } from '@agentic/domain'
+import type { ServerConfig } from '@agentic/server'
+import {
+  type ControlPlane,
+  type ControlPlaneConfig,
+  createControlPlane,
+} from '@agentic/orchestrator'
+import { createProviderRegistryFromProject } from '@agentic/providers'
+import type { ProjectFile } from '@agentic/schemas'
+import { git, isGitRepo } from '@agentic/workspace'
+import { type ControlPlaneLink, connectHttp } from './link.js'
+import type { ExitCode } from './result.js'
+
+export interface GitProbe {
+  readonly installed: boolean
+  readonly version: string
+  readonly repository: boolean
+  readonly detail: string
+}
+
+/**
+ * Tudo que a CLI toca no mundo externo entra por aqui. Handler nunca chama `process`,
+ * `fetch` ou `console` direto: o teste injeta e observa (ARCHITECTURE 2).
+ */
+export interface CommandDeps {
+  readonly cwd: string
+  stdout(text: string): void
+  stderr(text: string): void
+  exit(code: ExitCode): void
+  now(): Date
+  readonly env: Readonly<Record<string, string | undefined>>
+  readonly nodeVersion: string
+  /** Composition root aprovado: a CLI nao monta pecas por conta propria. */
+  controlPlane(config: ControlPlaneConfig): ControlPlane
+  registry(project: ProjectFile): ProviderRegistry
+  /** `undefined` = nenhum control plane no ar naquele endereco. */
+  connect(endpoint: string): Promise<ControlPlaneLink | undefined>
+  probeGit(cwd: string): Promise<GitProbe>
+  /** Espera o encerramento do processo em primeiro plano (`serve`, `start --serve`). */
+  waitForShutdown(): Promise<void>
+  /** Sobe a API HTTP+SSE. Injetavel para o teste nao abrir porta de verdade. */
+  bootServer?(config: ServerConfig): Promise<BootedServer>
+}
+
+/** Recorte de `RunningServer` de @agentic/server que a CLI realmente usa. */
+export interface BootedServer {
+  readonly url: string
+  close(): Promise<void>
+}
+
+async function defaultGitProbe(cwd: string): Promise<GitProbe> {
+  try {
+    const result = await git(['--version'], { cwd, allowFailure: true })
+    if (result.exitCode !== 0) {
+      return {
+        installed: false,
+        version: 'unknown',
+        repository: false,
+        detail: result.stderr.trim(),
+      }
+    }
+    const repository = await isGitRepo(cwd)
+    return {
+      installed: true,
+      version: result.stdout.trim(),
+      repository,
+      detail: repository ? 'repositorio git valido' : 'diretorio fora de um repositorio git',
+    }
+  } catch (error) {
+    return {
+      installed: false,
+      version: 'unknown',
+      repository: false,
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function defaultShutdown(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const finish = (): void => {
+      nodeProcess.off('SIGINT', finish)
+      nodeProcess.off('SIGTERM', finish)
+      resolve()
+    }
+    nodeProcess.once('SIGINT', finish)
+    nodeProcess.once('SIGTERM', finish)
+  })
+}
+
+export function defaultDeps(): CommandDeps {
+  return {
+    cwd: nodeProcess.cwd(),
+    stdout: (text) => {
+      nodeProcess.stdout.write(text)
+    },
+    stderr: (text) => {
+      nodeProcess.stderr.write(text)
+    },
+    exit: (code) => {
+      nodeProcess.exitCode = code
+    },
+    now: () => new Date(),
+    env: nodeProcess.env,
+    nodeVersion: nodeProcess.versions.node,
+    controlPlane: (config) => createControlPlane(config),
+    registry: (project) => createProviderRegistryFromProject(project),
+    connect: (endpoint) => connectHttp(endpoint),
+    probeGit: (cwd) => defaultGitProbe(cwd),
+    waitForShutdown: defaultShutdown,
+  }
+}
