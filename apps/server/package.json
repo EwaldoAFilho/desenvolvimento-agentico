@@ -13,11 +13,13 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc --build",
-    "test": "vitest run --project server"
+    "test": "vitest run --project server",
+    "start": "node ./bin/agentic-server.mjs"
   },
   "dependencies": {
     "@agentic/domain": "*",
@@ -27,5 +29,8 @@
     "@agentic/persistence": "*",
     "@agentic/orchestrator": "*",
     "fastify": "^5.6.0"
+  },
+  "bin": {
+    "agentic-server": "./bin/agentic-server.mjs"
   }
 }
