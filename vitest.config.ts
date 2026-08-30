@@ -31,6 +31,16 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'web',
+          root: `${root}apps/web`,
+          include: ['src/**/*.test.{ts,tsx}'],
+          environment: 'jsdom' as const,
+          globals: true,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'tools',
           root,
           include: ['tests/tools/**/*.test.ts'],
