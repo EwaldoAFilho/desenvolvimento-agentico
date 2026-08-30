@@ -1,0 +1,322 @@
+apiVersion: agentic/v1
+kind: Mission
+
+id: DA-CORE-002
+title: Dogfooding real, hardening e prontidao de produto
+objective: >
+  Provar que Desenvolvimento Agentico coordena agentes REAIS pelas assinaturas locais do
+  usuario, usar a propria plataforma para evoluir a propria plataforma, endurecer os pontos
+  frageis revelados por essa execucao e elevar a experiencia atual ao nivel de ferramenta
+  de desenvolvimento profissional.
+
+scope:
+  - Execucao real com Codex CLI e Claude Code CLI pelas assinaturas locais
+  - Revisao cruzada real entre fornecedores
+  - Dogfooding: o produto executando uma missao que altera o proprio produto
+  - Endurecimento de runtime, recovery e falha de provider
+  - Doctor e painel de saude de provider em nivel profissional
+  - Polimento operacional do dashboard sobre o que ja existe
+  - Separacao do pipeline de verificacao
+
+outOfScope:
+  - Microservicos, Redis, PostgreSQL, Kafka, Kubernetes, cloud runners
+  - Multi-tenant, billing, marketplace, mobile
+  - Integracao completa com GitHub, providers por API
+  - Editor visual de missoes, novo design system, analytics avancado
+  - Refactor grande motivado por elegancia
+
+constraints:
+  - Nenhum provider real pode exigir ou usar API key (P17 / ADR-0009)
+  - Arquitetura aprovada e a Constituicao: nenhum redesenho
+  - Teste automatizado nunca consome quota de assinatura
+  - Smoke real permanece opt-in, fora do CI padrao
+  - Teto operacional: no maximo 3 despachos e 2 revisoes reais por fornecedor
+  - Nenhum teste pode ser afrouxado para ficar verde
+
+acceptanceCriteria:
+  - Codex real executa a cadeia inteira pelo produto, observado pelo control plane
+  - Claude real executa a MESMA missao, provando que AgentProvider e abstracao real
+  - Uma revisao cruzada real entre fornecedores diferentes e registrada
+  - O produto executa uma missao que altera o proprio produto, com prova no event log
+  - Falha de provider nunca leva a DONE nem a RUNNING eterno
+  - agentic doctor distingue INSTALLED, NOT_INSTALLED, READY, NOT_READY e UNKNOWN
+  - Cada suite roda exatamente uma vez no caminho normal do Mission Gate
+  - Mission Gate final PASS com verify, e2e e build
+
+defaults:
+  requireReview: true
+  maxAttempts: 3
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: plano
+    title: Plano
+  - id: pipeline
+    title: Pipeline
+  - id: hardening
+    title: Endurecimento
+  - id: interfaces
+    title: Interfaces
+  - id: real
+    title: Execucao real
+  - id: dogfood
+    title: Dogfooding
+  - id: aceitacao
+    title: Aceitacao
+
+tasks:
+  - id: T201
+    phase: plano
+    title: Definicao e compilacao de DA-CORE-002
+    objective: >
+      Transformar o escopo aprovado em Mission real, compilar com o proprio Graph Compiler
+      com zero ERROR, entender cada warning e registrar waves, caminho critico,
+      concorrencia potencial e conflitos de touches antes de qualquer execucao.
+    dependencies: []
+    # O YAML da missao vive em .agentic/, protegido por denyPaths (P09): escreve-lo e ato
+    # do SUPERVISOR humano, nunca de agente. O entregavel VERIFICAVEL desta task e a
+    # analise de compilacao registrada. O proprio compilador reprovou duas versoes deste
+    # plano ate chegar aqui — o produto praticando o que prega.
+    touches:
+      - docs/missions/DA-CORE-002-plan.md
+    validation:
+      - agentic mission compile sai 0 com zero ERROR
+      - cada WARNING tem explicacao registrada, sem aceite cego
+      - zero conflito de touches entre tasks concorrentes
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T202
+    phase: pipeline
+    title: Cada suite roda exatamente uma vez
+    objective: >
+      Separar o pipeline de verificacao para que npm run verify nao execute o E2E, que
+      passa a rodar apenas em npm run test:e2e, sem reduzir cobertura em lugar nenhum.
+    dependencies: [T201]
+    touches:
+      - package.json
+      - vitest.config.ts
+    validation:
+      - npm run verify nao executa nenhum teste do projeto e2e
+      - npm run test:e2e continua executando os 52 testes E2E
+      - a soma de verify + test:e2e cobre exatamente o mesmo conjunto de antes
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T203
+    phase: hardening
+    title: Contrato de saude de provider com prontidao observavel
+    objective: >
+      Enriquecer ProviderHealth com caminho resolvido, origem da prontidao e diagnostico
+      estruturado, promover a sonda do Claude Code para observavel via auth status, e
+      garantir que nenhum dado sensivel do usuario apareca em saida ou artefato.
+    dependencies: [T201]
+    touches:
+      - packages/domain/src/ports/
+      - packages/schemas/
+      - packages/agent-runtime/
+      - packages/providers/
+    validation:
+      - ProviderHealth distingue installed, ready e unknown com origem declarada
+      - Claude Code passa a readinessProbe supported com auth status, e ready false quando a sonda reprova
+      - symlink quebrado produz diagnostico estruturado com alvo e remediacao
+      - e-mail, organizacao e token nao aparecem em detail nem em artefato
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: T204
+    phase: hardening
+    title: Fixture de smoke com agente real
+    objective: >
+      Projeto-alvo pequeno, versionado, deterministicamente resetavel, com testes proprios,
+      dependencias entre tasks, paralelismo possivel, touches verificaveis e gate rapido,
+      exigindo alteracao de codigo verdadeira, nunca arquivo de brinquedo.
+    dependencies: [T201]
+    touches:
+      - examples/real-agent-smoke/
+    validation:
+      - a missao do fixture compila com zero ERROR
+      - o gate do fixture roda em segundos e falha de verdade quando o codigo esta errado
+      - reset deterministico devolve o fixture ao estado inicial
+    gate: unit
+    risk: medium
+    estimate: 4
+
+  - id: T209
+    phase: hardening
+    title: Endurecimento de runtime, falha de provider e recovery
+    objective: >
+      Garantir que morte de processo, exit diferente de zero, timeout, cancelamento, saida
+      volumosa e queda do control plane nunca levem a DONE nem a RUNNING eterno, sempre
+      devolvendo capacidade do fornecedor e liberando lock com rastreabilidade.
+    dependencies: [T201]
+    touches:
+      - packages/orchestrator/
+      - packages/process/
+    validation:
+      - processo morto abruptamente vira falha classificada, nunca DONE
+      - capacidade do fornecedor e devolvida apos morte do processo
+      - lock orfao e liberado e o workspace permanece rastreavel
+      - stdout truncado e stderr volumoso nao derrubam nem travam o run
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: T205
+    phase: interfaces
+    title: Doctor de nivel profissional e detalhe de task
+    objective: >
+      Tornar agentic doctor a interface mais confiavel do produto, distinguindo os cinco
+      estados de provider com caminho resolvido, versao, origem da prontidao, execucao e
+      capacidade, e expor os mesmos fatos pela API de leitura.
+    dependencies: [T203]
+    touches:
+      - apps/cli/
+      - apps/server/
+    validation:
+      - doctor distingue INSTALLED, NOT_INSTALLED, READY, NOT_READY e UNKNOWN
+      - provider quebrado mostra alvo do symlink e remediacao sugerida
+      - nenhum segredo ou dado pessoal e impresso
+      - a API de providers devolve os mesmos fatos que o doctor imprime
+    gate: unit
+    risk: medium
+    estimate: 4
+
+  - id: T210
+    phase: interfaces
+    title: Polimento operacional do dashboard
+    objective: >
+      Elevar a experiencia do que ja existe: visao geral da missao, motivo de espera,
+      explicacao de falha e bloqueio, atividade ao vivo, painel de providers, geometria
+      estavel do grafo e START MISSION sem duplo envio.
+    dependencies: [T203]
+    touches:
+      - apps/web/
+    validation:
+      - task em espera explica o motivo em vez de dizer apenas PENDING
+      - falha mostra codigo, tentativa, fornecedor e se ha retry disponivel
+      - evento SSE nao reseta viewport nem perde a selecao da task
+      - clique duplo em START MISSION nao cria dois runs
+      - cor continua nunca sendo a unica indicacao de estado
+    gate: web
+    risk: medium
+    estimate: 5
+
+  - id: T206
+    phase: real
+    title: Smoke real ponta a ponta com Codex
+    objective: >
+      Executar o fixture pelo proprio produto com CodexCliProvider e a CLI local
+      autenticada, registrando a cadeia inteira observada pelo control plane, e comparar o
+      relato do agente com os fatos medidos.
+    dependencies: [T204, T205]
+    touches:
+      - docs/missions/REAL-PROVIDER-VALIDATION.md
+    validation:
+      - a cadeia inteira e observada, do compile ao mission gate
+      - alteracao de codigo real produzida pelo agente e medida por diff do control plane
+      - claims do agente ficam registrados sem participar de nenhuma transicao
+      - teto de despachos reais respeitado
+    gate: unit
+    risk: high
+    estimate: 5
+
+  - id: T207
+    phase: real
+    title: Smoke real com Claude Code na mesma missao
+    objective: >
+      Executar exatamente o mesmo fixture, os mesmos gates e os mesmos invariantes com
+      ClaudeCodeCliProvider, provando que AgentProvider e abstracao real e nao um molde
+      desenhado em volta de um unico fornecedor.
+    dependencies: [T206]
+    touches:
+      - docs/missions/REAL-PROVIDER-VALIDATION.md
+    validation:
+      - mesma missao, mesmo modelo de workspace, mesmos gates, fornecedor diferente
+      - nenhuma adaptacao especial do caso de teste para o segundo fornecedor
+      - teto de despachos reais respeitado
+    gate: unit
+    risk: high
+    estimate: 4
+
+  - id: T208
+    phase: real
+    title: Revisao cruzada real entre fornecedores
+    objective: >
+      Executar ao menos uma revisao real em que executor e revisor sao fornecedores
+      diferentes, com a politica cross-provider-required satisfeita por fatos e nao por
+      simulacao.
+    dependencies: [T207]
+    touches:
+      - docs/missions/REAL-PROVIDER-VALIDATION.md
+    validation:
+      - reviewer identity diferente de executor identity
+      - reviewer provider diferente de executor provider
+      - policyOutcome satisfied registrado no banco
+    gate: unit
+    risk: high
+    estimate: 3
+
+  - id: T211
+    phase: dogfood
+    title: Definicao de DA-DOGFOOD-001
+    objective: >
+      Escrever uma missao pequena e real que altera o proprio produto, com melhorias
+      verdadeiras e nao cosmeticas, com dependencias, touches, validacao, politica de
+      revisao e risco declarados, compilando com zero ERROR.
+    dependencies: [T205, T209, T210]
+    # Idem T201: o YAML e ato humano protegido por denyPaths; o entregavel verificavel e
+    # a analise registrada do plano de dogfooding.
+    touches:
+      - docs/missions/DA-DOGFOOD-001-plan.md
+    validation:
+      - compila com zero ERROR e sem conflito de touches
+      - cada task altera o produto de verdade, com criterio verificavel
+      - nenhuma task e cosmetica
+    gate: unit
+    risk: medium
+    estimate: 3
+
+  - id: T212
+    phase: dogfood
+    title: Execucao real de DA-DOGFOOD-001 pelo proprio produto
+    objective: >
+      Rodar DA-DOGFOOD-001 pelo control plane com fornecedor real, com o produto alterando
+      o proprio repositorio em worktrees isoladas, sem hot-reload do orquestrador em voo, e
+      com prova no banco e no event log.
+    dependencies: [T208, T211]
+    touches:
+      - docs/missions/DA-DOGFOOD-001-report.md
+    validation:
+      - Run, TaskRun, Attempt, Observation, GateExecution e Integration reais no banco
+      - o control plane coordenador permanece estavel ate o fim do run
+      - intervencao humana, se houver, fica registrada e nao e omitida
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: T213
+    phase: aceitacao
+    title: Aceitacao de produto e relatorios de evidencia
+    objective: >
+      Consolidar a matriz de prontidao do produto com estados objetivos, separar bloqueio
+      de ambiente de bloqueio de produto, e fechar o Mission Gate com verify, e2e e build.
+    # T202 entra aqui porque o mission gate desta task E o pipeline que T202 separou:
+    # o compilador apontou T202 como trabalho orfao (DA2006) e estava certo.
+    dependencies: [T202, T206, T212]
+    touches:
+      - docs/product/PRODUCT-READINESS.md
+      - docs/missions/DA-CORE-002-report.md
+    validation:
+      - matriz de prontidao sem porcentagem arbitraria, so estados objetivos
+      - bloqueio de ambiente separado de bloqueio de produto
+      - Mission Gate final PASS com verify, e2e e build
+    gate: mission
+    risk: medium
+    estimate: 3
+
+missionGate: mission
