@@ -1,0 +1,27 @@
+{
+  "name": "@agentic/schemas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Schemas dos arquivos declarativos e contratos de API.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --project schemas"
+  },
+  "dependencies": {
+    "@agentic/domain": "*",
+    "zod": "^3.25.0",
+    "yaml": "^2.8.0"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@agentic/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI agentic.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --project cli"
+  },
+  "dependencies": {
+    "@agentic/domain": "*",
+    "@agentic/schemas": "*",
+    "@agentic/graph": "*",
+    "@agentic/compiler": "*",
+    "@agentic/persistence": "*",
+    "@agentic/gates": "*",
+    "@agentic/workspace": "*",
+    "@agentic/providers": "*",
+    "@agentic/orchestrator": "*",
+    "@agentic/agent-runtime": "*",
+    "@agentic/process": "*",
+    "commander": "^14.0.0"
+  }
+}

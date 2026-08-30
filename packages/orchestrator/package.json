@@ -1,0 +1,32 @@
+{
+  "name": "@agentic/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scheduler, orquestrador e casos de uso.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --project orchestrator"
+  },
+  "dependencies": {
+    "@agentic/domain": "*",
+    "@agentic/schemas": "*",
+    "@agentic/graph": "*",
+    "@agentic/compiler": "*",
+    "@agentic/persistence": "*",
+    "@agentic/gates": "*",
+    "@agentic/workspace": "*",
+    "@agentic/providers": "*"
+  }
+}

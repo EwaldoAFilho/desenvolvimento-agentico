@@ -1,0 +1,31 @@
+{
+  "name": "@agentic/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read API, SSE e comandos; serve o dashboard.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --project server"
+  },
+  "dependencies": {
+    "@agentic/domain": "*",
+    "@agentic/schemas": "*",
+    "@agentic/graph": "*",
+    "@agentic/compiler": "*",
+    "@agentic/persistence": "*",
+    "@agentic/orchestrator": "*",
+    "fastify": "^5.6.0"
+  }
+}

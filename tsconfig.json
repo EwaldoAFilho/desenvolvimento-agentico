@@ -1,0 +1,44 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/agent-runtime"
+    },
+    {
+      "path": "packages/compiler"
+    },
+    {
+      "path": "packages/domain"
+    },
+    {
+      "path": "packages/gates"
+    },
+    {
+      "path": "packages/graph"
+    },
+    {
+      "path": "packages/orchestrator"
+    },
+    {
+      "path": "packages/persistence"
+    },
+    {
+      "path": "packages/process"
+    },
+    {
+      "path": "packages/providers"
+    },
+    {
+      "path": "packages/schemas"
+    },
+    {
+      "path": "packages/workspace"
+    },
+    {
+      "path": "apps/cli"
+    },
+    {
+      "path": "apps/server"
+    }
+  ]
+}

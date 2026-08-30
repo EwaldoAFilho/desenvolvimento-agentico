@@ -12,3 +12,10 @@ coverage/
 .agentic/state.db-*
 .agentic/runs/
 .agentic/worktrees/
+
+# build
+dist/
+*.tsbuildinfo
+
+# vitest
+.vitest/

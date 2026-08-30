@@ -1,0 +1,55 @@
+/**
+ * Regra de dependencia entre camadas (ADR-0001, ARCHITECTURE.md secao 2).
+ *
+ *   interfaces  ->  application  ->  domain  <-  adapters
+ *
+ * Cada pacote declara exatamente o que pode importar. Nao ha heranca implicita:
+ * o que nao esta listado e violacao.
+ */
+export const ALLOWED = {
+  domain: [],
+  graph: [],
+  process: [],
+  schemas: ['domain'],
+  persistence: ['domain'],
+  workspace: ['domain'],
+  'agent-runtime': ['domain', 'process'],
+  gates: ['domain', 'schemas', 'process'],
+  compiler: ['domain', 'schemas', 'graph'],
+  providers: ['domain', 'schemas', 'agent-runtime'],
+  orchestrator: [
+    'domain',
+    'schemas',
+    'graph',
+    'compiler',
+    'persistence',
+    'gates',
+    'workspace',
+    'providers',
+  ],
+  cli: [
+    'domain',
+    'schemas',
+    'graph',
+    'compiler',
+    'persistence',
+    'gates',
+    'workspace',
+    'providers',
+    'orchestrator',
+    'agent-runtime',
+    'process',
+  ],
+  server: ['domain', 'schemas', 'compiler', 'persistence', 'orchestrator', 'graph'],
+  web: ['schemas'],
+}
+
+/** Pacotes que precisam ser puros: nenhum modulo de plataforma. */
+export const NO_NODE_BUILTINS = ['domain', 'graph', 'schemas', 'compiler']
+
+/**
+ * P18 — o dominio nao pode citar fornecedor, CLI ou organizacao.
+ * Verificado como texto: se o nome aparece, a fronteira vazou.
+ */
+export const NO_VENDOR_NAMES = ['domain', 'graph', 'compiler', 'orchestrator']
+export const VENDOR_WORDS = ['claude', 'codex', 'anthropic', 'openai', 'gemini', 'copilot']
