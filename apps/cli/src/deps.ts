@@ -1,6 +1,5 @@
 import nodeProcess from 'node:process'
 import type { ProviderRegistry } from '@agentic/domain'
-import type { ServerConfig } from '@agentic/server'
 import {
   type ControlPlane,
   type ControlPlaneConfig,
@@ -8,6 +7,7 @@ import {
 } from '@agentic/orchestrator'
 import { createProviderRegistryFromProject } from '@agentic/providers'
 import type { ProjectFile } from '@agentic/schemas'
+import type { ServerConfig } from '@agentic/server'
 import { git, isGitRepo } from '@agentic/workspace'
 import { type ControlPlaneLink, connectHttp } from './link.js'
 import type { ExitCode } from './result.js'
