@@ -73,9 +73,36 @@ export interface ProviderCapabilities {
   readonly reportsUsage: boolean
 }
 
+export const PROVIDER_DIAGNOSTIC_KINDS = [
+  'broken-symlink',
+  'not-found',
+  'not-executable',
+  'probe-failed',
+] as const
+
+export type ProviderDiagnosticKind = (typeof PROVIDER_DIAGNOSTIC_KINDS)[number]
+
+/**
+ * O que esta errado no ambiente do provider e o que o humano faz a respeito. Existe
+ * porque `installed: false` sozinho nao distingue "nunca instalado" de "link apontando
+ * para uma instalacao que sumiu" — e a diferenca custa horas de diagnostico.
+ *
+ * Nao carrega saida de CLI, segredo nem dado pessoal: apenas caminho, motivo e conserto.
+ */
+export interface ProviderDiagnostic {
+  readonly kind: ProviderDiagnosticKind
+  readonly detail: string
+  /** Alvo apontado, quando o problema tem um: destino inexistente de um symlink. */
+  readonly target?: string
+  readonly remediation?: string
+}
+
 /**
  * `unknown` e valor de primeira classe: quando a CLI nao permite observar instalacao,
  * versao ou autenticacao de forma confiavel, reportamos `unknown` — nunca inferimos.
+ *
+ * Os campos de prontidao observavel sao todos opcionais e nenhum deles decide nada:
+ * enriquecem o relato sem jamais transformar `unknown` em booleano.
  */
 export interface ProviderHealth {
   readonly providerId: ProviderId
@@ -87,6 +114,11 @@ export interface ProviderHealth {
   /** Contabilidade nossa: sempre conhecida. */
   readonly running: number
   readonly capacity: number | null
+  /** Caminho absoluto do executavel efetivamente resolvido, ou `unknown`. */
+  readonly resolvedPath?: string | 'unknown'
+  /** COMO a prontidao foi apurada — inclusive quando a resposta foi `unknown`. */
+  readonly readinessSource?: string
+  readonly diagnostic?: ProviderDiagnostic
 }
 
 export interface AgentHandle {

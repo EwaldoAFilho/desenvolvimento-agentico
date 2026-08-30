@@ -96,9 +96,7 @@ describe('ProviderRegistry — construido do project.yaml real', () => {
 
   it('cada adapter real declara a sonda de prontidao que a sua CLI permite', () => {
     const registry = createProviderRegistryFromProject(project, { runtime: stubRuntime })
-    expect(registry.get(providerId('claude-code')).capabilities().readinessProbe).toBe(
-      'unsupported',
-    )
+    expect(registry.get(providerId('claude-code')).capabilities().readinessProbe).toBe('supported')
     expect(registry.get(providerId('codex')).capabilities().readinessProbe).toBe('supported')
   })
 

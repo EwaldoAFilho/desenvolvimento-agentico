@@ -2,9 +2,19 @@ import { rmSync } from 'node:fs'
 import nodeProcess from 'node:process'
 import type { ProviderCapabilities } from '@agentic/domain'
 import { afterAll, describe, expect, it } from 'vitest'
-import { FAKE_CLI, makeFakeCli, PROVIDER, spec } from './__fixtures__/fake-cli.js'
+import {
+  FAKE_BROKEN_CLI,
+  FAKE_CLI,
+  FAKE_INERT_CLI,
+  makeFakeCli,
+  PII_EMAIL,
+  PII_ORG,
+  PII_TOKEN,
+  PROVIDER,
+  spec,
+} from './__fixtures__/fake-cli.js'
 import { CapacityLedger } from './capacity.js'
-import { extractVersion, probeLocalAgent } from './probe.js'
+import { extractVersion, probeLocalAgent, readinessSignal } from './probe.js'
 import type { LocalAgentRuntimeDeps } from './types.js'
 
 const cli = makeFakeCli()
@@ -240,5 +250,197 @@ describe('extractVersion', () => {
     expect(extractVersion('1.2.3-beta.1')).toBe('1.2.3-beta.1')
     expect(extractVersion('sem numero')).toBe('unknown')
     expect(extractVersion('', 'fallback 7.7.7')).toBe('7.7.7')
+  })
+})
+
+describe('probeLocalAgent — resolvedPath', () => {
+  it('traz o caminho absoluto do executavel encontrado', async () => {
+    const health = await probeLocalAgent(spec(), {}, withDeps())
+    expect(health.resolvedPath).toBe(cli.path)
+  })
+
+  it('fica unknown quando o executavel nao existe', async () => {
+    const health = await probeLocalAgent(
+      spec({ executable: 'cli-inexistente-xyz' }),
+      {},
+      withDeps(),
+    )
+    expect(health.resolvedPath).toBe('unknown')
+    expect(health.installed).toBe(false)
+  })
+
+  it('fica unknown quando a propria instalacao nao pode ser apurada', async () => {
+    const health = await probeLocalAgent(
+      spec(),
+      {},
+      withDeps({ isExecutableFile: () => Promise.reject(new Error('io quebrado')) }),
+    )
+    expect(health.resolvedPath).toBe('unknown')
+    expect(health.installed).toBe('unknown')
+  })
+})
+
+describe('probeLocalAgent — diagnostico de ambiente', () => {
+  it('symlink quebrado vira diagnostico broken-symlink com alvo e remediacao', async () => {
+    const health = await probeLocalAgent(
+      spec({ executable: FAKE_BROKEN_CLI, versionArgs: ['--version'] }),
+      {},
+      withDeps(),
+    )
+    expect(health.installed).toBe(false)
+    expect(health.ready).toBe(false)
+    expect(health.diagnostic?.kind).toBe('broken-symlink')
+    expect(health.diagnostic?.target).toBe(cli.brokenTarget)
+    expect(health.diagnostic?.remediation ?? '').not.toHaveLength(0)
+    expect(health.detail).toContain('symlink quebrado')
+  })
+
+  it('symlink quebrado nao vira unknown: a ausencia foi observada', async () => {
+    const health = await probeLocalAgent(spec({ executable: FAKE_BROKEN_CLI }), {}, withDeps())
+    expect(health.installed).not.toBe('unknown')
+    expect(health.installed).toBe(false)
+  })
+
+  it('arquivo sem bit de execucao vira diagnostico not-executable', async () => {
+    const health = await probeLocalAgent(spec({ executable: FAKE_INERT_CLI }), {}, withDeps())
+    expect(health.diagnostic?.kind).toBe('not-executable')
+  })
+
+  it('executavel saudavel nao produz diagnostico algum', async () => {
+    const health = await probeLocalAgent(
+      spec({ versionArgs: ['--version'], readinessArgs: ['--pronto'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    expect(health.diagnostic).toBeUndefined()
+  })
+
+  it('sonda que expira vira diagnostico probe-failed, e ready segue unknown', async () => {
+    const health = await probeLocalAgent(
+      spec({ readinessArgs: ['--prontidao-lenta'] }),
+      { capabilities: CAPS('supported') },
+      withDeps({ probeTimeoutMs: 250 }),
+    )
+    expect(health.ready).toBe('unknown')
+    expect(health.diagnostic?.kind).toBe('probe-failed')
+    expect(health.diagnostic?.remediation ?? '').not.toHaveLength(0)
+  })
+})
+
+describe('probeLocalAgent — readinessSource', () => {
+  it('cita a sonda quando ela saiu 0', async () => {
+    const health = await probeLocalAgent(
+      spec({ readinessArgs: ['--pronto'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    expect(health.ready).toBe(true)
+    expect(health.readinessSource).toContain('--pronto')
+    expect(health.readinessSource).toContain('saiu 0')
+  })
+
+  it('explica a resposta unknown quando a CLI nao expoe autenticacao', async () => {
+    const health = await probeLocalAgent(
+      spec({ readinessArgs: ['--pronto'] }),
+      { capabilities: CAPS('unsupported') },
+      withDeps(),
+    )
+    expect(health.ready).toBe('unknown')
+    expect(health.readinessSource).toContain('nao expoe estado de autenticacao')
+  })
+
+  it('explica a resposta unknown quando a spec nao tem sonda', async () => {
+    const health = await probeLocalAgent(
+      spec({ versionArgs: ['--version'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    expect(health.ready).toBe('unknown')
+    expect(health.readinessSource).toContain('sem readinessArgs')
+  })
+
+  it('esta presente em todos os desfechos, inclusive sem executavel', async () => {
+    const casos = await Promise.all([
+      probeLocalAgent(
+        spec({ readinessArgs: ['--pronto'] }),
+        { capabilities: CAPS('supported') },
+        withDeps(),
+      ),
+      probeLocalAgent(
+        spec({ readinessArgs: ['--nao-pronto'] }),
+        { capabilities: CAPS('supported') },
+        withDeps(),
+      ),
+      probeLocalAgent(spec({ executable: 'cli-inexistente-xyz' }), {}, withDeps()),
+      probeLocalAgent(spec({ executable: FAKE_BROKEN_CLI }), {}, withDeps()),
+      probeLocalAgent(
+        spec(),
+        {},
+        withDeps({ isExecutableFile: () => Promise.reject(new Error('io')) }),
+      ),
+    ])
+    for (const health of casos) {
+      expect(typeof health.readinessSource).toBe('string')
+      expect(health.readinessSource ?? '').not.toHaveLength(0)
+    }
+  })
+})
+
+describe('probeLocalAgent — dado pessoal e segredo na saida da sonda', () => {
+  it('sonda que imprime e-mail, organizacao e token nao vaza nada disso', async () => {
+    const health = await probeLocalAgent(
+      spec({ versionArgs: ['--version'], readinessArgs: ['--pronto-com-pii'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    expect(health.ready).toBe(true)
+    for (const vazamento of [PII_EMAIL, PII_ORG, PII_TOKEN]) {
+      expect(health.detail).not.toContain(vazamento)
+      expect(health.readinessSource ?? '').not.toContain(vazamento)
+    }
+  })
+
+  it('o health serializado inteiro nao carrega e-mail nem token', async () => {
+    const health = await probeLocalAgent(
+      spec({ versionArgs: ['--version'], readinessArgs: ['--pronto-com-pii'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    const serializado = JSON.stringify(health)
+    expect(serializado).not.toContain(PII_EMAIL)
+    expect(serializado).not.toContain(PII_ORG)
+    expect(serializado).not.toContain(PII_TOKEN)
+    expect(serializado).not.toContain('@exemplo.com')
+  })
+
+  it('sonda que sai 0 mas declara sessao encerrada reporta ready false, nao true', async () => {
+    const health = await probeLocalAgent(
+      spec({ readinessArgs: ['--deslogado-com-pii'] }),
+      { capabilities: CAPS('supported') },
+      withDeps(),
+    )
+    expect(health.ready).toBe(false)
+    expect(health.readinessSource).toContain('sessao nao autenticada')
+    expect(JSON.stringify(health)).not.toContain(PII_EMAIL)
+  })
+})
+
+describe('readinessSignal', () => {
+  it('le o booleano de sessao em JSON, sem levar o resto da linha', () => {
+    expect(readinessSignal('{"loggedIn":true,"email":"x@y.com"}')).toBe(true)
+    expect(readinessSignal('{"loggedIn":false}')).toBe(false)
+    expect(readinessSignal('{"logged_in": true}')).toBe(true)
+    expect(readinessSignal('authenticated = false')).toBe(false)
+    expect(readinessSignal('isAuthenticated: true')).toBe(true)
+  })
+
+  it('devolve null quando a saida nao declara nada legivel', () => {
+    expect(readinessSignal('Logged in using ChatGPT')).toBeNull()
+    expect(readinessSignal('')).toBeNull()
+    expect(readinessSignal('{"email":"x@y.com"}')).toBeNull()
+  })
+
+  it('cai no segundo texto quando o primeiro nao diz nada', () => {
+    expect(readinessSignal('nada aqui', '{"signedIn":true}')).toBe(true)
   })
 })

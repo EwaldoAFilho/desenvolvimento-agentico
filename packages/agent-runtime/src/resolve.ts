@@ -1,7 +1,8 @@
 import { constants as fsConstants } from 'node:fs'
-import { access, stat } from 'node:fs/promises'
-import { isAbsolute, join, resolve as resolvePath } from 'node:path'
+import { access, lstat, readlink, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import nodeProcess from 'node:process'
+import type { ProviderDiagnostic } from '@agentic/domain'
 import { describeError } from './errors.js'
 
 export interface ExecutableFound {
@@ -12,12 +13,14 @@ export interface ExecutableFound {
 export interface ExecutableNotFound {
   readonly status: 'not-found'
   readonly detail: string
+  readonly diagnostic?: ProviderDiagnostic
 }
 
 /** Nao foi possivel apurar: reportamos `unknown`, nunca inferimos (ADR-0009/ADR-0010). */
 export interface ExecutableUnknown {
   readonly status: 'unknown'
   readonly detail: string
+  readonly diagnostic?: ProviderDiagnostic
 }
 
 export type ExecutableResolution = ExecutableFound | ExecutableNotFound | ExecutableUnknown
@@ -28,6 +31,8 @@ export interface ResolveExecutableDeps {
   readonly pathEnv?: string | undefined
   readonly pathExt?: string | undefined
   readonly isExecutableFile?: (candidate: string) => Promise<boolean | null>
+  /** Alvo inexistente de um symlink, quando o candidato for um link quebrado. */
+  readonly brokenLinkTarget?: (candidate: string) => Promise<string | null>
 }
 
 const MISSING_CODES = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG'])
@@ -57,6 +62,38 @@ export async function isExecutableFile(candidate: string): Promise<boolean | nul
     const code = errorCode(error)
     if (code !== null && (MISSING_CODES.has(code) || DENIED_CODES.has(code))) return false
     throw error
+  }
+}
+
+/**
+ * Alvo de um symlink cujo destino nao existe; `null` quando nao ha link quebrado.
+ *
+ * `stat` segue o link e devolve ENOENT igual a um caminho que nunca existiu — os dois
+ * casos ficam indistinguiveis, e o operador procura o problema no lugar errado. Aqui a
+ * diferenca e apurada com `lstat` + `readlink`, e vira diagnostico.
+ */
+export async function brokenLinkTarget(candidate: string): Promise<string | null> {
+  let link: Awaited<ReturnType<typeof lstat>>
+  try {
+    link = await lstat(candidate)
+  } catch {
+    return null
+  }
+  if (!link.isSymbolicLink()) return null
+  let target: string
+  try {
+    target = await readlink(candidate)
+  } catch {
+    return null
+  }
+  const absolute = isAbsolute(target) ? target : resolvePath(dirname(candidate), target)
+  try {
+    await stat(absolute)
+    // O alvo existe: se o candidato ainda nao serve, o problema e outro.
+    return null
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== null && MISSING_CODES.has(code) ? absolute : null
   }
 }
 
@@ -110,20 +147,67 @@ export async function resolveExecutable(
   }
 
   const inspect = deps.isExecutableFile ?? isExecutableFile
+  const linkTargetOf = deps.brokenLinkTarget ?? brokenLinkTarget
+  let broken: { readonly candidate: string; readonly target: string } | null = null
+  let inert: string | null = null
+
   for (const candidate of candidates) {
     let verdict: boolean | null
     try {
       verdict = await inspect(candidate)
     } catch (error) {
+      const detail = `falha ao inspecionar "${candidate}": ${describeError(error)}`
       return {
         status: 'unknown',
-        detail: `falha ao inspecionar "${candidate}": ${describeError(error)}`,
+        detail,
+        diagnostic: { kind: 'probe-failed', detail, target: candidate },
       }
     }
     if (verdict === true) return { status: 'found', path: candidate }
+    if (verdict === false && inert === null) inert = candidate
+    if (verdict === null && broken === null) {
+      const target = await linkTargetOf(candidate)
+      if (target !== null) broken = { candidate, target }
+    }
   }
+
+  if (broken !== null) return brokenSymlink(name, broken.candidate, broken.target)
+  if (inert !== null) return notExecutable(name, inert)
   return {
     status: 'not-found',
     detail: `"${name}" nao encontrado (${candidates.length} candidato(s) verificados)`,
+    diagnostic: {
+      kind: 'not-found',
+      detail: `"${name}" nao existe em nenhum dos ${candidates.length} candidato(s) do PATH`,
+      remediation: `instale a CLI ou aponte "command" para o caminho absoluto do executavel`,
+    },
+  }
+}
+
+function brokenSymlink(name: string, candidate: string, target: string): ExecutableNotFound {
+  const detail = `"${name}" e um symlink quebrado: ${candidate} aponta para ${target}, que nao existe`
+  return {
+    status: 'not-found',
+    detail,
+    diagnostic: {
+      kind: 'broken-symlink',
+      detail,
+      target,
+      remediation: `recrie o link para uma instalacao existente (\`ln -sfn <caminho-real> ${candidate}\`) ou reinstale a CLI`,
+    },
+  }
+}
+
+function notExecutable(name: string, candidate: string): ExecutableNotFound {
+  const detail = `"${name}" existe em ${candidate} mas nao e um arquivo executavel`
+  return {
+    status: 'not-found',
+    detail,
+    diagnostic: {
+      kind: 'not-executable',
+      detail,
+      target: candidate,
+      remediation: `de permissao de execucao (\`chmod +x ${candidate}\`) ou aponte "command" para o binario real`,
+    },
   }
 }

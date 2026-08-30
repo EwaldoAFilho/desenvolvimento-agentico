@@ -8,7 +8,11 @@ import {
 } from './commands.js'
 import { type CompileReportDto, CompileReportDtoSchema } from './compile-report.js'
 import { type EventDto, EventDtoSchema } from './events.js'
-import { type ProviderHealthDto, ProviderHealthDtoSchema } from './provider-health.js'
+import {
+  ProviderDiagnosticDtoSchema,
+  type ProviderHealthDto,
+  ProviderHealthDtoSchema,
+} from './provider-health.js'
 import { type RunSnapshot, RunSnapshotSchema, TaskCountersSchema } from './run-snapshot.js'
 import { type TaskDetail, TaskDetailSchema } from './task-detail.js'
 
@@ -282,6 +286,104 @@ describe('ProviderHealthDto', () => {
 
   it('recusa terceiro estado que nao seja unknown', () => {
     expect(ProviderHealthDtoSchema.safeParse({ ...health, ready: 'talvez' }).success).toBe(false)
+  })
+
+  it('a forma anterior, sem nenhum campo novo, continua valida', () => {
+    const parsed = ProviderHealthDtoSchema.parse(health)
+    expect(parsed.resolvedPath).toBeUndefined()
+    expect(parsed.readinessSource).toBeUndefined()
+    expect(parsed.diagnostic).toBeUndefined()
+  })
+
+  it('preserva resolvedPath como caminho absoluto', () => {
+    const parsed = ProviderHealthDtoSchema.parse({
+      ...health,
+      resolvedPath: '/home/pessoa/.local/bin/agente',
+    })
+    expect(parsed.resolvedPath).toBe('/home/pessoa/.local/bin/agente')
+  })
+
+  it('preserva o literal unknown em resolvedPath, sem virar null', () => {
+    const parsed = ProviderHealthDtoSchema.parse({ ...health, resolvedPath: 'unknown' })
+    expect(parsed.resolvedPath).toBe('unknown')
+    expect(JSON.parse(JSON.stringify(parsed)).resolvedPath).toBe('unknown')
+  })
+
+  it('recusa resolvedPath nulo: ausencia se diz com unknown, nao com null', () => {
+    expect(ProviderHealthDtoSchema.safeParse({ ...health, resolvedPath: null }).success).toBe(false)
+  })
+
+  it('aceita readinessSource explicando a resposta unknown', () => {
+    const parsed = ProviderHealthDtoSchema.parse({
+      ...health,
+      ready: 'unknown',
+      readinessSource: 'CLI nao expoe estado de autenticacao',
+    })
+    expect(parsed.ready).toBe('unknown')
+    expect(parsed.readinessSource).toBe('CLI nao expoe estado de autenticacao')
+  })
+
+  it('carrega diagnostico de link quebrado com alvo e remediacao', () => {
+    const parsed = ProviderHealthDtoSchema.parse({
+      ...health,
+      installed: false,
+      ready: false,
+      resolvedPath: 'unknown',
+      diagnostic: {
+        kind: 'broken-symlink',
+        detail: 'o link aponta para um alvo que nao existe',
+        target: '/opt/versao-antiga/binario',
+        remediation: 'recrie o link ou reinstale a CLI',
+      },
+    })
+    expect(parsed.diagnostic?.kind).toBe('broken-symlink')
+    expect(parsed.diagnostic?.target).toBe('/opt/versao-antiga/binario')
+  })
+
+  it('o diagnostico sobrevive a ida e volta por JSON', () => {
+    const dto: ProviderHealthDto = {
+      ...health,
+      installed: 'unknown',
+      resolvedPath: 'unknown',
+      readinessSource: 'instalacao nao apurada',
+      diagnostic: { kind: 'probe-failed', detail: 'a sonda expirou' },
+    }
+    const round = ProviderHealthDtoSchema.parse(JSON.parse(JSON.stringify(dto)))
+    expect(round).toEqual(dto)
+  })
+
+  it('recusa kind de diagnostico fora do catalogo do dominio', () => {
+    const invalido = { ...health, diagnostic: { kind: 'quem-sabe', detail: 'x' } }
+    expect(ProviderHealthDtoSchema.safeParse(invalido).success).toBe(false)
+  })
+
+  it('recusa campo extra dentro do diagnostico', () => {
+    const invalido = {
+      ...health,
+      diagnostic: { kind: 'not-found', detail: 'x', stdout: 'saida crua da CLI' },
+    }
+    expect(ProviderHealthDtoSchema.safeParse(invalido).success).toBe(false)
+  })
+
+  it('recusa campo extra no proprio health', () => {
+    expect(
+      ProviderHealthDtoSchema.safeParse({ ...health, email: 'pessoa@exemplo.com' }).success,
+    ).toBe(false)
+  })
+})
+
+describe('ProviderDiagnosticDto', () => {
+  it('exige kind e detail; target e remediation sao opcionais', () => {
+    const minimo = ProviderDiagnosticDtoSchema.parse({ kind: 'not-executable', detail: 'sem +x' })
+    expect(minimo.target).toBeUndefined()
+    expect(minimo.remediation).toBeUndefined()
+    expect(ProviderDiagnosticDtoSchema.safeParse({ kind: 'not-found' }).success).toBe(false)
+  })
+
+  it('aceita os quatro kinds do catalogo', () => {
+    for (const kind of ['broken-symlink', 'not-found', 'not-executable', 'probe-failed']) {
+      expect(ProviderDiagnosticDtoSchema.safeParse({ kind, detail: 'motivo' }).success).toBe(true)
+    }
   })
 })
 

@@ -14,9 +14,19 @@ import {
   FAKE_VERSION,
   makeFakeCliBundle,
   makeTempDir,
+  PII_EMAIL,
+  PII_ORG,
+  PII_ORG_ID,
+  PII_TOKEN,
   PROMPT_FILE,
 } from './__fixtures__/fake-cli.js'
-import { CLAUDE_CODE_RUN_ARGS, ClaudeCodeCliProvider } from './claude-code.js'
+import {
+  CLAUDE_CODE_DESCRIPTOR,
+  CLAUDE_CODE_READINESS_ARGS,
+  CLAUDE_CODE_RUN_ARGS,
+  ClaudeCodeCliProvider,
+} from './claude-code.js'
+import { LocalCliAgentProvider } from './local-cli.js'
 import { createProviderRegistry } from './registry.js'
 
 const cli: FakeCliBundle = makeFakeCliBundle()
@@ -31,8 +41,10 @@ const deps: LocalAgentRuntimeDeps = {
   processDeps: { killGraceMs: 200, closeGraceMs: 300 },
 }
 
-function runtime(): ReturnType<typeof createLocalAgentRuntime> {
-  return createLocalAgentRuntime(deps)
+function runtime(
+  extra: Partial<LocalAgentRuntimeDeps> = {},
+): ReturnType<typeof createLocalAgentRuntime> {
+  return createLocalAgentRuntime({ ...deps, ...extra })
 }
 
 function worktree(): string {
@@ -41,8 +53,11 @@ function worktree(): string {
   return path
 }
 
-function provider(command: string): ClaudeCodeCliProvider {
-  return new ClaudeCodeCliProvider({ command, runtime: runtime() })
+function provider(
+  command: string,
+  extra: Partial<LocalAgentRuntimeDeps> = {},
+): ClaudeCodeCliProvider {
+  return new ClaudeCodeCliProvider({ command, runtime: runtime(extra) })
 }
 
 afterAll(async () => {
@@ -51,28 +66,78 @@ afterAll(async () => {
   cli.cleanup()
 })
 
-describe('ClaudeCodeCliProvider — honestidade de prontidao (ADR-0010 4)', () => {
-  it('CLI que responde --version reporta installed true e ready UNKNOWN', async () => {
+describe('ClaudeCodeCliProvider — prontidao observavel (ADR-0010 4)', () => {
+  it('declara readinessProbe supported com a sonda `auth status`', () => {
+    const capabilities = provider(cli.ok).capabilities()
+    expect(capabilities.readinessProbe).toBe('supported')
+    expect(CLAUDE_CODE_READINESS_ARGS).toEqual(['auth', 'status'])
+    expect(CLAUDE_CODE_DESCRIPTOR.readinessArgs).toEqual(['auth', 'status'])
+    expect(capabilities.roles).toEqual(['executor', 'reviewer'])
+    expect(capabilities.streaming).toBe(true)
+    expect(capabilities.cancellation).toBe(true)
+    expect(capabilities.reportsUsage).toBe(false)
+  })
+
+  it('a spec enviada ao runtime carrega readinessArgs', () => {
+    expect(provider(cli.ok).probeSpec().readinessArgs).toEqual(['auth', 'status'])
+  })
+
+  it('sonda saindo 0 reporta ready true e readinessSource citando a sonda', async () => {
     const health = await provider(cli.ok).health()
     expect(health.installed).toBe(true)
     expect(health.version).toBe(FAKE_VERSION)
-    expect(health.ready).toBe('unknown')
+    expect(health.ready).toBe(true)
+    expect(health.readinessSource).toContain('auth status')
+    expect(health.readinessSource).toContain('saiu 0')
   })
 
-  it('nao ha caminho para ready true: nem com um binario cujo `login status` sai 0', async () => {
-    // O mesmo executavel responde `login status` com exit 0. O adapter nao pergunta.
-    const health = await provider(cli.ok).health()
+  it('CONTROLE de honestidade: --version responde mas a sonda falha -> ready FALSE', async () => {
+    // `--version` prova instalacao e nada mais. Sem sonda aprovada nao ha ready true.
+    const health = await provider(cli.semLogin).health()
+    expect(health.installed).toBe(true)
+    expect(health.version).toBe(FAKE_VERSION)
+    expect(health.ready).toBe(false)
     expect(health.ready).not.toBe(true)
-    expect(health.ready).toBe('unknown')
-    expect(health.detail).toContain('readinessProbe unsupported')
+    expect(health.readinessSource).toContain('codigo 1')
   })
 
-  it('nao ha caminho para ready true: nem quando o project.yaml declara readinessArgs', async () => {
+  it('sonda que trava mantem ready unknown — travar nao e prova de nao-prontidao', async () => {
+    const health = await provider(cli.sondaLenta, { probeTimeoutMs: 300 }).health()
+    expect(health.installed).toBe(true)
+    expect(health.ready).toBe('unknown')
+    expect(health.readinessSource).toContain('expirou')
+    expect(health.diagnostic?.kind).toBe('probe-failed')
+  })
+
+  it('sonda ausente na capacidade declarada mantem ready unknown, nunca true', async () => {
+    const semSonda = new LocalCliAgentProvider(
+      {
+        ...CLAUDE_CODE_DESCRIPTOR,
+        capabilities: { ...CLAUDE_CODE_DESCRIPTOR.capabilities, readinessProbe: 'unsupported' },
+      },
+      { command: cli.ok, runtime: runtime() },
+    )
+    const health = await semSonda.health()
+    expect(semSonda.probeSpec().readinessArgs).toBeUndefined()
+    expect(health.installed).toBe(true)
+    expect(health.ready).toBe('unknown')
+    expect(health.ready).not.toBe(true)
+    expect(health.readinessSource).toContain('nao expoe estado de autenticacao')
+  })
+
+  it('versao ilegivel vira unknown sem contaminar a prontidao observada', async () => {
+    const health = await provider(cli.mudo).health()
+    expect(health.installed).toBe(true)
+    expect(health.version).toBe('unknown')
+    expect(health.ready).toBe(true)
+  })
+
+  it('a sonda do adapter dedicado nao vem do project.yaml', async () => {
     const config: ProviderConfig = {
       kind: 'local-cli',
       command: cli.ok,
       versionArgs: ['--version'],
-      readinessArgs: ['login', 'status'],
+      readinessArgs: ['inventado', 'pelo', 'yaml'],
       maxConcurrent: 1,
       roles: ['executor', 'reviewer'],
     }
@@ -82,33 +147,90 @@ describe('ClaudeCodeCliProvider — honestidade de prontidao (ADR-0010 4)', () =
     })
     const [health] = await registry.health()
     expect(health?.installed).toBe(true)
-    expect(health?.ready).toBe('unknown')
+    expect(health?.ready).toBe(true)
+    expect(health?.readinessSource).toContain('auth status')
+  })
+})
+
+describe('ClaudeCodeCliProvider — prontidao com caminho e diagnostico', () => {
+  it('resolvedPath traz o caminho absoluto do executavel encontrado', async () => {
+    const health = await provider(cli.ok).health()
+    expect(health.resolvedPath).toBe(cli.ok)
+    expect(health.diagnostic).toBeUndefined()
   })
 
-  it('capabilities declara readinessProbe unsupported, imutavel', () => {
-    const capabilities = provider(cli.ok).capabilities()
-    expect(capabilities.readinessProbe).toBe('unsupported')
-    expect(capabilities.roles).toEqual(['executor', 'reviewer'])
-    expect(capabilities.streaming).toBe(true)
-    expect(capabilities.cancellation).toBe(true)
-    expect(capabilities.reportsUsage).toBe(false)
-  })
-
-  it('a spec enviada ao runtime nao carrega readinessArgs', () => {
-    expect(provider(cli.ok).probeSpec().readinessArgs).toBeUndefined()
-  })
-
-  it('versao ilegivel vira unknown sem inventar prontidao', async () => {
-    const health = await provider(cli.mudo).health()
-    expect(health.installed).toBe(true)
-    expect(health.version).toBe('unknown')
-    expect(health.ready).toBe('unknown')
-  })
-
-  it('binario ausente reporta installed false e ready false, por ausencia', async () => {
+  it('resolvedPath fica unknown quando o executavel nao resolve', async () => {
     const health = await provider(cli.ausente).health()
+    expect(health.resolvedPath).toBe('unknown')
     expect(health.installed).toBe(false)
     expect(health.ready).toBe(false)
+    expect(health.diagnostic?.kind).toBe('not-found')
+  })
+
+  it('symlink quebrado vira diagnostico broken-symlink com alvo e remediacao', async () => {
+    const health = await provider(cli.quebrado).health()
+    expect(health.installed).toBe(false)
+    expect(health.resolvedPath).toBe('unknown')
+    expect(health.diagnostic?.kind).toBe('broken-symlink')
+    expect(health.diagnostic?.target).toBe(cli.quebradoAlvo)
+    expect(health.diagnostic?.detail).toContain(cli.quebrado)
+    expect(health.diagnostic?.remediation ?? '').not.toHaveLength(0)
+    expect(health.detail).toContain('symlink quebrado')
+  })
+
+  it('symlink quebrado no despacho continua PROVIDER_UNAVAILABLE', async () => {
+    const path = worktree()
+    const error = await provider(cli.quebrado)
+      .start(executeAssignment(path), dispatchContext(path, { env: cli.env }))
+      .then(
+        () => null,
+        (e: unknown) => e,
+      )
+    expect(isAgentRuntimeError(error)).toBe(true)
+    if (!isAgentRuntimeError(error)) return
+    expect(error.failureCode).toBe('PROVIDER_UNAVAILABLE')
+    expect(consumesAttempt(error.failureCode)).toBe(false)
+  })
+
+  it('readinessSource e preenchido em toda resposta, inclusive nas unknown', async () => {
+    const casos = await Promise.all([
+      provider(cli.ok).health(),
+      provider(cli.semLogin).health(),
+      provider(cli.ausente).health(),
+      provider(cli.quebrado).health(),
+      provider(cli.sondaLenta, { probeTimeoutMs: 300 }).health(),
+    ])
+    for (const health of casos) {
+      expect(typeof health.readinessSource).toBe('string')
+      expect(health.readinessSource ?? '').not.toHaveLength(0)
+    }
+  })
+})
+
+describe('ClaudeCodeCliProvider — dado pessoal na saida da sonda', () => {
+  it('e-mail, organizacao e token da sonda nao aparecem em detail nem readinessSource', async () => {
+    const health = await provider(cli.pii).health()
+    expect(health.ready).toBe(true)
+    for (const vazamento of [PII_EMAIL, PII_ORG, PII_ORG_ID, PII_TOKEN]) {
+      expect(health.detail).not.toContain(vazamento)
+      expect(health.readinessSource ?? '').not.toContain(vazamento)
+    }
+  })
+
+  it('o health serializado inteiro nao carrega e-mail nem token', async () => {
+    const serializado = JSON.stringify(await provider(cli.pii).health())
+    expect(serializado).not.toContain(PII_EMAIL)
+    expect(serializado).not.toContain(PII_ORG)
+    expect(serializado).not.toContain(PII_ORG_ID)
+    expect(serializado).not.toContain(PII_TOKEN)
+    expect(serializado).not.toContain('@exemplo.com')
+  })
+
+  it('do JSON da sonda so o sinal booleano e lido', async () => {
+    const health = await provider(cli.pii).health()
+    expect(health.ready).toBe(true)
+    expect(health.readinessSource).toContain('sessao autenticada')
+    expect(health.readinessSource).not.toContain('loggedIn')
   })
 })
 
@@ -155,9 +277,30 @@ describe('ClaudeCodeCliProvider — execucao headless', () => {
     expect(consumesAttempt(error.failureCode)).toBe(false)
   })
 
-  it('sessao sem login nao vira PROVIDER_NOT_READY: a CLI nao permite observar', async () => {
+  it('sessao sem login agora vira PROVIDER_NOT_READY e nao consome tentativa util', async () => {
     const path = worktree()
-    const handle = await provider(cli.semLogin).start(
+    const error = await provider(cli.semLogin)
+      .start(executeAssignment(path), dispatchContext(path, { env: cli.env }))
+      .then(
+        () => null,
+        (e: unknown) => e,
+      )
+    expect(isAgentRuntimeError(error)).toBe(true)
+    if (!isAgentRuntimeError(error)) return
+    expect(error.failureCode).toBe('PROVIDER_NOT_READY')
+    expect(consumesAttempt(error.failureCode)).toBe(false)
+  })
+
+  it('prontidao unknown nao recusa despacho: a verdade aparece no processo', async () => {
+    const path = worktree()
+    const semSonda = new LocalCliAgentProvider(
+      {
+        ...CLAUDE_CODE_DESCRIPTOR,
+        capabilities: { ...CLAUDE_CODE_DESCRIPTOR.capabilities, readinessProbe: 'unsupported' },
+      },
+      { command: cli.semLogin, runtime: runtime() },
+    )
+    const handle = await semSonda.start(
       executeAssignment(path),
       dispatchContext(path, { env: cli.env }),
     )

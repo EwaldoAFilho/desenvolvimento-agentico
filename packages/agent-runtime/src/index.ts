@@ -26,6 +26,7 @@ export {
   extractVersion,
   PROBE_ENV_ALLOW,
   probeLocalAgent,
+  readinessSignal,
 } from './probe.js'
 export type {
   ExecutableFound,
@@ -33,7 +34,12 @@ export type {
   ExecutableResolution,
   ExecutableUnknown,
 } from './resolve.js'
-export { isDirectory, isExecutableFile, resolveExecutable } from './resolve.js'
+export {
+  brokenLinkTarget,
+  isDirectory,
+  isExecutableFile,
+  resolveExecutable,
+} from './resolve.js'
 export type { LocalProcessHandle } from './runtime.js'
 export { createLocalAgentRuntime, NodeLocalAgentRuntime } from './runtime.js'
 export type { LocalAgentRuntimeDeps, ProbeContext } from './types.js'

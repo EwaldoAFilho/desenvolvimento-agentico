@@ -5,12 +5,17 @@ export const CLAUDE_CODE_PROVIDER_ID = 'claude-code'
 export const CLAUDE_CODE_DEFAULT_COMMAND = 'claude'
 /** Modo nao interativo: le o assignment, trabalha na worktree e escreve o relato em stdout. */
 export const CLAUDE_CODE_RUN_ARGS: readonly string[] = ['--print', '--output-format', 'text']
+/** Sai 0 e imprime o estado da sessao; verificado neste ambiente antes de declarar suporte. */
+export const CLAUDE_CODE_READINESS_ARGS: readonly string[] = ['auth', 'status']
 
 /**
- * Regra dura (ADR-0010): nao existe comando documentado e confiavel para observar a
- * autenticacao desta CLI. `--version` responder prova instalacao, jamais sessao valida.
- * Declaramos `readinessProbe: 'unsupported'`, nao ha `readinessArgs`, e `ready` cai em
- * 'unknown'. Inventar uma sonda aqui seria mentir para o operador.
+ * Prontidao observavel (ADR-0010 4): existe comando real que sai 0 quando ha sessao, entao
+ * `readinessProbe` e `'supported'`. O que continua valendo: `ready: true` so com sonda que
+ * efetivamente saiu 0 — `--version` responder segue provando instalacao, jamais sessao.
+ *
+ * A saida desta sonda carrega dado pessoal (e-mail, organizacao). O runtime le dela apenas
+ * o sinal booleano de sessao; nada da saida entra em `detail`, `readinessSource`, log ou
+ * artefato (ARCHITECTURE 9).
  */
 export const CLAUDE_CODE_DESCRIPTOR: LocalCliDescriptor = {
   id: CLAUDE_CODE_PROVIDER_ID,
@@ -19,10 +24,11 @@ export const CLAUDE_CODE_DESCRIPTOR: LocalCliDescriptor = {
     roles: ['executor', 'reviewer'],
     streaming: true,
     cancellation: true,
-    readinessProbe: 'unsupported',
+    readinessProbe: 'supported',
     reportsUsage: false,
   },
   versionArgs: ['--version'],
+  readinessArgs: CLAUDE_CODE_READINESS_ARGS,
   runArgs: CLAUDE_CODE_RUN_ARGS,
 }
 
