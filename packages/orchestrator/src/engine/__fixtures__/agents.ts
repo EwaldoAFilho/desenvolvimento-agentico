@@ -1,5 +1,9 @@
 import type {
   AgentHandle,
+  AgentLogEvent,
+  AgentOutcome,
+  AgentRole,
+  AgentRunStatus,
   Assignment,
   DispatchContext,
   ProviderCapabilities,
@@ -136,4 +140,88 @@ export function review(verdict: 'PASS' | 'FAIL' | 'ESCALATE', detail = 'analise 
     status: 'completed',
     claims: { summary: `VERDICT: ${verdict}`, detail },
   }
+}
+
+/**
+ * Handle que morre sem desfecho: `result()` rejeita. E o que acontece quando o processo do
+ * agente e arrancado e o adapter nao consegue traduzir o fim em `AgentOutcome`. O contrato
+ * da porta permite; o orquestrador nao pode perder a tentativa por causa disso.
+ */
+class BrokenHandle implements AgentHandle {
+  readonly ref: string
+  readonly #detail: string
+  readonly #release: () => void
+
+  constructor(ref: string, detail: string, release: () => void) {
+    this.ref = ref
+    this.#detail = detail
+    this.#release = release
+  }
+
+  status(): AgentRunStatus {
+    return 'failed'
+  }
+
+  cancel(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  result(): Promise<AgentOutcome> {
+    // Vaga devolvida como um adapter real faria no `finally`; o que falta e o desfecho.
+    this.#release()
+    return Promise.reject(new Error(this.#detail))
+  }
+
+  logs(): AsyncIterable<AgentLogEvent> {
+    return { [Symbol.asyncIterator]: async function* () {} }
+  }
+}
+
+/** Provider que entrega um handle quebrado no papel escolhido e roteiro normal no outro. */
+export class BrokenHandleProvider {
+  readonly id: ProviderId
+  readonly #input: ProviderFactoryInput
+  readonly #breakOn: 'execute' | 'review'
+  readonly #inner: ScriptedAgentProvider
+
+  constructor(input: ProviderFactoryInput, breakOn: 'execute' | 'review', step: StepFn) {
+    this.id = input.id
+    this.#input = input
+    this.#breakOn = breakOn
+    this.#inner = new ScriptedAgentProvider(input, step)
+  }
+
+  capabilities(): ProviderCapabilities {
+    return this.#inner.capabilities()
+  }
+
+  health(): Promise<ProviderHealth> {
+    return this.#inner.health()
+  }
+
+  start(assignment: Assignment, ctx: DispatchContext): Promise<AgentHandle> {
+    if (assignment.kind !== this.#breakOn) return this.#inner.start(assignment, ctx)
+    const slot: AgentRole = assignment.kind === 'review' ? 'reviewer' : 'executor'
+    this.#input.capacity.acquire(this.id, slot)
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      this.#input.capacity.release(this.id, slot)
+    }
+    return Promise.resolve(
+      new BrokenHandle(
+        `${this.id}:${assignment.attemptId}`,
+        `processo do agente desapareceu sem desfecho (${assignment.kind})`,
+        release,
+      ),
+    )
+  }
+}
+
+export function brokenHandleFactory(
+  breakOn: 'execute' | 'review',
+  step: StepFn = () => pass('nunca usado'),
+): ProviderFactory {
+  return (input) => new BrokenHandleProvider(input, breakOn, step)
 }

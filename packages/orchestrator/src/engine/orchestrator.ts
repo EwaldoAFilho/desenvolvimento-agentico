@@ -129,7 +129,8 @@ type Message =
   | {
       readonly kind: 'observed'
       readonly attemptId: AttemptId
-      readonly outcome: AgentOutcome
+      /** Ausente quando o handle do fornecedor morreu sem produzir desfecho. */
+      readonly outcome?: AgentOutcome
       readonly observation?: Observation
       readonly failure?: FailureReason
     }
@@ -575,8 +576,9 @@ export class Orchestrator {
     inflight.observation = message.observation
     inflight.attempt = {
       ...inflight.attempt,
-      claims: message.outcome.claims,
-      usage: message.outcome.usage,
+      ...(message.outcome === undefined
+        ? {}
+        : { claims: message.outcome.claims, usage: message.outcome.usage }),
       observation: message.observation,
     }
 
@@ -1657,7 +1659,20 @@ export class Orchestrator {
 
   /** Fora do tick: espera o agente, mede o workspace e devolve o resultado para o loop. */
   async #afterExecutor(inflight: Inflight, handle: AgentHandle): Promise<void> {
-    const outcome = await handle.result()
+    let outcome: AgentOutcome
+    try {
+      outcome = await handle.result()
+    } catch (error) {
+      // Handle que morre sem desfecho (processo do agente arrancado, adapter quebrado) NAO
+      // pode virar silencio: sem esta mensagem nada voltaria ao loop e a tentativa ficaria
+      // em RUNNING para sempre, com lock e workspace presos.
+      this.#push({
+        kind: 'observed',
+        attemptId: inflight.attempt.id,
+        failure: failureReasonOf(error, 'AGENT_ERROR'),
+      })
+      return
+    }
     inflight.phase = 'observing'
     const observed = await observeAttempt({
       workspaces: this.#deps.workspaces,
@@ -1790,12 +1805,25 @@ export class Orchestrator {
 
   async #afterReviewer(inflight: Inflight, handle: AgentHandle): Promise<void> {
     const startedAt = inflight.reviewStartedAt ?? this.#deps.clock.now().getTime()
-    const outcome = await handle.result()
+    const elapsed = (): number => Math.max(0, this.#deps.clock.now().getTime() - startedAt)
+    let outcome: AgentOutcome
+    try {
+      outcome = await handle.result()
+    } catch (error) {
+      // Mesma rede do executor: revisao sem desfecho reprova a tentativa, nunca some.
+      this.#push({
+        kind: 'review',
+        attemptId: inflight.attempt.id,
+        failure: failureReasonOf(error, 'AGENT_ERROR'),
+        durationMs: elapsed(),
+      })
+      return
+    }
     this.#push({
       kind: 'review',
       attemptId: inflight.attempt.id,
       outcome,
-      durationMs: Math.max(0, this.#deps.clock.now().getTime() - startedAt),
+      durationMs: elapsed(),
     })
   }
 

@@ -97,3 +97,9 @@ export interface RuntimeDeps {
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 export const DEFAULT_KILL_GRACE_MS = 2000
 export const DEFAULT_CLOSE_GRACE_MS = 2000
+/**
+ * Teto do fragmento ainda sem quebra de linha. Saida hostil (progresso com `\r`, blob
+ * base64, JSON de uma linha so) nao pode crescer sem limite na memoria do pai: passando
+ * daqui, o fragmento e entregue em pedacos.
+ */
+export const DEFAULT_MAX_LINE_CHARS = 64 * 1024

@@ -53,6 +53,8 @@ export interface HarnessOptions {
   readonly probe?: ConcurrencyProbe
   /** Timer de seguranca do tick. Ausente = so tick por evento. */
   readonly safetyIntervalMs?: number
+  /** Substitui o provider de TODOS os ids do registry — usado pelo executavel falso. */
+  readonly factory?: ProviderFactory
 }
 
 export interface Harness {
@@ -107,10 +109,11 @@ function factoriesOf(
   project: ProjectFile,
   step: StepFn,
   probe?: ConcurrencyProbe,
+  override?: ProviderFactory,
 ): Record<string, ProviderFactory> {
   const factories: Record<string, ProviderFactory> = {}
   for (const id of Object.keys(project.providers.registry)) {
-    factories[id] = scriptedFactory(step, probe)
+    factories[id] = override ?? scriptedFactory(step, probe)
   }
   return factories
 }
@@ -149,7 +152,12 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       gatesFile: gatesParsed.value,
       repoRoot: root,
       baseDir: join(root, '.agentic'),
-      providerFactories: factoriesOf(projectParsed.value, activeStep, options.probe),
+      providerFactories: factoriesOf(
+        projectParsed.value,
+        activeStep,
+        options.probe,
+        options.factory,
+      ),
       ...(options.safetyIntervalMs === undefined
         ? {}
         : { safetyIntervalMs: options.safetyIntervalMs }),

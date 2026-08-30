@@ -17,5 +17,6 @@ export type {
 export {
   DEFAULT_CLOSE_GRACE_MS,
   DEFAULT_KILL_GRACE_MS,
+  DEFAULT_MAX_LINE_CHARS,
   DEFAULT_MAX_OUTPUT_BYTES,
 } from './types.js'

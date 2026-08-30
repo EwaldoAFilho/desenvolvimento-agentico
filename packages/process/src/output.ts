@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
+import { DEFAULT_MAX_LINE_CHARS } from './types.js'
 
 /** Fila de linhas de um consumidor. Cada chamada de `lines()` cria a sua. */
 class LineSubscriber {
@@ -50,6 +51,7 @@ class LineSubscriber {
  */
 export class StreamSink {
   readonly #limit: number
+  readonly #maxLineChars: number
   readonly #hash = createHash('sha256')
   readonly #kept: Buffer[] = []
   readonly #replay: string[] = []
@@ -65,8 +67,9 @@ export class StreamSink {
   #text: string | null = null
   #digest: string | null = null
 
-  constructor(limit: number) {
+  constructor(limit: number, maxLineChars: number = DEFAULT_MAX_LINE_CHARS) {
     this.#limit = Math.max(0, limit)
+    this.#maxLineChars = Math.max(1, maxLineChars)
   }
 
   get truncated(): boolean {
@@ -134,6 +137,12 @@ export class StreamSink {
       this.#deliver(stripCarriageReturn(this.#partial.slice(0, index)))
       this.#partial = this.#partial.slice(index + 1)
       index = this.#partial.indexOf('\n')
+    }
+    // Agente que nunca quebra linha nao pode consumir a memoria do pai: o fragmento sai
+    // em pedacos de tamanho fixo. Sem `\r` removido — o corte nao e fim de linha.
+    while (this.#partial.length >= this.#maxLineChars) {
+      this.#deliver(this.#partial.slice(0, this.#maxLineChars))
+      this.#partial = this.#partial.slice(this.#maxLineChars)
     }
   }
 

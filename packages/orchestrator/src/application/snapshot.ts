@@ -29,6 +29,16 @@ export function toBlockageDto(blockage: Blockage | undefined): BlockageDto | und
   }
 }
 
+/**
+ * ProviderHealth -> DTO. Os campos de diagnostico sao OPCIONAIS na porta, entao so entram
+ * no DTO quando existem: o dashboard e o doctor precisam distinguir "nao apurado" de
+ * "apurado como vazio".
+ *
+ * Copiar campo a campo aqui ja custou um defeito: `resolvedPath`, `readinessSource` e
+ * `diagnostic` foram acrescentados a porta e ao schema em T203 e ficaram silenciosamente
+ * descartados nesta travessia, de modo que nada chegava a `GET /api/providers`, ao canal
+ * SSE de providers nem a `agentic providers`. Achado pela revisao independente de T203.
+ */
 export function toProviderHealthDto(health: ProviderHealth): ProviderHealthDto {
   return {
     providerId: health.providerId,
@@ -39,6 +49,9 @@ export function toProviderHealthDto(health: ProviderHealth): ProviderHealthDto {
     running: health.running,
     capacity: health.capacity,
     probedAt: health.probedAt.toISOString(),
+    ...(health.resolvedPath === undefined ? {} : { resolvedPath: health.resolvedPath }),
+    ...(health.readinessSource === undefined ? {} : { readinessSource: health.readinessSource }),
+    ...(health.diagnostic === undefined ? {} : { diagnostic: health.diagnostic }),
   }
 }
 
