@@ -12,6 +12,19 @@ const alias = Object.fromEntries([
   ...apps.map((a) => [`@agentic/${a}`, `${root}apps/${a}/src/index.ts`]),
 ])
 
+/**
+ * Divisao do pipeline (cada suite roda exatamente uma vez no gate mission):
+ *
+ *   npm run test     -> vitest run --project=!e2e   (tudo menos o projeto abaixo)
+ *   npm run test:e2e -> vitest run --project e2e
+ *
+ * O filtro do verify e por EXCLUSAO, nao por lista: qualquer projeto novo declarado aqui
+ * entra automaticamente no `npm run test` (e portanto no `npm run verify`). Manter assim.
+ * Tirar um projeto do verify exige mudar o filtro em package.json de proposito — nunca
+ * acontece em silencio ao adicionar um projeto.
+ */
+const E2E_PROJECT = 'e2e'
+
 const nodeProject = (name: string, dir: string) => ({
   extends: true,
   test: {
@@ -50,7 +63,7 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          name: 'e2e',
+          name: E2E_PROJECT,
           root,
           include: ['tests/e2e/**/*.test.ts'],
           environment: 'node' as const,
