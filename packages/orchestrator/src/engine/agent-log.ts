@@ -16,6 +16,14 @@ export const DEFAULT_AGENT_LOG_GRACE_MS = 2_000
 
 export type AgentLogRole = 'execute' | 'review'
 
+/**
+ * Campo presente **so** na linha cujo `ts` nao veio do evento. Ausente = horario observado
+ * na fonte. Quem le o JSONL depois nao precisa adivinhar qual dos dois esta lendo.
+ */
+export const TS_SOURCE_FIELD = 'tsSource'
+/** Valor de `tsSource`: horario atribuido pelo relogio da captura, nao pelo agente. */
+export const TS_SOURCE_CAPTURE = 'capture'
+
 export interface AgentLogConfig {
   /** Teto do artefato em bytes. Acima disso o log e truncado e a truncagem fica registrada. */
   readonly maxBytes?: number
@@ -45,9 +53,15 @@ export function agentLogKind(role: AgentLogRole): string {
   return role === 'review' ? REVIEW_LOG_KIND : AGENT_LOG_KIND
 }
 
-function timestampOf(ts: AgentLogEvent['ts']): number {
+/**
+ * Horario da linha e de onde ele saiu. `ts` ausente ou invalido nao vira epoch: 1970-01-01
+ * seria indistinguivel de um horario real para quem le o artefato depois, e o log e evidencia
+ * de diagnostico — nao pode fabricar dado. Cai no relogio da captura, marcado como atribuido.
+ */
+function timestampOf(ts: AgentLogEvent['ts'], now: () => Date): { iso: string; assigned: boolean } {
   const time = ts instanceof Date ? ts.getTime() : Number.NaN
-  return Number.isFinite(time) ? time : 0
+  if (!Number.isFinite(time)) return { iso: now().toISOString(), assigned: true }
+  return { iso: new Date(time).toISOString(), assigned: false }
 }
 
 /** Espera limitada: promessa que nunca resolve nao pode segurar a tentativa. */
@@ -167,8 +181,11 @@ export class AgentLogCapture {
 
   /** Teto por acumulado: o evento que estouraria o limite e descartado, nao bufferizado. */
   #append(event: AgentLogEvent): void {
+    const time = timestampOf(event.ts, this.#now)
     const line = JSON.stringify({
-      ts: new Date(timestampOf(event.ts)).toISOString(),
+      ts: time.iso,
+      // So aparece quando ha o que avisar: linha sem a marca teve horario vindo do evento.
+      ...(time.assigned ? { [TS_SOURCE_FIELD]: TS_SOURCE_CAPTURE } : {}),
       stream: event.stream === 'stderr' ? 'stderr' : 'stdout',
       chunk: this.#redact(event.chunk),
     })
