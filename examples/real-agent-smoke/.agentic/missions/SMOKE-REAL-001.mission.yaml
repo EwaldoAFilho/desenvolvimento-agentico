@@ -1,0 +1,136 @@
+apiVersion: agentic/v1
+kind: Mission
+
+# Missao do smoke com agente REAL. Tres tasks: duas independentes que rodam juntas e uma
+# terceira que integra as duas. Pequena de proposito — o que se quer observar aqui e o
+# control plane despachando, medindo gate, revisando e integrando, nao o tamanho do
+# trabalho. NENHUM teste automatizado executa esta missao: ela consome assinatura.
+
+id: SMOKE-REAL-001
+title: Agenda de blocos a partir de intervalo e duracao
+objective: >
+  Entregar tres modulos que fazem `node tests/run.js --exigir-tudo` passar: analise de
+  duracao, analise de intervalo e a montagem da agenda que integra as duas.
+
+scope:
+  - Modulos novos em src/
+  - Convencao de Resultado ja estabelecida em src/resultado.js
+
+outOfScope:
+  - Alterar os modulos base (src/resultado.js, src/texto.js, src/horario.js)
+  - Alterar a suite em tests/ — ela e o criterio de aceite, nao o produto
+  - Qualquer dependencia fora da biblioteca padrao do Node
+
+constraints:
+  - Nenhuma dependencia nova no package.json
+  - Nenhuma funcao publica lanca por causa da entrada; falha e Resultado
+  - Cada task escreve exclusivamente dentro do proprio touches
+  - "`node tests/run.js` precisa continuar passando em toda tentativa"
+
+acceptanceCriteria:
+  - "`node tests/run.js --exigir-tudo` sai 0 na branch da missao"
+  - Os tres modulos seguem a convencao de src/resultado.js e reusam os modulos base
+  - Nenhum arquivo fora de src/ e alterado
+  - "`git diff` da missao nao acrescenta dependencia ao package.json"
+
+defaults:
+  requireReview: false           # smoke barato: so a task de integracao e revisada
+  maxAttempts: 2
+  gate: unit
+
+phases:
+  - id: base
+    title: Analises independentes
+  - id: integracao
+    title: Integracao
+
+tasks:
+  - id: T01
+    phase: base
+    title: Analise de duracao
+    objective: >
+      Entregar analisarDuracao em src/duracao.js, convertendo texto de duracao em minutos
+      e devolvendo Resultado, conforme tests/specs/duracao.spec.js.
+    description: >
+      Formas aceitas: `1h30m`, `2h`, `45m`. Caixa e espaco sao irrelevantes (a entrada
+      passa por src/texto.js). Componente de minuto vale 0..59 e o de hora 0..23; total
+      zero nao e duracao. Codigos de falha: VAZIO, FORMATO, FAIXA.
+    dependencies: []
+    touches:
+      - src/duracao.js
+    reads:
+      - src/resultado.js
+      - src/texto.js
+      - src/horario.js
+      - tests/specs/duracao.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - "`1h30m` devolve ok com 90 e `  2H 15M ` devolve ok com 135"
+      - Entrada vazia ou nao textual e VAZIO; numero sem unidade e FORMATO
+      - "`1h60m`, `24h` e `0m` sao FAIXA"
+    gate: unit
+    requireReview: false
+    risk: low
+    estimate: 2
+
+  - id: T02
+    phase: base
+    title: Analise de intervalo
+    objective: >
+      Entregar analisarIntervalo em src/intervalo.js, devolvendo inicio e fim em minutos
+      e reusando analisarHorario, conforme tests/specs/intervalo.spec.js.
+    description: >
+      Forma aceita: `08:00-12:30`, com espacos opcionais em volta do separador. Cada lado
+      e analisado por analisarHorario de src/horario.js e a falha de um lado e repassada
+      preservando o codigo. Fim que nao passa do inicio e ORDEM.
+    dependencies: []
+    touches:
+      - src/intervalo.js
+    reads:
+      - src/resultado.js
+      - src/texto.js
+      - src/horario.js
+      - tests/specs/intervalo.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - "`08:00-12:30` devolve ok com inicio 480 e fim 750"
+      - Separador ausente ou repetido e FORMATO
+      - "`8:00-12:30` e FORMATO e `25:00-26:00` e FAIXA, vindos do lado analisado"
+      - "`12:30-08:00` e `08:00-08:00` sao ORDEM"
+    gate: unit
+    requireReview: false
+    risk: low
+    estimate: 2
+
+  - id: T03
+    phase: integracao
+    title: Montagem da agenda
+    objective: >
+      Entregar montarAgenda em src/agenda.js, dividindo o intervalo de T02 em blocos da
+      duracao de T01 e formatando cada bloco em HH:MM, conforme tests/specs/agenda.spec.js.
+    description: >
+      Integra as duas analises: o intervalo e analisado primeiro, a duracao depois, e a
+      primeira falha e repassada preservando o codigo da causa. Blocos sao consecutivos e
+      completos; a sobra do fim e descartada. Intervalo menor que a duracao devolve lista
+      vazia, nao falha.
+    dependencies: [T01, T02]
+    touches:
+      - src/agenda.js
+    reads:
+      - src/resultado.js
+      - src/horario.js
+      - src/duracao.js
+      - src/intervalo.js
+      - tests/specs/agenda.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - "`08:00-09:00` com `30m` devolve dois blocos consecutivos"
+      - "`08:00-09:00` com `45m` devolve um bloco so: a sobra e descartada"
+      - "`08:00-09:00` com `2h` devolve ok com lista vazia"
+      - Falha do intervalo ou da duracao chega ao chamador com o codigo da causa
+    gate: mission
+    requireReview: true
+    risk: medium
+    estimate: 3
+
+missionGate: mission

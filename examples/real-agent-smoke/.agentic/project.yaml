@@ -1,0 +1,86 @@
+apiVersion: agentic/v1
+kind: Project
+
+# Politicas de execucao do alvo de smoke. Lido pelo control plane e PROIBIDO para
+# agentes (ver policies.denyPaths).
+
+project:
+  name: real-agent-smoke
+  repoRoot: .
+
+execution:
+  workspace: git-worktree        # git-worktree | shared
+  worktreeRoot: .agentic/worktrees
+  maxParallelTasks: 2            # a missao tem no maximo duas tasks prontas ao mesmo tempo
+  maxExecutors: 2
+  maxReviewers: 1
+  defaultMaxAttempts: 2
+  attemptTimeoutMinutes: 20      # CLI real e mais lenta que mock; 20 min cobre uma task pequena
+  retryBackoffSeconds: 10
+  workspaceSetup:
+    link: []                     # projeto de biblioteca padrao: nada a preparar na worktree
+    commands: []
+    timeoutMs: 60000
+
+policies:
+  enforceTouches: true           # escrita fora de `touches` reprova a tentativa
+  requireReviewByDefault: false  # revisao so onde a missao pede, para o smoke sair barato
+  denyPaths:
+    # Nenhum destes prefixos cobre `src/*.js`, que e onde as tres tasks escrevem.
+    - .agentic/                  # politicas e gates nao sao editaveis por agente (P09)
+    - .git/
+    - .env
+    - "*.pem"
+    - tests/                     # a suite e o criterio: quem e avaliado nao edita a prova
+    - scripts/
+    - docs/
+    - package.json
+  escalateOn:
+    - attemptsExhausted
+    - scopeViolationRepeated
+    - reviewEscalate
+  review:
+    default: fresh-session
+    byRisk:
+      low: fresh-session
+      medium: fresh-session
+      high: cross-provider-required
+
+integration:
+  missionBranchPrefix: mission/
+  taskBranchPrefix: task/
+  strategy: rebase-merge
+  autoPush: false
+
+providers:
+  # Subscription-first (P17): CLIs locais ja instaladas e autenticadas pelo usuario.
+  # Nenhuma exige API key, nenhuma credencial e lida, guardada ou injetada.
+  # Dois fornecedores nao e enfeite: e o que permite revisao cruzada (ver README).
+  default: claude-code
+  registry:
+    claude-code:
+      kind: local-cli
+      command: claude
+      versionArgs: ["--version"]
+      maxConcurrent: 2
+      roles: [executor, reviewer]
+      profiles:
+        executor: { role: executor }
+        reviewer: { role: reviewer }
+    codex:
+      kind: local-cli
+      command: codex
+      versionArgs: ["--version"]
+      maxConcurrent: 2
+      roles: [executor, reviewer]
+      profiles:
+        executor: { role: executor }
+        reviewer: { role: reviewer }
+
+gates:
+  file: .agentic/gates.yaml
+  missionGate: mission
+
+server:
+  host: 127.0.0.1
+  port: 4317

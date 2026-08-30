@@ -1,0 +1,13 @@
+{
+  "name": "real-agent-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Projeto-alvo minimo para o smoke com agente real (missao SMOKE-REAL-001).",
+  "scripts": {
+    "test": "node tests/run.js",
+    "gate:unit": "node tests/run.js",
+    "gate:mission": "node tests/run.js --exigir-tudo",
+    "reset": "node scripts/reset.mjs"
+  }
+}

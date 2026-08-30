@@ -1,0 +1,7 @@
+node_modules/
+
+# Estado local do control plane — nunca versionado
+.agentic/state.db
+.agentic/state.db-*
+.agentic/runs/
+.agentic/worktrees/

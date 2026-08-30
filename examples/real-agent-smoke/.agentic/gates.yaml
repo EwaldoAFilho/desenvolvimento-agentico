@@ -1,0 +1,24 @@
+apiVersion: agentic/v1
+kind: Gates
+
+# Gates do real-agent-smoke. Um comando por perfil, sem instalacao, sem rede: o gate
+# inteiro roda em menos de um segundo. Smoke com agente real ja e caro no agente — o
+# gate nao pode ser a parte lenta. Nenhum agente pode alterar este arquivo (P09).
+
+profiles:
+  # Perfil das tasks. No estado inicial passa (modulo nao entregue fica pendente); um
+  # modulo entregue errado reprova com exit 1.
+  unit:
+    commands:
+      - run: node tests/run.js
+        timeoutMs: 60000
+
+  # Perfil da missao. `--exigir-tudo` transforma pendencia em reprovacao (exit 4): so
+  # passa quando os tres modulos da missao existem E estao corretos.
+  mission:
+    commands:
+      - run: node tests/run.js --exigir-tudo
+        timeoutMs: 60000
+
+env:
+  allow: [PATH, HOME, LANG, TMPDIR]
