@@ -1,0 +1,10 @@
+{
+  "name": "estoque-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Projeto-alvo de exemplo para a missao EXEMPLO-001.",
+  "scripts": {
+    "test": "node tests/run.js"
+  }
+}

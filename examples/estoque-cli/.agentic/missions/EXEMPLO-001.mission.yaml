@@ -1,0 +1,175 @@
+apiVersion: agentic/v1
+kind: Mission
+
+# Missao de exemplo do produto: 8 tasks sobre um projeto-alvo real e pequeno.
+# E a missao que o E2E de `tests/e2e/` executa do inicio ao fim com agentes de mentira.
+
+id: EXEMPLO-001
+title: Estoque CLI com reposicao, relatorio e documentacao
+objective: >
+  Levar o estoque-cli de dois modulos base a uma ferramenta completa: inventario em
+  unidades, precificacao, politica de reposicao, relatorio, entrada de linha de comando,
+  casos de teste e documentacao de uso.
+
+scope:
+  - Modulos de dominio em src/
+  - Casos de teste em tests/
+  - Documentacao de uso em docs/
+
+outOfScope:
+  - Persistencia em banco de dados
+  - Interface web ou API HTTP
+  - Dependencia externa fora da biblioteca padrao do Node
+
+constraints:
+  - Nenhuma dependencia nova no package.json
+  - Cada task escreve exclusivamente dentro do proprio touches
+  - "`node tests/run.js` precisa continuar passando em toda tentativa"
+
+acceptanceCriteria:
+  - "`node tests/run.js` passa na branch da missao"
+  - Todo modulo entregue e importavel e exporta ao menos um simbolo
+  - Task de risco alto revisada por fornecedor diferente do que executou
+  - docs/USAGE.md descreve o comando de linha entregue
+
+defaults:
+  requireReview: true
+  maxAttempts: 2
+
+phases:
+  - id: base
+    title: Base
+  - id: feature
+    title: Funcionalidade
+  - id: quality
+    title: Qualidade
+
+tasks:
+  - id: T01
+    phase: base
+    title: Conversao de unidades em dois sentidos
+    objective: >
+      Acrescentar a conversao inversa (unidades para caixas) ao modulo de unidades,
+      preservando os simbolos ja exportados.
+    dependencies: []
+    touches:
+      - src/unidades.js
+    validation:
+      - "`caixasParaUnidades` continua exportado e com o mesmo comportamento"
+      - unidadesParaCaixas arredonda para cima e recusa entrada negativa
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T02
+    phase: base
+    title: Busca do catalogo por sku
+    objective: >
+      Expor a lista de skus do catalogo mantendo CATALOGO e buscarPorSku intactos.
+    dependencies: []
+    touches:
+      - src/catalogo.js
+    validation:
+      - buscarPorSku continua devolvendo undefined para sku inexistente
+      - skus devolve um sku por item do catalogo
+    gate: unit
+    risk: low
+    estimate: 1
+
+  - id: T03
+    phase: feature
+    title: Inventario em unidades
+    objective: >
+      Calcular o total de unidades em estoque a partir das caixas de cada item, usando a
+      conversao de unidades.
+    dependencies: [T01, T02]
+    touches:
+      - src/inventario.js
+    validation:
+      - unidadesEmEstoque soma as unidades de todos os itens recebidos
+      - lista vazia devolve zero
+    gate: unit
+    risk: medium
+    estimate: 3
+
+  - id: T04
+    phase: feature
+    title: Precificacao de pedido
+    objective: >
+      Calcular o valor de um pedido a partir do preco unitario declarado no catalogo.
+    dependencies: [T02]
+    touches:
+      - src/precos.js
+    validation:
+      - totalDoPedido multiplica quantidade por preco unitario
+      - sku desconhecido no pedido e recusado com erro
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: T05
+    phase: feature
+    title: Politica de reposicao
+    objective: >
+      Decidir quais itens precisam de reposicao comparando o estoque em unidades com o
+      ponto de pedido de cada item.
+    dependencies: [T01, T03]
+    touches:
+      - src/reposicao.js
+    validation:
+      - item abaixo do ponto de pedido entra na lista de reposicao
+      - item acima do ponto de pedido fica fora da lista
+    gate: unit
+    risk: high
+    reviewPolicy: cross-provider-required
+    estimate: 3
+
+  - id: T06
+    phase: feature
+    title: Relatorio de estoque
+    objective: >
+      Renderizar em texto o estoque atual com unidades e valor por item.
+    dependencies: [T02, T03, T04]
+    touches:
+      - src/relatorio.js
+    validation:
+      - o relatorio cita o sku e as unidades de cada item recebido
+      - relatorio de lista vazia devolve cabecalho sem linhas
+    risk: low
+    estimate: 2
+
+  - id: T07
+    phase: quality
+    title: Entrada de linha de comando
+    objective: >
+      Expor um ponto de entrada que recebe argumentos e devolve o relatorio ou a lista de
+      reposicao, sem imprimir nada por conta propria.
+    dependencies: [T05, T06]
+    touches:
+      - src/cli.js
+    validation:
+      - "`main([\"relatorio\"])` devolve o texto do relatorio"
+      - "`main([\"reposicao\"])` devolve a lista de itens a repor"
+      - comando desconhecido e recusado com erro
+    gate: unit
+    risk: medium
+    estimate: 3
+
+  - id: T08
+    phase: quality
+    title: Casos de teste e documentacao de uso
+    objective: >
+      Cobrir os modulos entregues com casos executaveis pela suite e documentar o uso do
+      comando de linha.
+    dependencies: [T04, T07]
+    touches:
+      - docs/USAGE.md
+      - tests/casos.js
+    validation:
+      - "`node tests/run.js` executa os casos declarados em tests/casos.js"
+      - docs/USAGE.md descreve os dois subcomandos
+    gate: mission
+    risk: low
+    estimate: 2
+
+missionGate: mission

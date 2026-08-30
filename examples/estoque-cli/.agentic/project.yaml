@@ -1,0 +1,74 @@
+apiVersion: agentic/v1
+kind: Project
+
+# Politicas de execucao do projeto-alvo de exemplo. Lido pelo control plane e PROIBIDO
+# para agentes (ver policies.denyPaths).
+
+project:
+  name: estoque-cli
+  repoRoot: .
+
+execution:
+  workspace: git-worktree        # git-worktree | shared
+  worktreeRoot: .agentic/worktrees
+  maxParallelTasks: 4            # teto global <= capacidade somada dos fornecedores (3 + 2)
+  maxExecutors: 4
+  maxReviewers: 2
+  defaultMaxAttempts: 2
+  attemptTimeoutMinutes: 5
+  retryBackoffSeconds: 0         # projeto de exemplo: retentar na hora mantem o E2E curto
+  workspaceSetup:
+    link: [node_modules]         # ausente no fixture: o setup registra o pulo e segue
+    commands: []
+    timeoutMs: 600000
+
+policies:
+  enforceTouches: true           # escrita fora de `touches` reprova a tentativa
+  requireReviewByDefault: true
+  denyPaths:
+    - .agentic/
+    - .git/
+    - .env
+  escalateOn:
+    - attemptsExhausted
+    - scopeViolationRepeated
+    - reviewEscalate
+  review:
+    default: fresh-session
+    byRisk:
+      low: fresh-session
+      medium: fresh-session
+      high: cross-provider-required
+
+integration:
+  missionBranchPrefix: mission/
+  taskBranchPrefix: task/
+  strategy: rebase-merge
+  autoPush: false
+
+providers:
+  # Subscription-first: CLIs locais ja instaladas e autenticadas pelo usuario. Nenhuma
+  # exige API key. A suite E2E substitui os dois por agentes in-process roteirizados —
+  # nenhum teste automatizado invoca CLI real nem consome quota.
+  default: claude-code
+  registry:
+    claude-code:
+      kind: local-cli
+      command: claude
+      versionArgs: ["--version"]
+      maxConcurrent: 3
+      roles: [executor, reviewer]
+    codex:
+      kind: local-cli
+      command: codex
+      versionArgs: ["--version"]
+      maxConcurrent: 2
+      roles: [executor, reviewer]
+
+gates:
+  file: .agentic/gates.yaml
+  missionGate: mission
+
+server:
+  host: 127.0.0.1
+  port: 4317

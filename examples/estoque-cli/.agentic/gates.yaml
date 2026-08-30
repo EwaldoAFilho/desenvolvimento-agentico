@@ -1,0 +1,21 @@
+apiVersion: agentic/v1
+kind: Gates
+
+# Quality gates do estoque-cli. Comandos reais, baratos e reproduziveis: um humano cola a
+# linha no terminal e obtem o mesmo resultado. Nenhum agente pode alterar este arquivo.
+
+profiles:
+  unit:
+    commands:
+      - run: node tests/run.js
+        timeoutMs: 60000
+
+  mission:
+    commands:
+      - run: node tests/run.js
+        timeoutMs: 120000
+      - run: node -e 'const fs = require("node:fs"); const faltando = ["src/inventario.js", "src/precos.js", "src/reposicao.js", "src/relatorio.js", "src/cli.js", "docs/USAGE.md", "tests/casos.js"].filter((caminho) => !fs.existsSync(caminho)); if (faltando.length > 0) { console.error("faltando " + faltando.join(" ")); process.exit(4) }'
+        timeoutMs: 30000
+
+env:
+  allow: [PATH, HOME, LANG, TMPDIR]
