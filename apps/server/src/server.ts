@@ -13,6 +13,7 @@ import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
+import { registerPlanningRoutes } from './routes/planning.js'
 import { registerProjectRoutes } from './routes/project.js'
 import { registerReadRoutes } from './routes/read.js'
 import { registerStreamRoutes } from './routes/stream.js'
@@ -35,6 +36,7 @@ export function createServer(input: CreateServerInput): FastifyInstance {
   registerStreamRoutes(app, deps)
   registerProjectRoutes(app, deps)
   registerMissionRoutes(app, deps)
+  registerPlanningRoutes(app, deps)
   registerCommandRoutes(app, deps)
   registerStatic(app, deps)
   return app
@@ -134,6 +136,12 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
     project: sources.project,
     gatesFile: sources.gatesFile,
     repoRoot: sources.repoRoot,
+    // O TEXTO dos dois arquivos ja esta em maos: compilar a proposta de plano e funcao pura
+    // sobre conteudo, e passar daqui evita uma segunda leitura de disco que poderia divergir
+    // do que este processo carregou.
+    projectText: sources.projectText,
+    gatesText: sources.gatesText,
+    ...(config.missionsDir === undefined ? {} : { missionsDir: config.missionsDir }),
     ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
   })
   const running = await attachServer({
