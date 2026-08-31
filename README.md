@@ -239,31 +239,6 @@ apps/      cli · server · web
 
 ---
 
-## Como este projeto foi construído
-
-Ele se desenvolve pelo próprio método que propõe. As missões estão versionadas em
-[`.agentic/missions/`](.agentic/missions/) e os relatórios de evidência em
-[`docs/missions/`](docs/missions/).
-
-Em `DA-DOGFOOD-001`, o produto executou uma missão que **alterava o próprio código**: criou
-worktrees isoladas, rodou o gate dentro delas, integrou na branch da missão. Numa das tasks
-o agente investigou, concluiu que a premissa da task era falsa, **recusou-se a inventar
-trabalho fora do escopo declarado** e recomendou corrigir o plano. O produto registrou
-`NO_CHANGES` — não fingiu sucesso. O agente estava certo; a definição da task é que estava
-errada.
-
-Os defeitos mais valiosos apareceram **usando** o produto, não testando:
-
-- os adapters não davam permissão de escrita ao agente na worktree que o próprio produto
-  criava para ele — as CLIs falsas dos testes sempre escreviam, então o falso era mais
-  permissivo que o real;
-- o log do agente era transmitido e **descartado**: três tentativas reais falharam e não
-  havia como descobrir por quê;
-- o dashboard não carregava em nenhum projeto que não fosse o próprio produto — e a
-  mensagem de erro mandava rodar um build que não resolveria nada.
-
----
-
 ## Documentação
 
 | Documento | Conteúdo |
