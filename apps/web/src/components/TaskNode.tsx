@@ -74,8 +74,12 @@ export function TaskNodeCard({ data }: { readonly data: TaskNodeData }): JSX.Ele
             title={data.waiting}
             data-testid={`task-waiting-${data.taskId}`}
           >
-            {truncate(data.waiting, 30)}
+            {truncate(data.waiting, 26)}
           </span>
+          {/* Quanto tempo ja parada e metade da pergunta: o motivo nao pode custar a duracao. */}
+          {data.durationMs === undefined ? null : (
+            <span className="task-node__duration">{formatDuration(data.durationMs)}</span>
+          )}
         </div>
       )}
     </article>

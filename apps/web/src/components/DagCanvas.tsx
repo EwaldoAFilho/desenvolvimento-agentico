@@ -1,6 +1,13 @@
 import type { RunSnapshot } from '@agentic/schemas'
-import { Background, Controls, type Edge, type Node, ReactFlow } from '@xyflow/react'
-import { type JSX, type KeyboardEvent, useCallback, useMemo } from 'react'
+import {
+  Background,
+  Controls,
+  type Edge,
+  type Node,
+  ReactFlow,
+  type ReactFlowInstance,
+} from '@xyflow/react'
+import { type JSX, type KeyboardEvent, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   type DagLayout,
   GROUPING_LABEL,
@@ -112,6 +119,9 @@ export function buildEdges(snapshot: RunSnapshot): Edge[] {
  * vem de `snapshot.tasks`. Um e geometria, o outro e cor: por isso o no nao dança a cada
  * evento (DASHBOARD 6).
  */
+/** Folga no enquadramento: encostar o grafo na borda deixa o no colado no limite. */
+const FIT_OPTIONS = { padding: 0.12 } as const
+
 export function DagCanvas({
   snapshot,
   grouping,
@@ -119,6 +129,37 @@ export function DagCanvas({
   selectedTaskId,
   onSelectTask,
 }: DagCanvasProps): JSX.Element {
+  // `fitView` do ReactFlow enquadra na montagem. O cabecalho e o painel lateral chegam
+  // depois e ENCOLHEM o canvas — e o enquadramento antigo continua valendo. Medido em
+  // 1366x768: o conteudo cabia (297px num canvas de 388px) mas ficava 123px deslocado para
+  // baixo, deixando dois de oito nos fora da area visivel.
+  //
+  // A correcao e um reenquadramento UNICO, depois que o layout assenta. Uma vez so, de
+  // proposito: a partir dai o enquadramento pertence a quem estiver olhando o grafo, e
+  // nenhum evento de SSE, abertura de painel ou redimensionamento o desfaz.
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null)
+  const jaAssentou = useRef(false)
+
+  const handleInit = useCallback((instance: ReactFlowInstance<Node, Edge>) => {
+    flowRef.current = instance
+  }, [])
+
+  useEffect(() => {
+    if (jaAssentou.current) return
+    const assentar = (): void => {
+      if (jaAssentou.current) return
+      const alvo = canvasRef.current
+      const instancia = flowRef.current
+      if (alvo === null || instancia === null) return
+      if (alvo.clientHeight <= 0 || alvo.clientWidth <= 0) return
+      jaAssentou.current = true
+      void instancia.fitView(FIT_OPTIONS)
+    }
+    const quadro = requestAnimationFrame(assentar)
+    return () => cancelAnimationFrame(quadro)
+  })
+
   const layout = useMemo(() => layoutDag(snapshot.graph, grouping), [snapshot.graph, grouping])
   const nodes = useMemo(
     () => buildNodes(snapshot, layout, selectedTaskId),
@@ -162,7 +203,12 @@ export function DagCanvas({
         ))}
       </div>
       {/** biome-ignore lint/a11y/noStaticElementInteractions: o alvo focavel e o no do react-flow, que ja tem role e tabindex; aqui so ouvimos a tecla. */}
-      <div className="dag__canvas" data-testid="dag-canvas" onKeyDown={handleKeyDown}>
+      <div
+        className="dag__canvas"
+        data-testid="dag-canvas"
+        onKeyDown={handleKeyDown}
+        ref={canvasRef}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -172,7 +218,10 @@ export function DagCanvas({
           nodesConnectable={false}
           edgesFocusable={false}
           fitView
-          minZoom={0.2}
+          fitViewOptions={FIT_OPTIONS}
+          onInit={handleInit}
+          // O piso de zoom precisa deixar o enquadramento recuar o quanto o grafo exigir.
+          minZoom={0.05}
           maxZoom={1.6}
         >
           <Background gap={24} />

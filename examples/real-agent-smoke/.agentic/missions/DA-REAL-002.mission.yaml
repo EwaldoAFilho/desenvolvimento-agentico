@@ -1,0 +1,116 @@
+apiVersion: agentic/v1
+kind: Mission
+
+id: DA-REAL-002
+title: Entrega dos tres modulos com revisao independente real
+objective: >
+  Entregar duracao, intervalo e agenda conforme docs/CONTRATO.md e tests/specs/, com a
+  integracao passando por revisao independente de verdade — nao mock — para exercitar a
+  cadeia inteira do control plane com fornecedor real.
+
+scope:
+  - Os tres modulos pendentes de src/
+outOfScope:
+  - Alterar a suite de testes, que e o criterio de avaliacao
+  - Alterar os modulos ja entregues (resultado, texto, horario)
+
+constraints:
+  - A suite em tests/ e o criterio e nao pode ser tocada (esta em denyPaths)
+  - Nenhuma funcao publica lanca por causa da entrada; falha vira Resultado
+  - Ordem de verificacao: vazio, forma, faixa, ordem
+
+acceptanceCriteria:
+  - node tests/run.js --exigir-tudo sai 0 com os tres modulos entregues
+  - A integracao passa por revisao independente com identidade diferente do executor
+
+defaults:
+  requireReview: false
+  maxAttempts: 2
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: base
+    title: Analises independentes
+  - id: integracao
+    title: Integracao revisada
+
+tasks:
+  - id: T01
+    phase: base
+    title: Analise de duracao
+    objective: >
+      Entregar analisarDuracao em src/duracao.js, convertendo texto de duracao em minutos e
+      devolvendo Resultado, conforme tests/specs/duracao.spec.js.
+    dependencies: []
+    touches:
+      - src/duracao.js
+    reads:
+      - src/resultado.js
+      - src/texto.js
+      - src/horario.js
+      - tests/specs/duracao.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - "`1h30m` devolve ok com 90 e `  2H 15M ` devolve ok com 135"
+      - Entrada vazia ou nao textual e VAZIO; numero sem unidade e FORMATO
+      - "`1h60m`, `24h` e `0m` sao FAIXA"
+    gate: unit
+    risk: low
+    estimate: 3
+
+  - id: T02
+    phase: base
+    title: Analise de intervalo
+    objective: >
+      Entregar analisarIntervalo em src/intervalo.js, convertendo texto de intervalo em
+      inicio e fim em minutos, conforme tests/specs/intervalo.spec.js.
+    dependencies: []
+    touches:
+      - src/intervalo.js
+    reads:
+      - src/resultado.js
+      - src/texto.js
+      - src/horario.js
+      - tests/specs/intervalo.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - "`08:00-12:30` devolve ok com inicio 480 e fim 750"
+      - Separador ausente ou repetido e FORMATO
+      - "`12:30-08:00` e `08:00-08:00` sao ORDEM"
+    gate: unit
+    risk: low
+    estimate: 3
+
+  - id: T03
+    phase: integracao
+    title: Agenda de blocos, com revisao independente
+    objective: >
+      Entregar montarAgenda em src/agenda.js, combinando intervalo e duracao para produzir
+      os blocos da agenda, conforme tests/specs/agenda.spec.js. Esta task exige revisao
+      independente: o control plane so a conclui com veredito de um revisor cuja identidade
+      seja diferente da de quem executou.
+    dependencies: [T01, T02]
+    touches:
+      - src/agenda.js
+    reads:
+      - src/resultado.js
+      - src/texto.js
+      - src/horario.js
+      - src/duracao.js
+      - src/intervalo.js
+      - tests/specs/agenda.spec.js
+      - docs/CONTRATO.md
+    validation:
+      - Propaga a falha de intervalo ou de duracao preservando o codigo da causa
+      - Blocos cobrem o intervalo sem estourar o fim
+      - Duracao maior que o intervalo devolve falha, nao lista vazia silenciosa
+    # `mission` e nao `unit`: sendo a ultima task, ela so conclui se os TRES modulos
+    # existirem e passarem (--exigir-tudo). O compilador apontou a divergencia (DA2006).
+    gate: mission
+    requireReview: true
+    reviewPolicy: fresh-session
+    risk: medium
+    estimate: 4
+
+missionGate: mission

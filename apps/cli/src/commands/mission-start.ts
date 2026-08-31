@@ -9,7 +9,8 @@ import {
 } from '../context.js'
 import type { BootedServer, CommandDeps } from '../deps.js'
 import { renderDiagnostics } from '../diagnostics.js'
-import { endpointOf } from '../link.js'
+import { resolveEndpoint } from '../discovery.js'
+import { superviseForeground } from '../foreground.js'
 import { createOutput, type Output } from '../output.js'
 import { findMissionRun, withPlane } from '../plane.js'
 import { type CommandResult, failure, messageOf, ok, usageError } from '../result.js'
@@ -18,9 +19,17 @@ import type { MissionFileArgs } from './mission-validate.js'
 export interface StartArgs extends MissionFileArgs {
   readonly actor?: string
   readonly acceptWarnings?: boolean
+  /**
+   * `undefined` (default) publica a API e encerra quando o run termina. `true` publica e
+   * MANTEM o control plane no ar depois do fim (Ctrl+C encerra). `false` (`--no-serve`) nao
+   * publica HTTP: o run fica inalcancavel por pause/resume/stop.
+   */
   readonly serve?: boolean
   readonly port?: number
 }
+
+/** Depois destes, nao ha mais o que comandar: o run acabou. */
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(['COMPLETED', 'FAILED', 'CANCELLED'])
 
 export interface StartData {
   /** Ausente quando o START foi entregue a um control plane remoto. */
@@ -30,6 +39,8 @@ export interface StartData {
   readonly warningsAccepted: boolean
   readonly tasks?: Record<string, number>
   readonly deliveredTo?: string
+  /** Endereco publicado por ESTE processo, quando publicou. */
+  readonly servedAt?: string
 }
 
 /**
@@ -52,6 +63,9 @@ async function publishApi(
       projectText: context.projectText,
       gatesText: context.gatesText,
       repoRoot: context.repoRoot,
+      // Mesmo diretorio que a CLI consulta para descobrir: o registro tem que cair onde
+      // `agentic mission pause` vai procurar.
+      runtimeDir: context.baseDir,
       ...(port === undefined ? {} : { port }),
     })
   } catch (error) {
@@ -105,7 +119,11 @@ export async function missionStartCommand(
     )
   }
 
-  const link = await deps.connect(endpointOf(context.project, args.port))
+  const resolved = await resolveEndpoint(
+    context,
+    args.port === undefined ? {} : { port: args.port },
+  )
+  const link = await deps.connect(resolved.endpoint)
   if (link !== undefined) {
     // Ja ha control plane no ar: ele inicia o run — a CLI nao abre um segundo escritor.
     await link.send({ method: 'POST', path: '/api/runs', body: command.data })
@@ -158,47 +176,86 @@ export async function missionStartCommand(
     out.line()
 
     const orchestrator = await plane.open(started.id)
-    if (args.serve === true) {
-      // MESMO plane: publicar a API sobre um segundo control plane abriria um segundo
-      // escritor no mesmo banco (I7). Sem HTTP, `mission pause` nao teria a quem falar.
-      const published = await publishApi(deps, context, plane, out, args.port)
-      out.line(
-        published === undefined
-          ? 'control plane em primeiro plano, SEM API HTTP; Ctrl+C encerra.'
-          : `control plane em primeiro plano; API e dashboard em ${published.url}; Ctrl+C encerra.`,
-      )
-      if (published !== undefined) {
-        out.line('`agentic mission pause` e os demais comandos de mutacao alcancam este run.')
-      }
-      orchestrator.start()
-      await deps.waitForShutdown()
-      orchestrator.stop()
-      if (published !== undefined) await published.close().catch(() => undefined)
-    } else {
-      // Sem `--serve` nao ha porta: pause, resume, stop, retry, unblock e skip nao alcancam
-      // este run enquanto ele anda. Dizer isso ANTES e mais barato que descobrir na hora.
+
+    // MESMO plane: publicar a API sobre um segundo control plane abriria um segundo escritor
+    // no mesmo banco (I7). Publicar e o DEFAULT — sem porta, `mission pause` nao teria a quem
+    // falar, e a unica saida do usuario seria Ctrl+C.
+    const published =
+      args.serve === false ? undefined : await publishApi(deps, context, plane, out, args.port)
+
+    if (published === undefined) {
+      // Sem porta: pause, resume, stop, retry, unblock e skip nao alcancam este run enquanto
+      // ele anda. Dizer isso ANTES e mais barato que descobrir na hora.
       out.line(
         'modo primeiro plano SEM API HTTP: este run nao pode ser comandado de outro terminal.',
       )
-      out.line(
-        `use \`agentic mission start ${args.file} --serve\` (ou deixe um \`agentic serve\` no ar)`,
-      )
-      out.line('para poder pausar, retomar ou parar enquanto ele executa. Ctrl+C encerra.')
+      if (args.serve === false) {
+        out.line(
+          `rode \`agentic mission start ${args.file}\` sem \`--no-serve\` (o default publica a API),`,
+        )
+        out.line('use `--serve` para manter o control plane no ar depois do fim do run, ou deixe')
+        out.line('um `agentic serve` no ar antes do start. Ctrl+C encerra.')
+      } else {
+        // Ninguem pediu para ficar sem porta: a API era o default e nao subiu. Mandar tirar
+        // uma flag que o usuario nao usou seria conselho falso — a causa esta no aviso acima.
+        out.line('nao e questao de flag: `--serve` e `--no-serve` nao mudam isto. A API era o')
+        out.line('default e nao subiu (motivo no aviso acima). Libere a porta, escolha outra com')
+        out.line('`--port <n>` ou deixe um `agentic serve` no ar antes do start. Ctrl+C encerra.')
+      }
       out.line()
-      await orchestrator.drain()
+    } else {
+      out.line(`control plane em primeiro plano; API e dashboard em ${published.url}`)
+      out.line('`agentic mission pause` e os demais comandos de mutacao alcancam este run.')
+      out.line(
+        args.serve === true
+          ? '--serve: o control plane fica no ar mesmo depois do fim do run; Ctrl+C encerra.'
+          : 'o processo encerra quando o run termina; pausado, continua no ar esperando resume.',
+      )
+      out.line()
     }
+
+    if (args.serve === true) {
+      // `--serve` e "fica em primeiro plano ate Ctrl+C", com ou sem porta: nao encerra
+      // sozinho quando o run termina.
+      orchestrator.start()
+      await deps.waitForShutdown()
+      orchestrator.stop()
+    } else {
+      // Pausado NAO e fim: o processo segue no ar para que `resume` tenha a quem falar.
+      await superviseForeground(orchestrator, {
+        waitForShutdown: () => deps.waitForShutdown(),
+        ...(deps.pausePollMs === undefined ? {} : { pollMs: deps.pausePollMs }),
+        onPaused: () => {
+          out.line('run PAUSED: nada novo sera despachado; o control plane continua no ar.')
+          out.line(`retome com \`agentic mission resume ${started.id}\`. Ctrl+C encerra.`)
+        },
+        onResumed: () => {
+          out.line(`run ${started.id} retomado.`)
+        },
+      })
+    }
+    if (published !== undefined) await published.close().catch(() => undefined)
 
     const snapshot = await plane.getRunSnapshot(started.id)
     out.line(`status final: ${snapshot.run.status}`)
     out.line(
       `tasks: ${snapshot.counters.DONE} DONE · ${snapshot.counters.FAILED} FAILED · ${snapshot.counters.BLOCKED} BLOCKED · ${snapshot.counters.SKIPPED} SKIPPED`,
     )
+    if (!TERMINAL_RUN_STATUSES.has(snapshot.run.status)) {
+      // O run nao acabou, o processo sim: dizer como voltar a comandar e mais barato que
+      // deixar o usuario descobrir que a porta caiu junto.
+      out.line()
+      out.line(`run ${snapshot.run.id} nao terminou e este processo esta saindo.`)
+      out.line('para comanda-lo de novo: `agentic serve` e depois `agentic task unblock`,')
+      out.line('`agentic mission resume` ou `agentic mission stop`.')
+    }
     const data: StartData = {
       runId: snapshot.run.id,
       missionId: snapshot.run.missionId,
       status: snapshot.run.status,
       warningsAccepted: acceptWarnings,
       tasks: { ...snapshot.counters },
+      ...(published === undefined ? {} : { servedAt: published.url }),
     }
     if (snapshot.run.status === 'FAILED') {
       return failure('mission start', 'RUN_FAILED', `run ${snapshot.run.id} terminou FAILED`, data)

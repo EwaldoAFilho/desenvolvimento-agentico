@@ -33,3 +33,18 @@ export function elapsedSince(iso: string | undefined, now: number): number | und
   const at = new Date(iso).getTime()
   return Number.isNaN(at) ? undefined : Math.max(0, now - at)
 }
+
+const BYTE_UNITS = ['B', 'kB', 'MB', 'GB'] as const
+
+/** Tamanho de artefato legivel: o log do agente e volumoso e o numero cru nao diz nada. */
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return '—'
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  if (unit === 0) return `${Math.round(value)} ${BYTE_UNITS[0]}`
+  return `${value.toFixed(1).replace('.', ',')} ${BYTE_UNITS[unit]}`
+}

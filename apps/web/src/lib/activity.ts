@@ -116,8 +116,8 @@ export function activityPulse(events: readonly EventDto[], now: number): Activit
 export interface LogRef {
   readonly label: string
   readonly ref: string
-  /** De onde veio a referencia: comando de gate, evidencia ou observacao do diff. */
-  readonly origin: 'gate' | 'evidence' | 'observation'
+  /** De onde veio a referencia: gate, evidencia, log do agente ou observacao do diff. */
+  readonly origin: 'gate' | 'evidence' | 'agent-log' | 'observation'
 }
 
 const REF_KEYS = [
@@ -138,6 +138,15 @@ export function logRefsFromEvents(events: readonly EventDto[]): readonly LogRef[
   const found: LogRef[] = []
   const seen = new Set<string>()
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    // `attempt.log_persisted` carrega o caminho em `path`: e o log do agente, nao um ref solto.
+    if (event.type === 'attempt.log_persisted') {
+      const path = event.payload.path
+      if (typeof path === 'string' && path.length > 0 && !seen.has(path)) {
+        seen.add(path)
+        const role = event.payload.role === 'review' ? 'revisor' : 'executor'
+        found.push({ label: `log do agente · ${role}`, ref: path, origin: 'agent-log' })
+      }
+    }
     for (const key of REF_KEYS) {
       const value = event.payload[key]
       if (typeof value !== 'string' || value.length === 0 || seen.has(value)) continue

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { elapsedSince, formatDuration, formatRatio, truncate } from './format.js'
+import { elapsedSince, formatBytes, formatDuration, formatRatio, truncate } from './format.js'
 
 describe('formatacao', () => {
   it('duracao curta e legivel de relance', () => {
@@ -22,5 +22,18 @@ describe('formatacao', () => {
     const started = '2026-01-08T12:10:00.000Z'
     expect(elapsedSince(started, Date.parse('2026-01-08T12:44:00.000Z'))).toBe(2_040_000)
     expect(elapsedSince(undefined, Date.now())).toBeUndefined()
+  })
+})
+
+describe('formatBytes', () => {
+  it('tamanho de artefato legivel, com unidade', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(18_442)).toBe('18,0 kB')
+    expect(formatBytes(4 * 1024 * 1024)).toBe('4,0 MB')
+  })
+
+  it('sem tamanho medido, nao inventa numero', () => {
+    expect(formatBytes(undefined)).toBe('—')
+    expect(formatBytes(-1)).toBe('—')
   })
 })

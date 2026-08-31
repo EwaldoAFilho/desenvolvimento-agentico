@@ -92,6 +92,21 @@ export {
 } from './deps.js'
 export { renderDiagnostic, renderDiagnostics, summaryOf } from './diagnostics.js'
 export {
+  type DiscoveryOptions,
+  describeEndpoint,
+  discoverRuntime,
+  type EndpointSource,
+  type ResolvedEndpoint,
+  resolveEndpoint,
+  runtimeDirsOf,
+} from './discovery.js'
+export {
+  DEFAULT_PAUSE_POLL_MS,
+  type ForegroundOptions,
+  type ForegroundOutcome,
+  superviseForeground,
+} from './foreground.js'
+export {
   type ControlPlaneLink,
   connectHttp,
   endpointOf,
@@ -113,6 +128,7 @@ export {
 } from './output.js'
 export {
   findMissionRun,
+  NO_CONTROL_PLANE_HEADER,
   noControlPlaneMessage,
   openPlane,
   parseRunId,

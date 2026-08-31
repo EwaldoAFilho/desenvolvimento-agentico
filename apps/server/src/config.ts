@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import nodeProcess from 'node:process'
+import { fileURLToPath } from 'node:url'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseProjectFile, type SchemaIssue } from '@agentic/schemas'
 
@@ -10,6 +12,28 @@ export const DEFAULT_PORT = 4317
 export const DEFAULT_PROJECT_FILE = '.agentic/project.yaml'
 export const DEFAULT_MISSIONS_DIR = '.agentic/missions'
 export const DEFAULT_WEB_DIST = 'apps/web/dist'
+
+/**
+ * Onde o dashboard REALMENTE mora: junto da instalacao do produto, nao do projeto que esta
+ * sendo orquestrado.
+ *
+ * Resolver `apps/web/dist` contra o repoRoot do alvo era um defeito de uso diario: quem
+ * roda `agentic` no proprio repositorio — o caso normal — nunca via o dashboard, e a
+ * mensagem de erro ainda mandava rodar um build que nao resolveria nada. Descoberto ao
+ * subir a plataforma para uso real, nao por teste.
+ */
+export function productWebDist(): string | undefined {
+  // .../apps/server/dist/config.js  ou  .../apps/server/src/config.ts
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let up = 0; up < 6; up += 1) {
+    const candidate = resolve(dir, 'apps/web/dist')
+    if (existsSync(join(candidate, 'index.html'))) return candidate
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
 export const DEFAULT_HEARTBEAT_MS = 15_000
 
 export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
@@ -43,6 +67,10 @@ export interface ServerConfig {
   readonly heartbeatMs?: number
   readonly logger?: boolean
   readonly databasePath?: string
+  /** Onde gravar o `control-plane.json` de descoberta. Default: `<repoRoot>/.agentic`. */
+  readonly runtimeDir?: string
+  /** `false` desliga a publicacao do registro de descoberta. */
+  readonly publishRuntimeFile?: boolean
 }
 
 export interface BindAddress {

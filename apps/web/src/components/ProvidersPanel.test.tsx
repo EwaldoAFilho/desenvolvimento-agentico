@@ -51,3 +51,36 @@ describe('painel de providers', () => {
     expect(within(row).getAllByText('unknown')).toHaveLength(2)
   })
 })
+
+describe('razao da prontidao', () => {
+  it('o painel completo explica por que a prontidao deu `unknown`', () => {
+    render(<ProvidersPanel providers={PROVIDERS} />)
+    expect(screen.getByTestId('provider-agente-a-reason').textContent).toBe(
+      'CLI nao expoe estado de autenticacao',
+    )
+  })
+
+  it('provider sem razao apurada nao ganha texto inventado', () => {
+    render(
+      <ProvidersPanel
+        providers={[
+          {
+            providerId: 'sem-razao',
+            installed: 'unknown',
+            ready: 'unknown',
+            version: 'unknown',
+            detail: '',
+            running: 0,
+            capacity: 1,
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('provider-sem-razao-reason').textContent).toBe('—')
+  })
+
+  it('no cabecalho compacto a razao nao aparece — detalhe excessivo mora no painel', () => {
+    render(<ProvidersPanel providers={PROVIDERS} compact />)
+    expect(screen.queryByTestId('provider-agente-a-reason')).toBeNull()
+  })
+})

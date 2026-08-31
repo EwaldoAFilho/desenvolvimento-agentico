@@ -1,0 +1,244 @@
+apiVersion: agentic/v1
+kind: Mission
+
+id: DA-PRODUCT-001
+title: Product Readiness, UX Real e Operacao Diaria
+objective: >
+  Reduzir ao maximo a distancia entre MVP funcional e ferramenta que um desenvolvedor abre
+  e usa com confianca todos os dias: validacao em navegador de verdade, explicabilidade de
+  estado, pausa e retomada utilizaveis, partida em ambiente limpo e documentacao executada.
+
+scope:
+  - Validacao do dashboard em navegador real, nao apenas teste de componente
+  - Explicabilidade operacional de espera, falha, bloqueio e ausencia de alteracao
+  - Caminho utilizavel de pause e resume, com descoberta do control plane
+  - Partida em ambiente limpo, do zero, com o entrypoint oficial
+  - Documentacao de operacao com todo comando executado antes de publicar
+  - Uma missao real pequena com fornecedor real, acompanhada pelo navegador
+
+outOfScope:
+  - Codex real e revisao cruzada real (quota externa, fica para DA-CORE-003)
+  - Integracao com GitHub, execucao remota, multi-usuario, billing
+  - Editor visual de missao, novo design system, analytics
+  - Qualquer capacidade arquitetural nova
+
+constraints:
+  - Nenhuma API paga; nenhuma variavel de API key; somente CLIs locais por assinatura
+  - Teste automatizado nunca consome quota de assinatura
+  - Nao adicionar estado ao dominio para resolver necessidade de interface
+  - Nao afrouxar assercao existente para ficar verde
+  - Teto operacional: 6 despachos e 3 revisoes reais de Claude Code
+
+acceptanceCriteria:
+  - O fluxo principal e exercitado num navegador de verdade contra backend real
+  - Task em espera, falha, bloqueio e NO_CHANGES sao explicados sem ler codigo
+  - pause e resume funcionam pelo caminho documentado, sem escrita direta no banco
+  - Um checkout limpo chega a `agentic doctor` e `agentic serve` funcionando
+  - Todo comando do quickstart foi executado antes de ser publicado
+  - Mission Gate final PASS com build, verify e test:e2e
+
+defaults:
+  requireReview: true
+  maxAttempts: 3
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: baseline
+    title: Baseline
+  - id: navegador
+    title: Navegador
+  - id: operacao
+    title: Operacao
+  - id: partida
+    title: Partida limpa
+  - id: real
+    title: Execucao real
+  - id: aceitacao
+    title: Aceitacao
+
+tasks:
+  - id: P01
+    phase: baseline
+    title: Baseline de qualidade e promocao para a linha principal
+    objective: >
+      Registrar o baseline de build, verify e e2e antes de qualquer mudanca, auditar a
+      ancestralidade das missoes concluidas e promover o trabalho aprovado para a linha
+      principal sem destruir rastreabilidade.
+    dependencies: []
+    # O YAML da missao vive em .agentic/, protegido por denyPaths (P09): escreve-lo e ato
+    # do supervisor humano. O entregavel verificavel e a analise registrada.
+    touches:
+      - docs/missions/DA-PRODUCT-001-plan.md
+    validation:
+      - Baseline registrado com numeros observados, nao estimados
+      - Promocao preserva os commits das missoes anteriores, sem squash cego
+      - build, verify e e2e passam depois da promocao
+    gate: unit
+    risk: low
+    estimate: 2
+
+  - id: P02
+    phase: navegador
+    title: Infraestrutura de teste em navegador de verdade
+    objective: >
+      Permitir abrir o dashboard num navegador real, contra servidor, banco, SSE e
+      orquestrador reais, sem consumir assinatura e sem instalacao global nem sudo.
+    dependencies: [P01]
+    touches:
+      - tests/browser/
+      - playwright.config.ts
+      - package.json
+    validation:
+      - O navegador roda a partir de instalacao local ao usuario, sem sudo nem pacote global
+      - Um teste minimo abre a pagina real servida pelo control plane e falha se ela nao carregar
+      - A suite de navegador NAO entra em npm run verify nem em npm run test:e2e
+    gate: unit
+    risk: high
+    estimate: 5
+
+  - id: P04
+    phase: operacao
+    title: Explicabilidade operacional do dashboard
+    objective: >
+      Fazer a interface explicar o estado sem exigir leitura de codigo: motivo de espera,
+      anatomia da falha, anatomia do bloqueio, conclusao sem alteracao, e hierarquia visual
+      no detalhe da task.
+    description: >
+      Deriva de projecao sobre o que o snapshot ja traz. NAO acrescentar estado ao dominio
+      para resolver necessidade de interface.
+    dependencies: [P01]
+    touches:
+      - apps/web/
+    validation:
+      - Task esperando informa a causa, nao apenas PENDING
+      - Falha mostra fornecedor, tentativa, motivo, escopo, gate e se ha retry
+      - Bloqueio mostra razao, o que precisa acontecer e quais tasks ficaram paradas
+      - Conclusao sem alteracao e explicada como investigacao concluida, nao como falha obscura
+      - Log do agente acessivel, com truncagem comunicada quando houver
+    gate: web
+    risk: medium
+    estimate: 6
+
+  - id: P05
+    phase: operacao
+    title: Pausa e retomada utilizaveis com descoberta do control plane
+    objective: >
+      Fechar a lacuna conhecida: hoje pause fica inalcancavel quando o run foi iniciado sem
+      publicar HTTP. Resolver pelo control plane, jamais por escrita direta no banco, e
+      dizer ao usuario exatamente o que fazer quando nao houver control plane ativo.
+    dependencies: [P01]
+    touches:
+      - apps/cli/
+      - apps/server/
+      - packages/orchestrator/
+    validation:
+      - pause impede novo despacho e nao mata trabalho em voo, conforme documentado
+      - resume reconcilia e retoma sem duplicar tentativa
+      - sem control plane ativo a mensagem diz o comando exato a executar
+      - nenhuma mutacao escreve no banco por fora do orquestrador
+    gate: unit
+    risk: medium
+    estimate: 5
+
+  - id: P06
+    phase: partida
+    title: Partida em ambiente limpo
+    objective: >
+      Provar que o produto funciona num diretorio limpo e nao apenas neste workspace
+      acumulado, e transformar a incompatibilidade de versao de Node em falha imediata e
+      legivel em vez de centenas de erros cripticos de modulo nativo.
+    description: >
+      Nesta missao um reboot trocou o Node de 24 para 20 e produziu 262 falhas de teste com
+      erro de NODE_MODULE_VERSION. O doctor detectou; a instalacao nao.
+    dependencies: [P01]
+    touches:
+      - tests/clean-start/
+      - .npmrc
+    validation:
+      - Copia limpa chega a build, doctor e serve respondendo em /api/health
+      - Versao de Node incompativel falha na instalacao com mensagem clara
+      - O entrypoint oficial e exercitado, nao um arquivo interno
+    gate: unit
+    risk: medium
+    estimate: 4
+
+  - id: P03
+    phase: navegador
+    title: Aceitacao do fluxo principal em navegador
+    objective: >
+      Exercitar num navegador de verdade a jornada completa contra backend real: listar
+      missao, ver o DAG, dar START MISSION, acompanhar a mudanca de estado por SSE, abrir o
+      detalhe da task e ver a missao terminar.
+    dependencies: [P02, P04]
+    touches:
+      - tests/browser/
+    validation:
+      - A jornada inteira roda no navegador contra servidor, banco, SSE e orquestrador reais
+      - Clique duplo em START MISSION nao cria dois runs
+      - Evento SSE nao reseta viewport nem perde a selecao da task
+      - Dependentes ficam READY sem recarregar a pagina
+      - Refresh durante o run reconstroi o estado a partir do backend
+      - Console do navegador limpo no caminho feliz
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: P07
+    phase: aceitacao
+    title: Documentacao de operacao com todo comando executado
+    objective: >
+      Escrever o guia que permite a alguem instalar, diagnosticar, subir, validar, iniciar,
+      investigar, pausar e retomar sem ler a arquitetura inteira, e um guia de problemas
+      contendo apenas o que ja foi observado de verdade.
+    dependencies: [P05, P06]
+    touches:
+      - docs/product/QUICKSTART.md
+      - docs/product/TROUBLESHOOTING.md
+    validation:
+      - Todo comando publicado foi executado e a saida conferida antes de publicar
+      - O guia de problemas so contem casos realmente observados
+      - Um leitor consegue sair do zero ate uma missao iniciada sem consultar outro documento
+    gate: unit
+    risk: low
+    estimate: 3
+
+  - id: P08
+    phase: real
+    title: Missao real controlada com fornecedor real
+    objective: >
+      Executar uma missao nova e pequena com Claude Code real pelo proprio produto, com
+      dependencia real, gate real, touches reais e integracao real, acompanhada pelo
+      navegador para observar a mudanca de estado ao vivo.
+    dependencies: [P03, P05]
+    touches:
+      - examples/real-agent-smoke/
+      - docs/missions/DA-REAL-002-report.md
+    validation:
+      - Missao nova, nao a repeticao do smoke anterior
+      - Cadeia observada do compile ao mission gate, com evidencia citavel
+      - Amostra de confiabilidade separada por categoria de falha
+      - Teto de despachos reais respeitado ou o excesso registrado com o numero exato
+    gate: unit
+    risk: high
+    estimate: 5
+
+  - id: P09
+    phase: aceitacao
+    title: Aceitacao de produto e veredito
+    objective: >
+      Atualizar a matriz de prontidao preservando o historico, decidir o veredito com base
+      em evidencia observada, e fechar o Mission Gate.
+    dependencies: [P07, P08]
+    touches:
+      - docs/product/PRODUCT-READINESS.md
+      - docs/missions/DA-PRODUCT-001-report.md
+    validation:
+      - A matriz mostra a evolucao entre missoes, sem apagar o estado anterior
+      - O veredito nao e inflado: cada item exigido tem evidencia apontada
+      - build, verify e e2e passam
+    gate: mission
+    risk: medium
+    estimate: 3
+
+missionGate: mission

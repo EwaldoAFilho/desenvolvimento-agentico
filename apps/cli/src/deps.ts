@@ -37,8 +37,10 @@ export interface CommandDeps {
   /** `undefined` = nenhum control plane no ar naquele endereco. */
   connect(endpoint: string): Promise<ControlPlaneLink | undefined>
   probeGit(cwd: string): Promise<GitProbe>
-  /** Espera o encerramento do processo em primeiro plano (`serve`, `start --serve`). */
+  /** Espera o encerramento do processo em primeiro plano (`serve`, `mission start`). */
   waitForShutdown(): Promise<void>
+  /** Intervalo da espera enquanto o run esta PAUSED. Existe para o teste nao dormir. */
+  readonly pausePollMs?: number
   /** Sobe a API HTTP+SSE. Injetavel para o teste nao abrir porta de verdade. */
   bootServer?(config: ServerConfig): Promise<BootedServer>
   /**
@@ -56,6 +58,8 @@ export interface ServePlaneInput {
   readonly gatesText: string
   readonly repoRoot: string
   readonly port?: number
+  /** Onde gravar `control-plane.json`; e onde a CLI procura o control plane no ar. */
+  readonly runtimeDir?: string
 }
 
 /** Recorte de `RunningServer` de @agentic/server que a CLI realmente usa. */

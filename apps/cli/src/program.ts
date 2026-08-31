@@ -171,12 +171,16 @@ export function buildProgram(deps: CommandDeps, state: ProgramState): Command {
     })
 
   withPort(common(mission.command('start')))
-    .description('cria o run e orquestra; exige missao APPROVED')
+    .description('cria o run, orquestra e publica a API HTTP; exige missao APPROVED')
     .argument('<arquivo>', 'caminho do mission.yaml')
     .option('--accept-warnings', 'aceita explicitamente os WARNING pendentes')
     .option(
       '--serve',
-      'mantem o control plane em primeiro plano E publica a API HTTP: sem isto, pause/resume/stop nao alcancam o run',
+      'mantem o control plane no ar depois que o run termina (Ctrl+C encerra); a API ja e publicada por padrao',
+    )
+    .option(
+      '--no-serve',
+      'NAO publica a API HTTP: pause, resume, stop, retry, unblock e skip nao alcancam o run',
     )
     .option('--actor <nome>', 'quem inicia (default: usuario do ambiente)')
     .action(async (file: string, options: OptionValues) => {
@@ -187,7 +191,9 @@ export function buildProgram(deps: CommandDeps, state: ProgramState): Command {
             file,
             ...pick(opts),
             acceptWarnings: opts.acceptWarnings === true,
-            serve: opts.serve === true,
+            // Tres estados: ausente = publica e encerra no fim; --serve = fica no ar depois
+            // do fim; --no-serve = nao publica HTTP.
+            ...(opts.serve === undefined ? {} : { serve: opts.serve }),
             ...(opts.actor === undefined ? {} : { actor: opts.actor }),
             ...portOf(opts),
           },

@@ -991,3 +991,93 @@ export function makeWideSnapshot(size = 30): RunSnapshot {
     counters,
   }
 }
+
+// ---------------------------------------------------------- explicabilidade operacional
+
+/** Bloqueio de politica que **nao** e revisao cruzada: `denyPaths` do run barrou a task. */
+export const POLICY_BLOCKAGE = {
+  kind: 'POLICY' as const,
+  reason: 'DENY_PATH: a task declarou touches em .agentic/',
+  raisedBy: 'orchestrator',
+  raisedAt: '2026-01-08T12:37:00.000Z',
+  needs: 'corrigir os touches da task no YAML da missao',
+}
+
+function logPersisted(
+  seq: number,
+  taskId: string,
+  attemptId: string,
+  payload: Record<string, unknown>,
+): EventDto {
+  return {
+    seq,
+    ts: '2026-01-08T12:21:02.000Z',
+    type: 'attempt.log_persisted',
+    actor: { kind: 'orchestrator' },
+    taskId,
+    attemptId,
+    payload,
+  }
+}
+
+/**
+ * DA-DOGFOOD-001, T02: o agente investigou, concluiu que a premissa da task era falsa e
+ * **nao alterou nada**. O log da tentativa existe e explica — o desfecho continua sendo
+ * `NO_CHANGES`, medido pelo control plane.
+ */
+export function makeNoChangesWithLogTaskDetail(): TaskDetail {
+  const base = makeNoChangesTaskDetail()
+  return {
+    ...base,
+    events: [
+      ...base.events,
+      logPersisted(123, 'T02', 'att-t02-2', {
+        role: 'execute',
+        path: '.agentic/runs/01J8ZC/attempts/T02-a2/agent.log.jsonl',
+        bytes: 18_442,
+        truncated: false,
+      }),
+    ],
+  }
+}
+
+/** Log do agente cortado no teto de captura, com saida de comando de gate tambem truncada. */
+export function makeTruncatedLogTaskDetail(): TaskDetail {
+  const base = makeTaskDetail()
+  return {
+    ...base,
+    quality: {
+      ...base.quality,
+      commandResults: base.quality.commandResults.map((result) => ({ ...result, truncated: true })),
+    },
+    events: [
+      ...base.events,
+      logPersisted(530, 'T09', '01J8ZC0X0000000000ATTEMPT9', {
+        role: 'execute',
+        path: '.agentic/runs/01J8ZC/attempts/T09-a2/agent.log.jsonl',
+        bytes: 4_194_304,
+        truncated: true,
+      }),
+      logPersisted(531, 'T09', '01J8ZC0X0000000000ATTEMPT9', {
+        role: 'review',
+        path: '.agentic/runs/01J8ZC/attempts/T09-a2/review.log.jsonl',
+        bytes: 2_048,
+        truncated: false,
+      }),
+    ],
+  }
+}
+
+/** Rajada de logs persistidos: prova que a lista da tela tem teto e nao cresce sem fim. */
+export function makeManyLogsTaskDetail(count = 60): TaskDetail {
+  const base = makeTaskDetail()
+  const events = Array.from({ length: count }, (_, index) =>
+    logPersisted(600 + index, 'T09', `att-${index}`, {
+      role: 'execute',
+      path: `.agentic/runs/01J8ZC/attempts/T09-a${index}/agent.log.jsonl`,
+      bytes: 1_024 * (index + 1),
+      truncated: false,
+    }),
+  )
+  return { ...base, events: [...base.events, ...events] }
+}

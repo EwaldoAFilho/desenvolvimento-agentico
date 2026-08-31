@@ -346,6 +346,8 @@ body {
 .task-node__foot {
   margin-top: auto;
   display: flex;
+  /* O rodape de espera alinha a esquerda: sem `gap`, motivo e duracao ficam colados. */
+  gap: 6px;
   justify-content: space-between;
   color: var(--fg-dim);
   font-size: 11px;
@@ -406,15 +408,114 @@ body {
 }
 
 .group {
-  margin-top: 14px;
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.group__toggle {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 0 6px;
+  background: none;
+  border: 0;
+  color: var(--fg-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group__chevron {
+  width: 10px;
+  color: var(--fg-dim);
 }
 
 .group__title {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fg-dim);
+}
+
+.group__body {
+  padding-bottom: 6px;
+}
+
+/*
+ * Revelacao progressiva: o corpo do grupo fechado sai da tela E da arvore de acessibilidade
+ * (display: none), enquanto o botao continua anunciando o estado com `aria-expanded`.
+ */
+.group[data-open="false"] .group__body {
+  display: none;
+}
+
+.group__toggle:hover .group__title {
+  color: var(--fg);
+}
+
+.group__hint {
+  margin-left: auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* Faixa sempre visivel: estado, fase, executor, revisor, tentativa e duracao. */
+.summary {
+  margin: 10px 0 4px;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.summary__item {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.summary__label {
+  color: var(--fg-dim);
+}
+
+.summary__value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.statements {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+}
+
+.commands__cut,
+.logrefs__cut {
+  margin-left: 8px;
+  color: var(--st-amber);
+}
+
+.evidence__ref {
+  margin-left: 8px;
+  color: var(--fg-muted);
+}
+
+.group--reading {
+  border-left: 3px solid var(--st-cyan);
+  padding-left: 8px;
+}
+
+.providers__reason {
+  color: var(--fg-muted);
 }
 
 .group__fields {

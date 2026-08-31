@@ -40,16 +40,25 @@ export class LinkError extends Error {
 
 const PROBE_TIMEOUT_MS = 750
 
+/** Identidade que o nosso `/api/health` devolve. Porta ocupada nao e control plane. */
+export const CONTROL_PLANE_SERVICE = '@agentic/server'
+
 /**
- * Sonda o endpoint declarado em `project.yaml`. `undefined` significa "nao ha control
- * plane no ar" — nao significa "pode escrever".
+ * Sonda o endereco descoberto (ou o declarado em `project.yaml`). `undefined` significa
+ * "nao ha control plane no ar" — nao significa "pode escrever".
+ *
+ * A sonda pergunta QUEM atende, nao apenas SE atende: qualquer processo pode estar na porta
+ * declarada e responder 404. Tratar um estranho como control plane troca a mensagem que diz
+ * o caminho de volta por um `HTTP 404` que nao explica nada.
  */
 export async function connectHttp(endpoint: string): Promise<ControlPlaneLink | undefined> {
   try {
-    const response = await fetch(`${endpoint}/api/runs`, {
+    const response = await fetch(`${endpoint}/api/health`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
-    if (!response.ok && response.status >= 500) return undefined
+    if (!response.ok) return undefined
+    const body = (await response.json()) as { readonly service?: unknown }
+    if (body.service !== CONTROL_PLANE_SERVICE) return undefined
   } catch {
     return undefined
   }
@@ -87,6 +96,13 @@ function detailOf(body: unknown): string | undefined {
   if (typeof body === 'string' && body.length > 0) return body
   if (typeof body === 'object' && body !== null) {
     const record = body as Record<string, unknown>
+    // O servidor responde `{ error: { code, message } }`. Sem abrir o envelope, o humano
+    // recebia `HTTP 404` no lugar de "run ... nao existe".
+    const nested = record.error
+    if (typeof nested === 'object' && nested !== null) {
+      const detail = (nested as Record<string, unknown>).message
+      if (typeof detail === 'string' && detail.length > 0) return detail
+    }
     const message = record.message ?? record.error ?? record.detail
     if (typeof message === 'string') return message
   }
