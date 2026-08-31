@@ -70,4 +70,21 @@ describe('contrato do --json (saida real dos comandos)', () => {
     const data = payloadOf(captured)
     expect(keysOf(data)).toEqual(['endpoint', 'running'])
   })
+
+  it('o launcher emite projeto, endereco, reuso, navegador e diagnostico', async () => {
+    workspace = await createWorkspace()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      bootServer: () =>
+        Promise.resolve({ url: 'http://127.0.0.1:4317', close: () => Promise.resolve() }),
+      openBrowser: () => Promise.resolve({ opened: false, reason: 'sem ambiente grafico' }),
+    })
+    // `agentic --json`: a reescrita para o launcher tem que preservar a flag.
+    await main(['node', 'agentic', '--json'], captured.deps)
+
+    const data = payloadOf(captured)
+    expect(keysOf(data)).toEqual(['browser', 'checks', 'endpoint', 'projectDir', 'reused'])
+    expect(keysOf(data.browser)).toEqual(['opened', 'reason'])
+    expect(keysOf((data.checks as unknown[])[0])).toEqual(['detail', 'id', 'status', 'title'])
+  })
 })
