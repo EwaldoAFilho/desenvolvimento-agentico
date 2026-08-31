@@ -11,6 +11,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   writeHandoff({
     baseURL: environment.baseURL,
     missionRef: environment.missionRef,
+    largeMissionRef: environment.largeMissionRef,
     projectRoot: environment.projectRoot,
     managed: environment.managed,
     startedAt: new Date().toISOString(),

@@ -1,3 +1,4 @@
+import type { RunHeaderDto, RunSnapshot } from '@agentic/schemas'
 import type { ApproveMissionResult, HealthBody, StartRunResult } from '@agentic/server'
 
 /**
@@ -88,4 +89,56 @@ export async function startRun(baseURL: string, input: StartInput): Promise<Star
     actor: input.actor,
     acceptWarnings: input.acceptWarnings ?? false,
   })
+}
+
+export async function listRuns(baseURL: string): Promise<readonly RunHeaderDto[]> {
+  return send<readonly RunHeaderDto[]>(baseURL, '/api/runs')
+}
+
+export async function runSnapshot(baseURL: string, runId: string): Promise<RunSnapshot> {
+  return send<RunSnapshot>(baseURL, `/api/runs/${encodeURIComponent(runId)}/snapshot`)
+}
+
+export async function resumeRun(baseURL: string, runId: string, actor: string): Promise<unknown> {
+  return post(baseURL, `/api/runs/${encodeURIComponent(runId)}/resume`, { actor })
+}
+
+/** Run mais recente da missao. O servidor ja devolve a lista em ordem decrescente. */
+export async function latestRun(
+  baseURL: string,
+  missionId: string,
+): Promise<RunHeaderDto | undefined> {
+  return (await listRuns(baseURL)).find((run) => run.missionId === missionId)
+}
+
+/** Statuses em que o run parou de andar sozinho. */
+export const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'BLOCKED', 'CANCELLED'] as const
+
+export async function waitForRunStatus(
+  baseURL: string,
+  runId: string,
+  wanted: readonly string[],
+  timeoutMs = 90_000,
+): Promise<RunSnapshot> {
+  const deadline = Date.now() + timeoutMs
+  let last = 'desconhecido'
+  for (;;) {
+    const snapshot = await runSnapshot(baseURL, runId)
+    last = snapshot.run.status
+    if (wanted.includes(last)) return snapshot
+    if (Date.now() > deadline) {
+      throw new Error(
+        `run ${runId} nao chegou a ${wanted.join('|')} em ${timeoutMs}ms: parou em ${last}`,
+      )
+    }
+    await sleep(100)
+  }
+}
+
+/**
+ * Deixa o run terminar antes de o teste ceder o control plane ao proximo. Sem isto, um run
+ * ainda vivo continua gravando eventos enquanto outro teste mede o que ve na tela.
+ */
+export async function settle(baseURL: string, runId: string): Promise<RunSnapshot> {
+  return waitForRunStatus(baseURL, runId, TERMINAL_RUN_STATUSES)
 }

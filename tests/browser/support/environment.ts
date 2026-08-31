@@ -1,14 +1,28 @@
 import { execFile } from 'node:child_process'
-import { cp, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import nodeProcess from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { createControlPlane } from '@agentic/orchestrator'
 import { parseProjectFile } from '@agentic/schemas'
 import type { RunningServer } from '@agentic/server'
-import { startServer } from '@agentic/server'
+import { attachServer, loadProjectSources } from '@agentic/server'
+import { scriptedFactory } from '../../e2e/support/agents.js'
+import { browserStep } from './agents.js'
 import { waitForHealth } from './control-plane.js'
+import { LARGE_MISSION_FILE, LARGE_MISSION_ID, largeMissionYaml } from './large-mission.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -19,7 +33,9 @@ export const FIXTURE_ROOT = join(REPO_ROOT, 'examples/estoque-cli')
 export const WEB_DIST = join(REPO_ROOT, 'apps/web/dist')
 export const WEB_INDEX = join(WEB_DIST, 'index.html')
 export const PROJECT_PATH = '.agentic/project.yaml'
+export const MISSIONS_PATH = '.agentic/missions'
 export const MISSION_REF = 'EXEMPLO-001'
+export const LARGE_MISSION_REF = LARGE_MISSION_ID
 
 /**
  * Fornecedores in-process (MockAgentProvider) no lugar dos dois da CLI. Nenhum adapter de
@@ -135,6 +151,12 @@ export async function materializeProject(): Promise<string> {
   assertZeroQuota(rewritten)
   await writeFile(projectFile, rewritten, 'utf8')
 
+  // A missao GRANDE mora SO no projeto temporario: 28 tasks de mentira nao tem por que
+  // entrar em `examples/`, que e documentacao viva do produto.
+  const missionsDir = join(root, MISSIONS_PATH)
+  await mkdir(missionsDir, { recursive: true })
+  await writeFile(join(missionsDir, LARGE_MISSION_FILE), largeMissionYaml(), 'utf8')
+
   const git = async (...args: string[]): Promise<void> => {
     await exec('git', args, { cwd: root, encoding: 'utf8' })
   }
@@ -150,6 +172,8 @@ export async function materializeProject(): Promise<string> {
 export interface BrowserEnvironment {
   readonly baseURL: string
   readonly missionRef: string
+  /** Missao gerada de 28 nos, so para o teste de legibilidade do canvas. */
+  readonly largeMissionRef: string
   readonly projectRoot: string | undefined
   readonly managed: boolean
   close(): Promise<void>
@@ -167,6 +191,50 @@ function portOf(server: RunningServer): number {
 let current: BrowserEnvironment | undefined
 
 /**
+ * Control plane REAL (banco, SSE, scheduler, worktrees, gates) com UMA substituicao: o
+ * provider. `createControlPlane` + `attachServer` no lugar de `startServer` existe so por
+ * isso — `startServer` monta o registry a partir do `project.yaml` e nao aceita roteiro, e
+ * o mock sem roteiro nao entrega arquivo nenhum: toda task falharia por NO_CHANGES e o
+ * dashboard nunca mostraria uma task DONE destravando a proxima, que e o que esta suite
+ * precisa observar.
+ */
+async function openControlPlane(projectRoot: string): Promise<RunningServer> {
+  const sources = await loadProjectSources({ repoRoot: projectRoot })
+  const factory = scriptedFactory(browserStep)
+  const plane = createControlPlane({
+    project: sources.project,
+    gatesFile: sources.gatesFile,
+    repoRoot: sources.repoRoot,
+    providerFactories: Object.fromEntries(
+      Object.keys(sources.project.providers.registry).map((id) => [id, factory]),
+    ),
+  })
+  try {
+    const running = await attachServer({
+      plane,
+      project: sources.project,
+      projectText: sources.projectText,
+      gatesText: sources.gatesText,
+      repoRoot: sources.repoRoot,
+      webDist: WEB_DIST,
+      heartbeatMs: 5_000,
+      host: '127.0.0.1',
+      port: 0,
+    })
+    return {
+      ...running,
+      close: async (): Promise<void> => {
+        await running.close()
+        await plane.close()
+      },
+    }
+  } catch (cause) {
+    await plane.close().catch(() => undefined)
+    throw cause
+  }
+}
+
+/**
  * Ambiente completo e descartavel: projeto temporario com git, control plane REAL
  * (servidor, banco, SSE e orquestrador) numa porta efemera, servindo o build de
  * `apps/web`. `AGENTIC_BROWSER_BASE_URL` conecta a suite a um control plane que ja esta no
@@ -181,6 +249,7 @@ export async function startBrowserEnvironment(): Promise<BrowserEnvironment> {
     current = {
       baseURL,
       missionRef: MISSION_REF,
+      largeMissionRef: LARGE_MISSION_REF,
       projectRoot: undefined,
       managed: false,
       close: async (): Promise<void> => undefined,
@@ -196,13 +265,7 @@ export async function startBrowserEnvironment(): Promise<BrowserEnvironment> {
 
   let server: RunningServer
   try {
-    server = await startServer({
-      repoRoot: projectRoot,
-      host: '127.0.0.1',
-      port: 0,
-      webDist: WEB_DIST,
-      heartbeatMs: 5_000,
-    })
+    server = await openControlPlane(projectRoot)
   } catch (cause) {
     await discard()
     throw cause
@@ -220,6 +283,7 @@ export async function startBrowserEnvironment(): Promise<BrowserEnvironment> {
   current = {
     baseURL,
     missionRef: MISSION_REF,
+    largeMissionRef: LARGE_MISSION_REF,
     projectRoot,
     managed: true,
     close: async (): Promise<void> => {

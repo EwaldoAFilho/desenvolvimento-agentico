@@ -11,6 +11,17 @@ afterEach(async () => {
   harness = undefined
 })
 
+/**
+ * `webDist` EXPLICITO, sempre.
+ *
+ * Sem ele, `toServerDeps` cai no dashboard da propria instalacao do produto
+ * (`productWebDist()`) e estes testes passam a servir `apps/web/dist` DESTE repositorio em
+ * vez do dist do repositorio temporario. O resultado era um gate que dependia de o
+ * dashboard estar compilado ou nao: com build, quatro testes daqui falhavam; sem build,
+ * dois de `web-dist.test.ts` falhavam. Nenhum estado deixava `npm run test` verde.
+ */
+const WEB_DIST = 'apps/web/dist'
+
 async function withDashboard(active: ServerHarness): Promise<void> {
   const dist = join(active.root, 'apps', 'web', 'dist')
   await mkdir(join(dist, 'assets'), { recursive: true })
@@ -41,7 +52,7 @@ describe('caminhos', () => {
 
 describe('estaticos do dashboard', () => {
   it('sem build responde com a orientacao, sem quebrar', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     const response = await harness.app.inject({ method: 'GET', url: '/' })
     expect(response.statusCode).toBe(200)
     expect(response.headers['content-type']).toContain('text/html')
@@ -49,13 +60,13 @@ describe('estaticos do dashboard', () => {
   })
 
   it('sem build a API continua respondendo', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     const response = await harness.app.inject({ method: 'GET', url: '/api/health' })
     expect(response.statusCode).toBe(200)
   })
 
   it('com build serve o index.html', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({ method: 'GET', url: '/' })
     expect(response.statusCode).toBe(200)
@@ -63,7 +74,7 @@ describe('estaticos do dashboard', () => {
   })
 
   it('serve o asset com o content-type certo', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({ method: 'GET', url: '/assets/app.js' })
     expect(response.statusCode).toBe(200)
@@ -72,7 +83,7 @@ describe('estaticos do dashboard', () => {
   })
 
   it('fallback SPA: rota do cliente cai no index.html', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({ method: 'GET', url: '/runs/01J/tasks/T01' })
     expect(response.statusCode).toBe(200)
@@ -80,7 +91,7 @@ describe('estaticos do dashboard', () => {
   })
 
   it('o fallback SPA NAO engole rota /api inexistente', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({ method: 'GET', url: '/api/nao-existe' })
     expect(response.statusCode).toBe(404)
@@ -89,7 +100,7 @@ describe('estaticos do dashboard', () => {
   })
 
   it('POST em rota /api inexistente tambem responde 404 JSON', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({
       method: 'POST',
@@ -101,14 +112,14 @@ describe('estaticos do dashboard', () => {
   })
 
   it('metodo nao-GET fora de /api nao vira index.html', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({ method: 'PUT', url: '/qualquer', payload: {} })
     expect(response.statusCode).toBe(404)
   })
 
   it('travessia de caminho nao le arquivo fora do dist', async () => {
-    harness = await createServerHarness()
+    harness = await createServerHarness({ webDist: WEB_DIST })
     await withDashboard(harness)
     const response = await harness.app.inject({
       method: 'GET',

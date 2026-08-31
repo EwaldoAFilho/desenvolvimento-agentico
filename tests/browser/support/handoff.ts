@@ -11,6 +11,8 @@ export interface BrowserHandoff {
   readonly baseURL: string
   /** Referencia da missao do fixture, do jeito que a URL do dashboard aceita. */
   readonly missionRef: string
+  /** Missao gerada de 28 nos: so o teste de legibilidade do canvas usa. */
+  readonly largeMissionRef: string
   /** Raiz do projeto-alvo temporario; ausente quando o servidor veio de fora. */
   readonly projectRoot: string | undefined
   /** `false` quando a suite se conectou a um control plane que ja estava no ar. */
@@ -27,11 +29,21 @@ export const HANDOFF_PATH = join(HANDOFF_DIR, 'environment.json')
  * tree de quem esta no meio de uma missao.
  */
 export const ARTIFACTS_DIR = join(HANDOFF_DIR, 'test-results')
+/**
+ * Screenshots de evidencia. Tambem fora do repositorio, e pelo mesmo motivo: imagem de
+ * teste nao entra em revisao de codigo. Cada uma acompanha uma assercao — nenhuma delas
+ * PROVA coisa alguma sozinha.
+ */
+export const EVIDENCE_DIR = join(HANDOFF_DIR, 'evidence')
 
 function isHandoff(value: unknown): value is BrowserHandoff {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
-  return typeof candidate.baseURL === 'string' && typeof candidate.missionRef === 'string'
+  return (
+    typeof candidate.baseURL === 'string' &&
+    typeof candidate.missionRef === 'string' &&
+    typeof candidate.largeMissionRef === 'string'
+  )
 }
 
 export function readHandoff(): BrowserHandoff | undefined {
