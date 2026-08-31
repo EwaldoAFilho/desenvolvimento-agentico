@@ -15,6 +15,7 @@
   "bin": {
     "agentic": "apps/cli/bin/agentic.mjs"
   },
+  "//test:browser": "Suite de navegador de verdade (Playwright + Chromium). NAO entra em `verify` nem em `test:e2e` de proposito: e mais lenta e exige o runtime do navegador instalado (`npx playwright install chromium`, user-local, sem sudo). Roda sob demanda com `npm run test:browser`. Detalhes em playwright.config.ts.",
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
@@ -24,11 +25,14 @@
     "test": "vitest run --project=!e2e",
     "test:watch": "vitest",
     "test:e2e": "vitest run --project e2e",
+    "test:browser": "playwright test",
+    "test:browser:ui": "playwright test --ui",
     "verify": "npm run lint && npm run typecheck && npm run test",
     "dev:web": "npm run dev -w @agentic/web"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
