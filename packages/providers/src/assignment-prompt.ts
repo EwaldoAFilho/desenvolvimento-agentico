@@ -126,8 +126,12 @@ function reviewSections(assignment: ReviewAssignment): PromptSection[] {
   sections.push({
     title: 'Como responder',
     lines: [
-      '- veredito em uma linha: PASS, FAIL ou ESCALATE',
-      '- cada apontamento com caminho, linha quando houver, e severidade',
+      '- COMECE a resposta com esta linha, exatamente: `VEREDITO: PASS`',
+      '  (ou `VEREDITO: FAIL`, ou `VEREDITO: ESCALATE`)',
+      '- essa linha e OBRIGATORIA e vem primeiro. Sem ela o control plane nao consegue',
+      '  concluir a revisao e a tentativa e perdida — analise sem veredito nao decide nada',
+      '- so depois dela venha a analise, com um apontamento por linha:',
+      '  `ACHADO [error|warning|info]: <caminho>:<linha> <o que esta errado>`',
       '- julgue o diff e os gates; nao ha relato do executor a considerar',
     ],
   })
