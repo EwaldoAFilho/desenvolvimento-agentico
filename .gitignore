@@ -19,3 +19,6 @@ dist/
 
 # vitest
 .vitest/
+
+# Runtime local do control plane (pid/porta da instancia em execucao)
+.agentic/control-plane.json
