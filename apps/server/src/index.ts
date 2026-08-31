@@ -34,26 +34,35 @@ export {
 } from './control-plane-file.js'
 export type { RunLauncher, ServerDeps, ServerDepsInput } from './deps.js'
 export { defaultLauncher, toServerDeps } from './deps.js'
-export { parseRunId, parseTaskId, toRunHeader } from './dto.js'
+export { parseRunId, parseTaskId, toRunHeader, toRunSummary, toTaskCounters } from './dto.js'
 export type { ApiErrorBody, ApiErrorPayload, ApiIssue } from './errors.js'
 export { badRequest, conflict, HttpError, notFound, toApiError, toApiIssues } from './errors.js'
 export type { CompiledMission, MissionSource, RunLookup } from './missions.js'
 export {
+  compileMissionCatalog,
   compileMissionRef,
   compileMissionSource,
   findRun,
   findRuns,
+  lastRunByMission,
+  listMissionFiles,
+  listRunSummaries,
   missionSpecOf,
+  missionSummaries,
   readMissionSource,
   refuseOnErrors,
+  repoRelativePath,
   resolveMissionPath,
+  toMissionSummary,
   warningsOf,
 } from './missions.js'
 export { optionalInt } from './query.js'
 export type { CommandResult, StartRunResult } from './routes/commands.js'
 export { DEFAULT_ACTOR, registerCommandRoutes } from './routes/commands.js'
-export type { ApproveMissionResult, MissionListItem } from './routes/missions.js'
+export type { ApproveMissionResult } from './routes/missions.js'
 export { registerMissionRoutes } from './routes/missions.js'
+export type { ProjectHomeOptions } from './routes/project.js'
+export { projectHome, projectOf, registerProjectRoutes } from './routes/project.js'
 export type { HealthBody } from './routes/read.js'
 export { loadRunOr404, registerReadRoutes } from './routes/read.js'
 export { registerStreamRoutes } from './routes/stream.js'

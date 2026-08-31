@@ -13,6 +13,7 @@ import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
+import { registerProjectRoutes } from './routes/project.js'
 import { registerReadRoutes } from './routes/read.js'
 import { registerStreamRoutes } from './routes/stream.js'
 import { registerStatic } from './static.js'
@@ -32,6 +33,7 @@ export function createServer(input: CreateServerInput): FastifyInstance {
   registerErrorHandler(app)
   registerReadRoutes(app, deps)
   registerStreamRoutes(app, deps)
+  registerProjectRoutes(app, deps)
   registerMissionRoutes(app, deps)
   registerCommandRoutes(app, deps)
   registerStatic(app, deps)
