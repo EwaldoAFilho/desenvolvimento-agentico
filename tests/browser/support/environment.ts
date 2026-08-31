@@ -240,12 +240,61 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
  * `apps/web`. `AGENTIC_BROWSER_BASE_URL` conecta a suite a um control plane que ja esta no
  * ar em vez de subir um.
  */
+/**
+ * Guarda da valvula de escape.
+ *
+ * `AGENTIC_BROWSER_BASE_URL` nasceu em P02 para um smoke somente-leitura. As specs de P03
+ * INICIAM MISSOES: apontar a variavel para um control plane com fornecedor real queimaria
+ * assinatura de verdade. O ambiente gerenciado passa por `assertZeroQuota`; este caminho
+ * nao passava por nada.
+ *
+ * Aqui nao da para reescrever o project.yaml alheio, entao a guarda pergunta ao proprio
+ * control plane quem sao os fornecedores dele. Se algum nao for reconhecivel como
+ * in-process, a suite RECUSA rodar — e recusa tambem quando nao consegue apurar, em vez de
+ * assumir que esta tudo bem.
+ */
+async function assertExternalIsQuotaFree(baseURL: string): Promise<void> {
+  const alvo = `${baseURL}/api/providers`
+  let saude: ReadonlyArray<{ providerId?: string; version?: string }>
+  try {
+    const resposta = await fetch(alvo)
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`)
+    saude = (await resposta.json()) as ReadonlyArray<{ providerId?: string; version?: string }>
+  } catch (cause) {
+    throw new Error(
+      `AGENTIC_BROWSER_BASE_URL aponta para ${baseURL}, mas nao foi possivel apurar os ` +
+        `fornecedores em ${alvo} (${String(cause)}). A suite escreve — inicia missoes — ` +
+        'entao recusa rodar sem confirmar que nenhuma assinatura sera consumida.',
+    )
+  }
+
+  const suspeitos = saude
+    .filter((provider) => !ehInProcess(provider))
+    .map((provider) => provider.providerId ?? '(sem id)')
+
+  if (suspeitos.length > 0) {
+    throw new Error(
+      `AGENTIC_BROWSER_BASE_URL aponta para um control plane com fornecedor que pode ` +
+        `consumir assinatura: ${suspeitos.join(', ')}. Esta suite inicia missoes de ` +
+        'verdade. Use o ambiente gerenciado (sem a variavel) ou aponte para um control ' +
+        'plane cujos fornecedores sejam todos in-process.',
+    )
+  }
+}
+
+/** Reconhece o provider in-process pelo que ele publica; na duvida, devolve false. */
+function ehInProcess(provider: { providerId?: string; version?: string }): boolean {
+  const versao = provider.version ?? ''
+  return versao.endsWith('-mock')
+}
+
 export async function startBrowserEnvironment(): Promise<BrowserEnvironment> {
   if (current !== undefined) return current
 
   const external = nodeProcess.env.AGENTIC_BROWSER_BASE_URL
   if (external !== undefined && external.trim().length > 0) {
     const baseURL = external.trim().replace(/\/+$/, '')
+    await assertExternalIsQuotaFree(baseURL)
     current = {
       baseURL,
       missionRef: MISSION_REF,

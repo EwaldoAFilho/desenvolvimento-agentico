@@ -138,7 +138,7 @@ describe('bloco do provider', () => {
 
 describe('nada de segredo, e-mail ou organizacao na saida', () => {
   it('e-mail vindo de um adapter descuidado e mascarado', () => {
-    expect(sanitize('sessao de ewaldo.alves@example.com ativa')).toBe(`sessao de ${MASK} ativa`)
+    expect(sanitize('sessao de pessoa@exemplo.invalid ativa')).toBe(`sessao de ${MASK} ativa`)
   })
 
   it('token com prefixo reconhecivel e mascarado', () => {

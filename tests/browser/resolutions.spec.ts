@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { settle } from './support/control-plane.js'
 import {
   approveInUi,
@@ -30,6 +31,47 @@ const RESOLUCOES = [
  * feita em cada etapa que muda o layout — missao compilada, run vivo e detalhe aberto —
  * porque cada uma tem uma largura diferente.
  */
+
+/**
+ * "Sem scroll horizontal" nao basta: a revisao independente mediu e achou dois dos oito nos
+ * renderizando ABAIXO do canvas em 1366x768. O teste passava porque afirmava a coisa errada
+ * — declarava a resolucao boa sem nunca conferir se o grafo cabia nela.
+ *
+ * Um DAG e pan/zoom por natureza, entao o requisito honesto nao e "tudo visivel para sempre":
+ * e que o enquadramento INICIAL mostre o grafo inteiro. Quem abre o dashboard precisa ver o
+ * que esta acontecendo antes de aprender a arrastar o canvas.
+ */
+async function expectTodosOsNosDentroDoCanvas(page: Page, resolucao: string): Promise<void> {
+  const canvas = page.locator('.react-flow__viewport').first()
+  await expect(canvas).toBeVisible()
+  const painel = await page.locator('.react-flow').first().boundingBox()
+  expect(painel, `canvas sem geometria em ${resolucao}`).not.toBeNull()
+
+  const nos = page.locator('.task-node')
+  const total = await nos.count()
+  expect(total, `nenhum no renderizado em ${resolucao}`).toBeGreaterThan(0)
+
+  const fora: string[] = []
+  for (let i = 0; i < total; i += 1) {
+    const no = nos.nth(i)
+    const caixa = await no.boundingBox()
+    const id = (await no.getAttribute('data-task-id')) ?? `#${i}`
+    if (caixa === null) {
+      fora.push(`${id} (sem geometria)`)
+      continue
+    }
+    const area = painel as { x: number; y: number; width: number; height: number }
+    const abaixo = caixa.y + caixa.height - (area.y + area.height)
+    const acima = area.y - caixa.y
+    const direita = caixa.x + caixa.width - (area.x + area.width)
+    const esquerda = area.x - caixa.x
+    const excesso = Math.max(abaixo, acima, direita, esquerda)
+    if (excesso > 1) fora.push(`${id} (${Math.round(excesso)}px fora)`)
+  }
+
+  expect(fora, `em ${resolucao} o enquadramento inicial deixa nos fora do canvas`).toEqual([])
+}
+
 test('a jornada roda em 1366x768 e em 1920x1080 sem scroll horizontal', async ({ page, env }) => {
   test.setTimeout(180_000)
 
@@ -53,9 +95,13 @@ test('a jornada roda em 1366x768 e em 1920x1080 sem scroll horizontal', async ({
       await expect(taskNode(page, 'T01')).toHaveAttribute('data-status', 'DONE', {
         timeout: 60_000,
       })
+      // Antes de abrir o painel: o enquadramento inicial precisa mostrar o grafo inteiro.
+      await expectTodosOsNosDentroDoCanvas(page, `${resolucao.nome} sem painel`)
       await taskNode(page, 'T01').click()
       await expect(page.getByRole('complementary', { name: 'Detalhe da task T01' })).toBeVisible()
       await expectNoHorizontalScroll(page)
+      // E depois: abrir o painel encolhe o canvas, e o grafo precisa reenquadrar.
+      await expectTodosOsNosDentroDoCanvas(page, `${resolucao.nome} com painel aberto`)
       // As acoes de run continuam alcancaveis com o painel aberto.
       await expect(page.getByRole('button', { name: /pause/ })).toBeInViewport()
 
