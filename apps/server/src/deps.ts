@@ -2,7 +2,12 @@ import { resolve } from 'node:path'
 import type { RunId } from '@agentic/domain'
 import type { ControlPlane } from '@agentic/orchestrator'
 import type { ProjectFile } from '@agentic/schemas'
-import { DEFAULT_HEARTBEAT_MS, DEFAULT_MISSIONS_DIR, DEFAULT_WEB_DIST } from './config.js'
+import {
+  DEFAULT_HEARTBEAT_MS,
+  DEFAULT_MISSIONS_DIR,
+  DEFAULT_WEB_DIST,
+  productWebDist,
+} from './config.js'
 
 /**
  * Como a orquestracao comeca depois do START MISSION. UM clique: o servidor pede o inicio
@@ -61,7 +66,12 @@ export function toServerDeps(input: ServerDepsInput): ServerDeps {
     gatesText: input.gatesText,
     repoRoot,
     missionsDir: resolve(repoRoot, input.missionsDir ?? DEFAULT_MISSIONS_DIR),
-    webDist: resolve(repoRoot, input.webDist ?? DEFAULT_WEB_DIST),
+    // Precedencia: o que o chamador pediu > o dashboard da instalacao do produto >
+    // o caminho relativo ao alvo (util quando o alvo E o proprio produto).
+    webDist:
+      input.webDist !== undefined
+        ? resolve(repoRoot, input.webDist)
+        : (productWebDist() ?? resolve(repoRoot, DEFAULT_WEB_DIST)),
     heartbeatMs: input.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
     launcher: input.launcher ?? defaultLauncher(input.plane),
   }
