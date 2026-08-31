@@ -3,7 +3,7 @@ import { ApproveMissionCommandSchema, parseMissionFile, toMissionSpec } from '@a
 import { compileInputOf, describeIssues, loadProjectContext, readMissionFile } from '../context.js'
 import type { CommandDeps } from '../deps.js'
 import { renderDiagnostics } from '../diagnostics.js'
-import { endpointOf } from '../link.js'
+import { resolveEndpoint } from '../discovery.js'
 import { createOutput } from '../output.js'
 import { findMissionRun, withPlane } from '../plane.js'
 import { CliError, type CommandResult, failure, ok, usageError } from '../result.js'
@@ -61,7 +61,14 @@ export async function missionApproveCommand(
   }
   const graph = result.graph
 
-  const link = await deps.connect(endpointOf(context.project, args.port))
+  // Mesma descoberta dos comandos de mutacao: um control plane no ar em porta diferente da
+  // declarada continua sendo o unico escritor (I7). Sem isto, `approve` abriria o banco por
+  // fora dele so porque o endereco do `project.yaml` nao responde.
+  const resolved = await resolveEndpoint(
+    context,
+    args.port === undefined ? {} : { port: args.port },
+  )
+  const link = await deps.connect(resolved.endpoint)
   if (link !== undefined) {
     // Ha control plane no ar: ele e o escritor (I7). A CLI so entrega o ato humano.
     await link.send({

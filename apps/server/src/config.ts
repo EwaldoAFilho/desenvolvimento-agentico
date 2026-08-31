@@ -43,6 +43,10 @@ export interface ServerConfig {
   readonly heartbeatMs?: number
   readonly logger?: boolean
   readonly databasePath?: string
+  /** Onde gravar o `control-plane.json` de descoberta. Default: `<repoRoot>/.agentic`. */
+  readonly runtimeDir?: string
+  /** `false` desliga a publicacao do registro de descoberta. */
+  readonly publishRuntimeFile?: boolean
 }
 
 export interface BindAddress {

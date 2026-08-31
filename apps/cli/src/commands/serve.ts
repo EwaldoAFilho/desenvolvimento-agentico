@@ -1,7 +1,7 @@
 import { startServer } from '@agentic/server'
 import { loadProjectContext } from '../context.js'
 import type { CommandDeps } from '../deps.js'
-import { endpointOf } from '../link.js'
+import { describeEndpoint, resolveEndpoint } from '../discovery.js'
 import { createOutput } from '../output.js'
 import { type CommandResult, failure, ok } from '../result.js'
 
@@ -30,11 +30,17 @@ export const SERVER_COMMAND = 'npm start -w @agentic/server'
 export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<CommandResult> {
   const out = createOutput(deps, args.json === true)
   const context = await loadProjectContext(deps, args)
-  const endpoint = endpointOf(context.project, args.port)
+  // Um control plane em porta diferente da declarada continua sendo um control plane: quem
+  // manda e o registro de runtime do processo vivo, nao o endereco desejado.
+  const resolved = await resolveEndpoint(
+    context,
+    args.port === undefined ? {} : { port: args.port },
+  )
+  const endpoint = resolved.endpoint
 
   const existing = await deps.connect(endpoint)
   if (existing !== undefined) {
-    out.line(`control plane ja no ar em ${endpoint}`)
+    out.line(`control plane ja no ar em ${describeEndpoint(resolved)}`)
     out.line('nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.')
     return ok('serve', { endpoint, running: true } satisfies ServeData)
   }
@@ -44,10 +50,12 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     const running = await boot({
       repoRoot: context.repoRoot,
       projectFile: context.projectPath,
+      runtimeDir: context.baseDir,
       ...(args.port === undefined ? {} : { port: args.port }),
     })
     out.line(`control plane no ar em ${running.url}`)
     out.line(`host/porta vem de \`server\` em ${context.projectPath}`)
+    out.line('endereco publicado em .agentic/control-plane.json enquanto este processo viver')
     out.line()
     out.line('sem run ativo: use START MISSION no dashboard ou `agentic mission start`.')
     await deps.waitForShutdown()

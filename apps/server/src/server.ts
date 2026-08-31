@@ -2,6 +2,13 @@ import type { ControlPlane } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { type BindAddress, loadProjectSources, resolveBind, type ServerConfig } from './config.js'
+import {
+  type ControlPlaneRuntime,
+  controlPlaneFilePath,
+  removeControlPlaneFile,
+  runtimeDirOf,
+  writeControlPlaneFile,
+} from './control-plane-file.js'
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
 import { registerCommandRoutes } from './routes/commands.js'
@@ -37,6 +44,9 @@ export interface RunningServer {
   readonly deps: ServerDeps
   readonly address: BindAddress
   readonly url: string
+  /** Caminho do `control-plane.json` publicado, quando foi possivel grava-lo. */
+  readonly runtimeFile?: string
+  readonly runtime?: ControlPlaneRuntime
   close(): Promise<void>
 }
 
@@ -45,6 +55,16 @@ export interface AttachServerInput extends ServerDepsInput {
   readonly port?: number
   readonly exposeExternally?: boolean
   readonly logger?: FastifyServerOptions['logger']
+  /** Onde gravar o `control-plane.json`. Default: `<repoRoot>/.agentic`. */
+  readonly runtimeDir?: string
+  /** `false` desliga a publicacao do registro de descoberta. */
+  readonly publishRuntimeFile?: boolean
+}
+
+/** Porta REAL do socket: com `port: 0` o valor pedido nao serve para ninguem se conectar. */
+function boundPortOf(app: FastifyInstance, fallback: number): number {
+  const address = app.server.address()
+  return address !== null && typeof address === 'object' ? address.port : fallback
 }
 
 /**
@@ -70,13 +90,33 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
     ...(input.logger === undefined ? {} : { logger: input.logger }),
   })
   await app.listen({ host: address.host, port: address.port })
+  const port = boundPortOf(app, address.port)
+  const bound: BindAddress = { ...address, port }
+  const runtimeDir = input.runtimeDir ?? runtimeDirOf(deps.repoRoot)
+
+  // Publicar o registro e conveniencia de descoberta, nao o produto: se o disco recusar,
+  // a API continua no ar e a CLI cai no endereco declarado em `project.yaml`.
+  let runtime: ControlPlaneRuntime | undefined
+  if (input.publishRuntimeFile !== false) {
+    runtime = await writeControlPlaneFile(runtimeDir, { host: address.host, port }).catch(
+      () => undefined,
+    )
+  }
+
   return {
     app,
     plane: input.plane,
     deps,
-    address,
-    url: `http://${address.host}:${address.port}`,
-    close: (): Promise<void> => app.close(),
+    address: bound,
+    url: `http://${address.host}:${port}`,
+    ...(runtime === undefined ? {} : { runtime, runtimeFile: controlPlaneFilePath(runtimeDir) }),
+    close: async (): Promise<void> => {
+      // So apaga o registro se ele ainda for o NOSSO: outro processo pode ter subido depois.
+      if (runtime !== undefined) {
+        await removeControlPlaneFile(runtimeDir, { pid: runtime.pid, port: runtime.port })
+      }
+      await app.close()
+    },
   }
 }
 
@@ -107,6 +147,10 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
     ...(config.port === undefined ? {} : { port: config.port }),
     ...(config.exposeExternally === undefined ? {} : { exposeExternally: config.exposeExternally }),
     ...(config.logger === undefined ? {} : { logger: config.logger }),
+    ...(config.runtimeDir === undefined ? {} : { runtimeDir: config.runtimeDir }),
+    ...(config.publishRuntimeFile === undefined
+      ? {}
+      : { publishRuntimeFile: config.publishRuntimeFile }),
   })
   return {
     ...running,

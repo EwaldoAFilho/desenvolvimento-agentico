@@ -3,7 +3,8 @@ import { isRunId, isTaskId } from '@agentic/domain'
 import type { ControlPlane } from '@agentic/orchestrator'
 import type { ProjectContext } from './context.js'
 import type { CommandDeps } from './deps.js'
-import { type ControlPlaneLink, endpointOf } from './link.js'
+import { describeEndpoint, resolveEndpoint } from './discovery.js'
+import type { ControlPlaneLink } from './link.js'
 import { CliError, usageError } from './result.js'
 
 /** Abre o control plane local a partir do projeto ja validado. */
@@ -71,41 +72,58 @@ export async function findMissionRun(
 }
 
 /**
+ * Primeira coisa que o usuario le, palavra por palavra. O diagnostico longo vem depois:
+ * quem so quer voltar a trabalhar precisa dos DOIS comandos, na ordem, sem interpretar nada.
+ */
+export const NO_CONTROL_PLANE_HEADER = [
+  'Nenhum control plane ativo.',
+  '  Suba:    agentic serve',
+  '  Depois:  agentic mission pause <run>',
+].join('\n')
+
+/**
  * A mensagem que o usuario ve quando nao ha control plane no ar.
  *
- * A versao antiga so mandava "suba um com `agentic serve`" e deixava de fora o caso REAL
- * que acontece: `mission start` SEM `--serve` orquestra em primeiro plano e nao publica
- * HTTP nenhum. O run esta andando, o usuario tenta pausar, e a CLI respondia como se nao
- * houvesse run — quando o problema e que aquele processo nao tem porta.
- *
- * Recusar continua certo (I7: ninguem escreve no banco por fora do orquestrador). O que
- * mudou e a mensagem dizer QUAL e o caminho de volta.
+ * Recusar continua certo (I7: ninguem escreve no banco por fora do orquestrador). O que a
+ * mensagem faz e dizer o caminho de volta — o comando exato primeiro, o porque depois.
  */
-export function noControlPlaneMessage(endpoint: string): string {
+export function noControlPlaneMessage(endpoint: string, tried?: string): string {
   return [
-    `nenhum control plane respondendo em ${endpoint}.`,
+    NO_CONTROL_PLANE_HEADER,
+    '',
+    `nenhum control plane respondendo em ${tried ?? endpoint}.`,
     'comando de mutacao nao escreve no banco por fora do orquestrador (I7), entao ele precisa',
     'de um processo publicando HTTP. Duas causas comuns:',
     `  1. nao ha control plane no ar        -> \`agentic serve\``,
-    '  2. ha um run rodando em primeiro plano, iniciado com `agentic mission start <arquivo>`',
-    '     SEM `--serve`: esse modo orquestra mas NAO publica HTTP, entao pause, resume, stop,',
+    '  2. ha um run em primeiro plano iniciado com `--no-serve` (ou, numa versao anterior,',
+    '     SEM `--serve`): esse modo orquestra mas NAO publica HTTP, entao pause, resume, stop,',
     '     retry, unblock e skip ficam inalcancaveis ate ele terminar (Ctrl+C encerra o run).',
-    '     Para poder comandar o run enquanto ele anda, use `agentic mission start <arquivo> --serve`',
-    '     (ou deixe um `agentic serve` no ar antes de dar o start).',
+    '     `agentic mission start <arquivo>` ja publica a API por padrao;',
+    '     `agentic mission start <arquivo> --serve` ainda mantem o control plane no ar depois',
+    '     que o run termina.',
   ].join('\n')
 }
 
 /**
  * Mutacao sobre run exige o control plane no ar (ARCHITECTURE 4). Sem processo, a CLI diz
  * isso — nao escreve no banco por fora do unico escritor (I7).
+ *
+ * O endereco tentado sai da descoberta (`.agentic/control-plane.json` com processo vivo),
+ * nao de um endereco fixo: o processo que esta no ar agora pode nao estar na porta que o
+ * `project.yaml` declara.
  */
 export async function requireLink(
   deps: CommandDeps,
   context: ProjectContext,
   port?: number,
 ): Promise<ControlPlaneLink> {
-  const endpoint = endpointOf(context.project, port)
-  const link = await deps.connect(endpoint)
-  if (link === undefined) throw new CliError('NO_CONTROL_PLANE', noControlPlaneMessage(endpoint))
+  const resolved = await resolveEndpoint(context, port === undefined ? {} : { port })
+  const link = await deps.connect(resolved.endpoint)
+  if (link === undefined) {
+    throw new CliError(
+      'NO_CONTROL_PLANE',
+      noControlPlaneMessage(resolved.endpoint, describeEndpoint(resolved)),
+    )
+  }
   return link
 }

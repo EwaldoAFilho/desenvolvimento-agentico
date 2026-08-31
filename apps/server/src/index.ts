@@ -13,6 +13,25 @@ export {
   resolveBind,
   ServerConfigError,
 } from './config.js'
+export type {
+  AliveProbe,
+  ControlPlaneRuntime,
+  DiscoverOptions,
+  RemoveExpectation,
+  WriteRuntimeInput,
+} from './control-plane-file.js'
+export {
+  CONTROL_PLANE_FILE,
+  controlPlaneFilePath,
+  discoverControlPlane,
+  parseControlPlaneRuntime,
+  processAlive,
+  RUNTIME_DIR_NAME,
+  readControlPlaneFile,
+  removeControlPlaneFile,
+  runtimeDirOf,
+  writeControlPlaneFile,
+} from './control-plane-file.js'
 export type { RunLauncher, ServerDeps, ServerDepsInput } from './deps.js'
 export { defaultLauncher, toServerDeps } from './deps.js'
 export { parseRunId, parseTaskId, toRunHeader } from './dto.js'
