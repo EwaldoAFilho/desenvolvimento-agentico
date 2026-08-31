@@ -14,7 +14,7 @@ import { buildAssignmentPrompt } from './assignment-prompt.js'
  * Afrouxar o parser seria a correcao errada: aceitaria elogio em prosa como aprovacao.
  */
 describe('prompt de revisao: o veredito precisa ser inequivoco', () => {
-  const prompt = (): string => buildAssignmentPrompt(reviewAssignment()).text
+  const prompt = (): string => buildAssignmentPrompt(reviewAssignment('/tmp/worktree-exemplo')).text
 
   it('manda comecar pela linha exata que o parser reconhece', () => {
     const texto = prompt()

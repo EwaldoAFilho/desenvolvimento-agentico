@@ -129,7 +129,15 @@ describe('buildAssignmentPrompt — revisao (P07)', () => {
     expect(text).toContain('## Resultados de gate\n(nenhum)')
   })
 
-  it('pede veredito PASS, FAIL ou ESCALATE', () => {
-    expect(assignmentPromptText(reviewAssignment(WS))).toContain('PASS, FAIL ou ESCALATE')
+  /**
+   * O texto mudou depois que um revisor REAL analisou bem e formatou mal, perdendo a
+   * tentativa com `AGENT_ERROR: revisor nao emitiu veredito`. A assercao continua exigindo
+   * as tres opcoes — o que ficou mais forte e o formato que o parser reconhece.
+   */
+  it('pede as tres opcoes de veredito, na forma que o parser reconhece', () => {
+    const texto = assignmentPromptText(reviewAssignment(WS))
+    for (const opcao of ['PASS', 'FAIL', 'ESCALATE']) {
+      expect(texto).toContain(`VEREDITO: ${opcao}`)
+    }
   })
 })
