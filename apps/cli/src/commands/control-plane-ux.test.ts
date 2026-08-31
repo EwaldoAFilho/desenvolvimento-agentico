@@ -10,6 +10,7 @@ import {
 } from '../__fixtures__/harness.js'
 import { noControlPlaneMessage } from '../plane.js'
 import { EXIT_OK } from '../result.js'
+import { launchCommand } from './launch.js'
 import { missionApproveCommand } from './mission-approve.js'
 import { missionStartCommand } from './mission-start.js'
 import { pauseCommand, taskRetryCommand, taskSkipCommand } from './mutations.js'
@@ -74,6 +75,27 @@ describe('recusa de mutacao sem control plane', () => {
       taskSkipCommand({ taskId: 'T01', runId: RUN_ID, reason: 'fora de escopo' }, deps),
     )
     expect(refusal.message).toContain('--serve')
+  })
+
+  it('o launcher nao recusa: sem control plane no ar, ele sobe um', async () => {
+    // Mutacao sem control plane e recusa (I7); ENTRAR no projeto sem control plane e o caso
+    // normal do dia a dia — e ai o certo e subir, nao ensinar a subir.
+    workspace = await createWorkspace()
+    let booted = 0
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      connect: () => Promise.resolve(undefined),
+      bootServer: () => {
+        booted += 1
+        return Promise.resolve({ url: 'http://127.0.0.1:4317', close: () => Promise.resolve() })
+      },
+      openBrowser: () => Promise.resolve({ opened: false, reason: 'sem ambiente grafico' }),
+    })
+
+    const result = await launchCommand({}, captured.deps)
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    expect(booted).toBe(1)
   })
 })
 

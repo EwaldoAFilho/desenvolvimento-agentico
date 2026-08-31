@@ -368,6 +368,29 @@ describe('o default aparece na linha de comando', () => {
     expect(captured.stdout()).toContain('SEM API HTTP')
   })
 
+  it('`mission start` nao abre navegador: quem abre e o launcher', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const opened: string[] = []
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => planeOf(specHash, new FakeOrchestrator()),
+      servePlane: servePlaneSpy().serve,
+      openBrowser: (input) => {
+        opened.push(input.url)
+        return Promise.resolve({ opened: true, command: 'xdg-open' })
+      },
+    })
+
+    const code = await main(
+      ['node', 'agentic', 'mission', 'start', workspace.missionPath, '--accept-warnings'],
+      captured.deps,
+    )
+
+    expect(code).toBe(EXIT_OK)
+    expect(opened).toEqual([])
+  })
+
   it('`--serve` na linha de comando continua valendo', async () => {
     workspace = await createWorkspace()
     const specHash = await approvedRun(workspace.dir, workspace.missionPath)

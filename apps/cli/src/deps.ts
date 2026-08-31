@@ -9,6 +9,7 @@ import { createProviderRegistryFromProject } from '@agentic/providers'
 import type { ProjectFile } from '@agentic/schemas'
 import { attachServer, type ServerConfig } from '@agentic/server'
 import { git, isGitRepo } from '@agentic/workspace'
+import { type BrowserOutcome, type OpenBrowserInput, openBrowser } from './browser.js'
 import { type ControlPlaneLink, connectHttp } from './link.js'
 import type { ExitCode } from './result.js'
 
@@ -31,12 +32,22 @@ export interface CommandDeps {
   now(): Date
   readonly env: Readonly<Record<string, string | undefined>>
   readonly nodeVersion: string
+  /**
+   * Plataforma do host. Ausente = ambiente nao declarado, e nenhum comando de sistema
+   * operacional e disparado — e o que mantem a suite sem abrir navegador de verdade.
+   */
+  readonly platform?: NodeJS.Platform
   /** Composition root aprovado: a CLI nao monta pecas por conta propria. */
   controlPlane(config: ControlPlaneConfig): ControlPlane
   registry(project: ProjectFile): ProviderRegistry
   /** `undefined` = nenhum control plane no ar naquele endereco. */
   connect(endpoint: string): Promise<ControlPlaneLink | undefined>
   probeGit(cwd: string): Promise<GitProbe>
+  /**
+   * Abre a URL no navegador do usuario. Injetavel para o teste nao abrir nada; a
+   * implementacao real passa por @agentic/process, nunca por `node:child_process`.
+   */
+  openBrowser?(input: OpenBrowserInput): Promise<BrowserOutcome>
   /** Espera o encerramento do processo em primeiro plano (`serve`, `mission start`). */
   waitForShutdown(): Promise<void>
   /** Intervalo da espera enquanto o run esta PAUSED. Existe para o teste nao dormir. */
@@ -123,10 +134,12 @@ export function defaultDeps(): CommandDeps {
     now: () => new Date(),
     env: nodeProcess.env,
     nodeVersion: nodeProcess.versions.node,
+    platform: nodeProcess.platform,
     controlPlane: (config) => createControlPlane(config),
     registry: (project) => createProviderRegistryFromProject(project),
     connect: (endpoint) => connectHttp(endpoint),
     probeGit: (cwd) => defaultGitProbe(cwd),
+    openBrowser: (input) => openBrowser(input),
     waitForShutdown: defaultShutdown,
     servePlane: (input) => attachServer(input),
   }

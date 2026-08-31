@@ -1,6 +1,19 @@
 export const PACKAGE_NAME = '@agentic/cli'
 
 export {
+  BROWSER_CLOSE_GRACE_MS,
+  BROWSER_ENV_ALLOW,
+  BROWSER_MAX_OUTPUT_BYTES,
+  type BrowserCommand,
+  type BrowserOutcome,
+  browserCommandOf,
+  type HeadlessInput,
+  headlessReason,
+  type OpenBrowserInput,
+  openBrowser,
+  type ProcessRunner,
+} from './browser.js'
+export {
   type CheckStatus,
   capacityCheck,
   type DoctorArgs,
@@ -13,6 +26,12 @@ export {
 } from './commands/doctor.js'
 export { type EventsTailArgs, eventsTailCommand, renderEvent } from './commands/events-tail.js'
 export { type InitArgs, type InitData, initCommand } from './commands/init.js'
+export {
+  environmentChecks,
+  type LaunchArgs,
+  type LaunchData,
+  launchCommand,
+} from './commands/launch.js'
 export {
   type ApproveArgs,
   type ApproveData,
@@ -137,7 +156,14 @@ export {
   resolveRunId,
   withPlane,
 } from './plane.js'
-export { buildProgram, execute, main, VERSION } from './program.js'
+export {
+  buildProgram,
+  execute,
+  LAUNCH_COMMAND,
+  main,
+  VERSION,
+  withLaunchDefault,
+} from './program.js'
 export { MASK, sanitize } from './redact.js'
 export {
   CliError,

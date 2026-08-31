@@ -2,6 +2,7 @@ import { Command, CommanderError, type OptionValues } from 'commander'
 import { doctorCommand } from './commands/doctor.js'
 import { eventsTailCommand } from './commands/events-tail.js'
 import { initCommand } from './commands/init.js'
+import { launchCommand } from './commands/launch.js'
 import { missionApproveCommand } from './commands/mission-approve.js'
 import { missionCompileCommand } from './commands/mission-compile.js'
 import { missionStartCommand } from './commands/mission-start.js'
@@ -34,6 +35,28 @@ import {
 } from './result.js'
 
 export const VERSION = '0.1.0'
+
+/** Subcomando que `agentic` sozinho executa. */
+export const LAUNCH_COMMAND = 'launch'
+
+/** Flags que pertencem ao programa, nao ao launcher. */
+const ROOT_FLAGS: ReadonlySet<string> = new Set(['-h', '--help', '-v', '--version'])
+
+/**
+ * `agentic` sozinho — e `agentic --no-open`, `agentic --port 5000`, `agentic --json` — e o
+ * launcher. Um operando na primeira posicao continua sendo subcomando: `agentic doctro`
+ * precisa falhar dizendo `doctro`.
+ *
+ * A regra vive aqui, e nao no `isDefault` do commander, exatamente por isso: com comando
+ * default o commander engole o operando e responde "too many arguments for 'launch'",
+ * citando um comando que o usuario nunca digitou.
+ */
+export function withLaunchDefault(argv: readonly string[]): string[] {
+  const rest = argv.slice(2)
+  const first = rest[0]
+  if (first !== undefined && (!first.startsWith('-') || ROOT_FLAGS.has(first))) return [...argv]
+  return [...argv.slice(0, 2), LAUNCH_COMMAND, ...rest]
+}
 
 interface ProgramState {
   result: CommandResult
@@ -91,6 +114,7 @@ interface CommonOptions {
   readonly md?: boolean
   readonly acceptWarnings?: boolean
   readonly serve?: boolean
+  readonly open?: boolean
 }
 
 function base(options: OptionValues): CommonOptions {
@@ -120,6 +144,25 @@ export function buildProgram(deps: CommandDeps, state: ProgramState): Command {
   ): Promise<void> => {
     state.result = await execute(deps, command, options.json === true, work)
   }
+
+  withPort(common(program.command(LAUNCH_COMMAND)))
+    .description(
+      'abre o projeto do diretorio atual: diagnostica, reaproveita ou sobe o control plane e abre o navegador (e o que `agentic` sozinho faz)',
+    )
+    .option('--no-open', 'nao abre o navegador; imprime a URL (uso headless: CI, SSH, sem GUI)')
+    .action(async (options: OptionValues) => {
+      const opts = base(options)
+      await run(LAUNCH_COMMAND, opts, () =>
+        launchCommand(
+          {
+            ...pick(opts),
+            ...portOf(opts),
+            ...(opts.open === undefined ? {} : { open: opts.open }),
+          },
+          deps,
+        ),
+      )
+    })
 
   common(program.command('init'))
     .description('cria .agentic/ com project.yaml, gates.yaml e uma missao de exemplo')
@@ -405,7 +448,7 @@ export async function main(
   const state: ProgramState = { result: ok('agentic') }
   const program = buildProgram(deps, state)
   try {
-    await program.parseAsync([...argv])
+    await program.parseAsync(withLaunchDefault(argv))
   } catch (error) {
     if (error instanceof CommanderError) {
       const code = HELP_CODES.has(error.code) ? EXIT_OK : EXIT_USAGE
