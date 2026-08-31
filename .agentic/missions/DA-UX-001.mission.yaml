@@ -88,13 +88,11 @@ tasks:
     dependencies: []
     touches:
       - docs/adr/ADR-0013-planejamento-por-agente-local.md
-      - packages/domain/src/ports/mission-planner.ts
+      - packages/domain/src/ports/
       - packages/domain/src/index.ts
-      - packages/schemas/src/planning.ts
-      - packages/schemas/src/api/project-home.ts
-      - packages/schemas/src/api/provider-state.ts
-      - packages/schemas/src/index.ts
+      - packages/schemas/src/
       - apps/cli/src/commands/provider-view.ts
+      - apps/cli/src/commands/provider-view.test.ts
     validation:
       - A porta nao exige taskId, attemptId nem workspacePath para planejar
       - A proposta invalida do planejador e recusada pelo contrato com motivo legivel
@@ -122,11 +120,17 @@ tasks:
     dependencies: []
     touches:
       - apps/cli/src/commands/launch.ts
+      - apps/cli/src/commands/launch.test.ts
+      - apps/cli/src/commands/serve.ts
       - apps/cli/src/browser.ts
+      - apps/cli/src/browser.test.ts
       - apps/cli/src/program.ts
+      - apps/cli/src/program.test.ts
       - apps/cli/src/deps.ts
       - apps/cli/src/index.ts
-      - apps/cli/src/commands/serve.ts
+      - apps/cli/src/json-contract.test.ts
+      - apps/cli/src/commands/mission-start-serve.test.ts
+      - apps/cli/src/commands/control-plane-ux.test.ts
     validation:
       - "`agentic` sem argumento usa o cwd como projeto-alvo, nunca o repositorio do produto"
       - Control plane ja ativo e reaproveitado, nao duplicado
@@ -175,7 +179,9 @@ tasks:
     dependencies: [U01]
     touches:
       - apps/server/src/routes/project.ts
+      - apps/server/src/routes/project.test.ts
       - apps/server/src/routes/missions.ts
+      - apps/server/src/routes/missions.test.ts
       - apps/server/src/missions.ts
       - apps/server/src/dto.ts
       - apps/server/src/server.ts
@@ -204,7 +210,9 @@ tasks:
     dependencies: [U01]
     touches:
       - packages/providers/src/planner.ts
+      - packages/providers/src/planner.test.ts
       - packages/providers/src/index.ts
+      - packages/providers/src/__fixtures__/
     validation:
       - Saida fora do contrato vira falha de planejamento explicada, nao plano parcial
       - O processo do planejador roda sem permissao de escrita no repositorio
@@ -221,24 +229,28 @@ tasks:
     title: Fornecedor de teste nao se qualifica como revisor real
     objective: >
       Impedir que o fornecedor deterministico de teste seja contado como revisor
-      independente num projeto real, avisando na compilacao e corrigindo o template que
-      hoje o declara com papel de revisor.
+      independente num projeto real: avisar na compilacao e fazer o template gerado por init
+      nascer com fornecedor real como padrao e o de teste restrito a executor, sem deixar o
+      projeto gerado sem nenhum revisor possivel.
     description: >
       Licao ja documentada em TROUBLESHOOTING: o template gerado por `agentic init` declara o
       provider de teste com papeis de executor e revisor, e a heuristica atual conta qualquer
-      entrada com papel de revisor, inclusive ele. Diagnostico novo exige entrada no catalogo
-      e na documentacao de arquitetura.
+      entrada com papel de revisor, inclusive ele. Cuidado de coerencia: hoje o template so
+      tem esse provider e `requireReviewByDefault` e true, entao tirar o papel sem colocar um
+      fornecedor real no lugar deixa todo projeto novo sem revisor possivel. O catalogo de
+      diagnosticos e fechado e a contagem esta congelada em teste; a task e dona do pacote do
+      compilador justamente para poder acertar catalogo, contagem e suite no mesmo diff.
     dependencies: [U01]
     touches:
-      - packages/compiler/src/heuristics.ts
-      - packages/compiler/src/catalog.ts
-      - packages/compiler/src/types.ts
+      - packages/compiler/src/
       - apps/cli/src/templates.ts
+      - apps/cli/src/commands/init.test.ts
       - docs/architecture/ARCHITECTURE.md
     validation:
       - Projeto que so tem fornecedor de teste como segundo revisor recebe aviso na compilacao
       - O template gerado por init deixa de declarar papel de revisor ao fornecedor de teste
-      - O diagnostico novo esta no catalogo e na documentacao de arquitetura
+      - O projeto gerado por init continua compilando a missao de exemplo sem ERROR
+      - O diagnostico novo esta no catalogo, na contagem e na documentacao de arquitetura
       - Nenhum diagnostico existente mudou de codigo ou de severidade
     gate: unit
     risk: medium
@@ -253,7 +265,7 @@ tasks:
       ter dashboard.
     dependencies: [U02]
     touches:
-      - tests/e2e/launcher.test.ts
+      - tests/e2e/
       - tests/clean-start/
     validation:
       - Rodar o launcher em outro diretorio nao abre o repositorio do produto
@@ -277,10 +289,11 @@ tasks:
       Rascunho nasce DRAFT e nunca APPROVED.
     dependencies: [U04, U05]
     touches:
-      - packages/orchestrator/src/application/planning.ts
+      - packages/orchestrator/src/application/
       - packages/orchestrator/src/engine/control-plane.ts
       - packages/orchestrator/src/index.ts
       - apps/server/src/routes/planning.ts
+      - apps/server/src/routes/planning.test.ts
       - apps/server/src/server.ts
     validation:
       - Texto livre vira missao gravada pelo control plane e compilada automaticamente
@@ -304,6 +317,7 @@ tasks:
     dependencies: [U03, U06]
     touches:
       - apps/server/src/routes/onboarding.ts
+      - apps/server/src/routes/onboarding.test.ts
       - apps/server/src/server.ts
     validation:
       - A previa mostra o conteudo antes de qualquer escrita
@@ -327,13 +341,7 @@ tasks:
       de run tem que continuar ganhando para nao regredir o dashboard de execucao.
     dependencies: [U02, U04]
     touches:
-      - apps/web/src/components/ProjectHome.tsx
-      - apps/web/src/components/MissionList.tsx
-      - apps/web/src/lib/mission-state.ts
-      - apps/web/src/App.tsx
-      - apps/web/src/api.ts
-      - apps/web/src/styles.css
-      - apps/web/src/index.ts
+      - apps/web/src/
     validation:
       - Sem run e sem missao na URL a Home aparece e nenhum carregamento fica indefinido
       - Falha de backend vira mensagem com acao de tentar novamente, nao tela pendurada
@@ -354,10 +362,7 @@ tasks:
       humana.
     dependencies: [U07, U08]
     touches:
-      - apps/web/src/components/Onboarding.tsx
-      - apps/web/src/App.tsx
-      - apps/web/src/api.ts
-      - apps/web/src/styles.css
+      - apps/web/src/
     validation:
       - Projeto sem configuracao abre onboarding em vez de erro tecnico
       - Gates sugeridos sao apresentados para confirmar ou editar, nunca aplicados sozinhos
@@ -377,10 +382,7 @@ tasks:
       real.
     dependencies: [U06, U08, U09]
     touches:
-      - apps/web/src/components/NewMission.tsx
-      - apps/web/src/App.tsx
-      - apps/web/src/api.ts
-      - apps/web/src/styles.css
+      - apps/web/src/
     validation:
       - De texto livre a DAG desenhado sem o usuario pedir validacao ou compilacao
       - O consumo de assinatura e avisado antes de acionar fornecedor real
@@ -405,11 +407,7 @@ tasks:
       clique duplo nao pode criar dois runs.
     dependencies: [U10]
     touches:
-      - apps/web/src/components/PlanReview.tsx
-      - apps/web/src/lib/actor.ts
-      - apps/web/src/App.tsx
-      - apps/web/src/api.ts
-      - apps/web/src/styles.css
+      - apps/web/src/
     validation:
       - O plano mostra contagem de tasks, paralelismo, avisos, caminho critico e conflitos
       - Clicar num no mostra objetivo, dependencias, escopo, validacao, gate, risco e revisao
@@ -444,6 +442,34 @@ tasks:
     risk: high
     estimate: 7
 
+  - id: U17
+    phase: verificacao
+    title: Smoke de planejamento com fornecedor real
+    objective: >
+      Provar pela interface, uma unica vez e com fornecedor real, que o planejamento produz
+      uma missao rascunho compilada, e registrar a saida observada — sem implementar a
+      melhoria proposta e sem executar o plano gerado.
+    description: >
+      A suite automatizada exercita o planejador com CLI falsa, e CLI falsa ja escondeu
+      defeito real neste repositorio antes: o modo de permissao de escrita so apareceu quando
+      um smoke com CLI de verdade mostrou o agente recusando gravar. Este smoke fecha essa
+      lacuna. Teto rigido de 2 invocacoes reais. Termina no rascunho compilado; o rascunho
+      pode ser descartado depois. Nao entra em nenhuma suite automatizada, para nao violar a
+      constraint de que teste nunca consome assinatura.
+    dependencies: [U16]
+    touches:
+      - docs/missions/DA-UX-001-planner-smoke.md
+    validation:
+      - O smoke roda pela interface, nao por chamada interna nem por edicao de YAML
+      - No maximo 2 invocacoes reais do planejador, com o numero efetivo registrado
+      - Termina em rascunho compilado; nada e aprovado nem executado
+      - A saida do fornecedor esta transcrita como foi observada, nao parafraseada
+      - Depois do smoke o repositorio nao tem arquivo alterado alem do artefato da missao
+      - Nenhuma suite automatizada passou a consumir assinatura
+    gate: unit
+    risk: medium
+    estimate: 3
+
   - id: U14
     phase: aceitacao
     title: Quickstart e documentacao da jornada nova
@@ -473,7 +499,7 @@ tasks:
       Medir a jornada nova como usuario, contar as interacoes ate o DAG de uma missao nova,
       atualizar a matriz de prontidao preservando o historico e fechar o Mission Gate com
       evidencia apontada.
-    dependencies: [U12, U14]
+    dependencies: [U12, U14, U17]
     touches:
       - docs/missions/DA-UX-001-report.md
       - docs/product/PRODUCT-READINESS.md
