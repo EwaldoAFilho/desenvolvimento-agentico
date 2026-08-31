@@ -134,11 +134,11 @@ describe('doctor nunca imprime token, e-mail ou organizacao', () => {
         providerId: 'mock',
         installed: true,
         ready: true,
-        detail: 'sessao de ewaldo.alves@gmail.com na organizacao ACME',
+        detail: 'sessao de pessoa@exemplo.invalid na organizacao ACME',
       }),
     ])
 
-    expect(text).not.toContain('ewaldo.alves@gmail.com')
+    expect(text).not.toContain('pessoa@exemplo.invalid')
     expect(text).toContain(MASK)
   })
 

@@ -32,5 +32,9 @@
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EwaldoAFilho/desenvolvimento-agentico.git"
   }
 }
