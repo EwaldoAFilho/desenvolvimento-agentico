@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { makeProjectHome } from '../__fixtures__/home.js'
 import {
   makeCompileReport,
   makeSnapshot,
@@ -11,6 +12,8 @@ import {
 import { TASK_STATUSES, taskStatusStyle } from '../lib/status.js'
 import { installReactFlowEnv } from '../test/react-flow-env.js'
 import { DagCanvas } from './DagCanvas.js'
+import { ErrorScreen } from './ErrorScreen.js'
+import { ProjectHome } from './ProjectHome.js'
 import { ProvidersPanel } from './ProvidersPanel.js'
 import { StartMission } from './StartMission.js'
 
@@ -132,6 +135,54 @@ describe('rotulos acessiveis dos controles', () => {
       const name = button.getAttribute('aria-label') ?? button.textContent ?? ''
       expect(name.trim().length).toBeGreaterThan(0)
     }
+  })
+
+  it('todo controle da Home recebe foco e anuncia a que missao pertence', () => {
+    render(
+      <ProjectHome
+        home={makeProjectHome()}
+        onOpenRun={noop}
+        onOpenMission={noop}
+        onReload={noop}
+      />,
+    )
+    const controls = screen.getAllByRole('button').filter((b) => !b.hasAttribute('disabled'))
+    expect(controls.length).toBeGreaterThanOrEqual(4)
+    const names = new Set<string>()
+    for (const control of controls) {
+      const name = (control.getAttribute('aria-label') ?? control.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+      names.add(name)
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    // "ver execução" repetido em cinco linhas nao diz a ninguem QUAL execucao vai abrir.
+    expect(names.size).toBe(controls.length)
+  })
+
+  it('a Home diz o estado por texto, nao so por cor', () => {
+    render(
+      <ProjectHome
+        home={makeProjectHome()}
+        onOpenRun={noop}
+        onOpenMission={noop}
+        onReload={noop}
+      />,
+    )
+    // O veredito do ambiente e uma frase — o `data-verdict` serve ao CSS, nao ao leitor.
+    const verdict = screen.getByTestId('environment-verdict')
+    expect(verdict.textContent).toContain('ambiente com pendência')
+    expect(verdict.textContent).toContain('indisponível')
+    expect(screen.getByTestId('mission-DA-DOC-004').textContent).toContain('CONCLUÍDA')
+  })
+
+  it('a tela de falha anuncia o erro e oferece um botao com nome', () => {
+    render(<ErrorScreen title="O control plane não respondeu" message="HTTP 500" onRetry={noop} />)
+    expect(screen.getByRole('main', { name: 'O control plane não respondeu' })).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+    const retry = screen.getByRole('button', { name: 'tentar novamente' })
+    retry.focus()
+    expect(document.activeElement).toBe(retry)
   })
 
   it('o campo de actor continua associado ao seu rotulo', () => {

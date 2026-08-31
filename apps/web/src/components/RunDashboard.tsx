@@ -5,6 +5,7 @@ import { type RunStreamDeps, useRunStream } from '../hooks/useRunStream.js'
 import type { Grouping } from '../lib/dag-layout.js'
 import { stalledDependents, waitingReasonOf } from '../lib/waiting.js'
 import { DagCanvas } from './DagCanvas.js'
+import { ErrorScreen } from './ErrorScreen.js'
 import { EventStream } from './EventStream.js'
 import { RunHeader } from './RunHeader.js'
 import { TaskDetailPanel, type TaskPanelContext } from './TaskDetailPanel.js'
@@ -23,14 +24,17 @@ export interface RunDashboardProps {
   readonly runId: string
   readonly streamDeps?: RunStreamDeps
   readonly loadTaskDetail?: (runId: string, taskId: string) => Promise<TaskDetail>
+  /** Saida quando o run nao carrega — sem ela, um id morto na URL e um beco sem saida. */
+  readonly onHome?: () => void
 }
 
 export function RunDashboard({
   runId,
   streamDeps,
   loadTaskDetail = getTaskDetail,
+  onHome,
 }: RunDashboardProps): JSX.Element {
-  const { state, phase, error } = useRunStream(runId, streamDeps)
+  const { state, phase, error, reload } = useRunStream(runId, streamDeps)
   const now = useNow()
   const [grouping, setGrouping] = useState<Grouping>('phase')
   const [selected, setSelected] = useState<string | undefined>(undefined)
@@ -83,9 +87,22 @@ export function RunDashboard({
   }, [])
 
   if (state === undefined) {
+    // Falha no snapshot inicial nao e carregamento: e uma tela sem dado, e ela precisa
+    // oferecer a saida em vez de deixar o F5 como unica opcao.
+    if (phase === 'error') {
+      return (
+        <ErrorScreen
+          title="Execução não carregou"
+          message={error ?? 'falha ao carregar o run'}
+          hint={`run ${runId}`}
+          onRetry={reload}
+          {...(onHome === undefined ? {} : { onHome })}
+        />
+      )
+    }
     return (
       <main className="loading" aria-label="Carregando run">
-        <p>{phase === 'error' ? (error ?? 'falha ao carregar o run') : 'carregando run…'}</p>
+        <p>carregando run…</p>
       </main>
     )
   }

@@ -5,6 +5,8 @@ import {
   CompileReportDtoSchema,
   type EventDto,
   EventDtoSchema,
+  type ProjectHomeDto,
+  ProjectHomeDtoSchema,
   type ProviderHealthDto,
   ProviderHealthDtoSchema,
   type RetryTaskCommand,
@@ -40,6 +42,41 @@ export class ApiError extends Error {
     this.status = status
     this.detail = detail
   }
+}
+
+/** O corpo de erro do control plane carrega SEMPRE um codigo estavel em `error.code`. */
+function apiPayloadOf(detail: string): { code?: string; message?: string } | undefined {
+  try {
+    const body = JSON.parse(detail) as { error?: { code?: unknown; message?: unknown } }
+    const error = body?.error
+    if (error === undefined || error === null) return undefined
+    return {
+      ...(typeof error.code === 'string' ? { code: error.code } : {}),
+      ...(typeof error.message === 'string' ? { message: error.message } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+const FAILURE_MAX = 300
+
+/**
+ * Falha virada em frase que a tela pode mostrar ao lado do botao de tentar novamente. O
+ * codigo do control plane vem junto de proposito: `MISSIONS_DIR_UNREADABLE` diz o que
+ * consertar, "erro ao carregar" nao diz nada. Corpo enorme (HTML de proxy, stack) e cortado
+ * — a mensagem e para ler, o diagnostico completo esta no servidor.
+ */
+export function describeFailure(cause: unknown): string {
+  if (cause instanceof ApiError) {
+    const payload = apiPayloadOf(cause.detail)
+    const text = payload?.message ?? cause.detail
+    const code = payload?.code === undefined ? '' : ` ${payload.code}`
+    const body = text.length > FAILURE_MAX ? `${text.slice(0, FAILURE_MAX - 1)}…` : text
+    return `HTTP ${cause.status}${code}: ${body}`
+  }
+  const text = cause instanceof Error ? cause.message : String(cause)
+  return text.length > FAILURE_MAX ? `${text.slice(0, FAILURE_MAX - 1)}…` : text
 }
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
@@ -93,6 +130,16 @@ export function streamUrl(runId: string, since: number): string {
 export async function getCompileReport(missionId: string): Promise<CompileReportDto> {
   const path = `/missions/${encodeURIComponent(missionId)}/compile`
   return CompileReportDtoSchema.parse(await request(path))
+}
+
+/**
+ * Identidade do projeto, ambiente, missoes e execucoes numa leitura so. A Home NAO encadeia
+ * tres chamadas para desenhar a primeira tela — e responde com o projeto vazio, sem nenhum
+ * run criado, que e justamente o caso que ficava carregando para sempre.
+ */
+export async function getProjectHome(limit?: number): Promise<ProjectHomeDto> {
+  const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`
+  return ProjectHomeDtoSchema.parse(await request(`/project${query}`))
 }
 
 export async function getProviders(): Promise<readonly ProviderHealthDto[]> {

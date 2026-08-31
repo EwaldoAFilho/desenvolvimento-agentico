@@ -814,6 +814,215 @@ body {
   color: var(--fg-muted);
 }
 
+/* ---------- home do projeto ---------- */
+
+.home {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: grid;
+  gap: 18px;
+}
+
+.home__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+
+.home__name {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.home__meta {
+  grid-column: 1;
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.home__reload {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.home__block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.home__block--warn {
+  border-color: color-mix(in srgb, var(--st-amber) 55%, transparent);
+}
+
+.home__block h2 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.home__verdict {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.home__verdict strong {
+  font-weight: 700;
+}
+
+.home__verdict span:last-child {
+  color: var(--fg-muted);
+}
+
+/*
+ * Veredito do ambiente: o tom acompanha o icone e o rotulo, nunca os substitui. `unknown`
+ * nao e verde nem vermelho — e tracejado e cinza, como no painel de providers.
+ */
+.home__verdict[data-verdict="READY"] strong {
+  color: var(--st-green);
+}
+
+.home__verdict[data-verdict="ATTENTION"] strong {
+  color: var(--st-red);
+}
+
+.home__verdict[data-verdict="INDETERMINATE"] strong {
+  color: var(--fg-muted);
+}
+
+.home__empty {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.home__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.home-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) minmax(0, auto) 190px;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.home-row:first-child {
+  border-top: 0;
+}
+
+.home-row__state {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--fg-muted);
+  letter-spacing: 0.06em;
+}
+
+.home-row__state[data-state="RUNNING"] {
+  color: var(--st-blue-strong);
+}
+
+.home-row__state[data-state="COMPLETED"] {
+  color: var(--st-green);
+}
+
+.home-row__state[data-state="FAILED"],
+.home-row__state[data-state="INVALID"] {
+  color: var(--st-red);
+}
+
+.home-row__state[data-state="BLOCKED"],
+.home-row__state[data-state="PAUSED"] {
+  color: var(--st-amber);
+}
+
+.home-row__name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row__file {
+  color: var(--fg-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row__numbers {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.home-row__action {
+  justify-self: end;
+  text-align: right;
+}
+
+/* Sem acao possivel: o motivo ocupa o lugar do botao — nao ha botao desligado enganando. */
+.home-row__blocked {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+/* ---------- falha com saida ---------- */
+
+.failure {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 60px 20px;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.failure__title {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+}
+
+.failure__message {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.failure__hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.failure__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ---------- foco visivel ---------- */
 
 /*
