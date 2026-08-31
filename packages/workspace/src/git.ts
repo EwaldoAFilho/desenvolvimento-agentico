@@ -15,6 +15,13 @@ export interface GitOptions {
   readonly timeoutMs?: number
   readonly maxBufferBytes?: number
   readonly stage?: WorkspaceStage
+  /**
+   * Entrada padrao do processo. Existe para comandos que recebem LISTA de caminhos
+   * (`hash-object --stdin-paths`, `check-ignore --stdin`): argv tem teto de tamanho no
+   * sistema operacional — 32.767 caracteres no Windows — e uma lista longa o bastante
+   * transformaria repositorio valido em comando irexecutavel.
+   */
+  readonly stdin?: string
 }
 
 export const DEFAULT_GIT_TIMEOUT_MS = 120_000
@@ -41,7 +48,7 @@ function describe(args: readonly string[]): string {
 export function git(args: readonly string[], options: GitOptions): Promise<GitResult> {
   const stage = options.stage ?? 'acquire'
   return new Promise<GitResult>((resolve, reject) => {
-    execFile(
+    const child = execFile(
       'git',
       [...args],
       {
@@ -80,6 +87,12 @@ export function git(args: readonly string[], options: GitOptions): Promise<GitRe
         )
       },
     )
+    if (options.stdin !== undefined) {
+      child.stdin?.on('error', () => {
+        // Processo que morreu antes de ler fecha o cano; o erro real vem pelo exit code.
+      })
+      child.stdin?.end(options.stdin)
+    }
   })
 }
 
