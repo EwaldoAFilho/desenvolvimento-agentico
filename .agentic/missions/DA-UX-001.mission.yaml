@@ -4,7 +4,7 @@ kind: Mission
 id: DA-UX-001
 title: Experiencia de projeto sem atrito
 objective: >
-  Transformar a jornada principal do produto em `cd projeto && agentic`: o launcher resolve
+  Entregar a espinha da jornada principal `cd projeto && agentic`: o launcher resolve
   ambiente e control plane, o navegador abre sozinho numa Home real do projeto, e a criacao
   de uma missao nova acontece por linguagem natural com plano compilado e aprovado na tela,
   sem que o desenvolvedor precise conhecer YAML, subcomando ou URL.
@@ -24,6 +24,13 @@ scope:
   - Aceitacao em navegador de verdade da jornada nova
 
 outOfScope:
+  # Adiado para DA-UX-002 por decisao do supervisor, nao por descoberta tecnica. O plano
+  # completo de 17 tasks esta no commit 8dbbc25 e continua valido.
+  - Onboarding de projeto nao configurado (deteccao de stack, gates sugeridos, tela)
+  - Guarda contra fornecedor de teste virar revisor real, e template do init
+  - Regressoes de launcher e de partida limpa, e aceitacao em navegador
+  - Quickstart, README e matriz de prontidao
+  - Smoke de planejamento com fornecedor real
   - Servidor multi-projeto e troca de projeto pela interface
   - Editor visual completo de DAG ou de YAML
   - Publicacao em npm e instalador do produto
@@ -43,13 +50,12 @@ constraints:
 
 acceptanceCriteria:
   - Em projeto configurado, `agentic` sozinho abre o navegador na Home do projeto
-  - Em projeto sem `.agentic/`, `agentic` abre onboarding em vez de erro tecnico
   - Sem run e sem missao na URL a Home mostra estado real, nunca carregamento infinito
   - Falha de backend na Home vira mensagem com acao de tentar novamente
   - Uma missao nova nasce de texto livre, vira rascunho compilado e DAG revisavel
   - Rascunho jamais chega a APPROVED sem ato humano registrado com actor
   - Da entrada no projeto ate o DAG da missao nova: 1 comando e no maximo 3 interacoes
-  - build, verify, test:e2e e test:browser passam ao final
+  - build e verify passam ao final
 
 defaults:
   requireReview: true
@@ -66,10 +72,6 @@ phases:
     title: Planejamento
   - id: interface
     title: Interface
-  - id: verificacao
-    title: Verificacao
-  - id: aceitacao
-    title: Aceitacao
 
 tasks:
   - id: U01
@@ -142,28 +144,6 @@ tasks:
     risk: high
     estimate: 6
 
-  - id: U03
-    phase: backend
-    title: Deteccao de stack e sugestao de quality gates
-    objective: >
-      Descobrir a stack do projeto a partir de arquivos conhecidos e propor comandos de gate
-      a partir de sinal real do repositorio, sem inventar comando e sem executar nada.
-    description: >
-      Nao existe nenhuma deteccao de stack hoje. Modulo puro, testado por conteudo de
-      arquivo, sem framework generico: primeiro o suficiente para sugerir. Sugestao nunca e
-      confirmacao e nenhum comando sugerido pode ser executado sem ato humano.
-    dependencies: [U01]
-    touches:
-      - apps/server/src/onboarding/
-    validation:
-      - Projeto Node com package.json sugere gates a partir dos scripts que existem de fato
-      - Stack sem sinal claro nao produz sugestao inventada
-      - Nenhum comando sugerido e executado pela deteccao
-      - A deteccao nao chama fornecedor de IA nem faz rede
-    gate: unit
-    risk: medium
-    estimate: 4
-
   - id: U04
     phase: backend
     title: API do Project Home e do rascunho
@@ -224,58 +204,6 @@ tasks:
     reviewPolicy: cross-provider-required
     estimate: 6
 
-  - id: U12
-    phase: backend
-    title: Fornecedor de teste nao se qualifica como revisor real
-    objective: >
-      Impedir que o fornecedor deterministico de teste seja contado como revisor
-      independente num projeto real: avisar na compilacao e fazer o template gerado por init
-      nascer com fornecedor real como padrao e o de teste restrito a executor, sem deixar o
-      projeto gerado sem nenhum revisor possivel.
-    description: >
-      Licao ja documentada em TROUBLESHOOTING: o template gerado por `agentic init` declara o
-      provider de teste com papeis de executor e revisor, e a heuristica atual conta qualquer
-      entrada com papel de revisor, inclusive ele. Cuidado de coerencia: hoje o template so
-      tem esse provider e `requireReviewByDefault` e true, entao tirar o papel sem colocar um
-      fornecedor real no lugar deixa todo projeto novo sem revisor possivel. O catalogo de
-      diagnosticos e fechado e a contagem esta congelada em teste; a task e dona do pacote do
-      compilador justamente para poder acertar catalogo, contagem e suite no mesmo diff.
-    dependencies: [U01]
-    touches:
-      - packages/compiler/src/
-      - apps/cli/src/templates.ts
-      - apps/cli/src/commands/init.test.ts
-      - docs/architecture/ARCHITECTURE.md
-    validation:
-      - Projeto que so tem fornecedor de teste como segundo revisor recebe aviso na compilacao
-      - O template gerado por init deixa de declarar papel de revisor ao fornecedor de teste
-      - O projeto gerado por init continua compilando a missao de exemplo sem ERROR
-      - O diagnostico novo esta no catalogo, na contagem e na documentacao de arquitetura
-      - Nenhum diagnostico existente mudou de codigo ou de severidade
-    gate: unit
-    risk: medium
-    estimate: 4
-
-  - id: U13
-    phase: verificacao
-    title: Regressoes do launcher e da instalacao
-    objective: >
-      Travar por teste as duas regressoes ja conhecidas: o launcher precisa usar o diretorio
-      atual como projeto-alvo, e o projeto-alvo nao precisa conter o codigo do produto para
-      ter dashboard.
-    dependencies: [U02]
-    touches:
-      - tests/e2e/
-      - tests/clean-start/
-    validation:
-      - Rodar o launcher em outro diretorio nao abre o repositorio do produto
-      - Projeto-alvo sem apps/web e sem packages/orchestrator recebe dashboard da instalacao
-      - O teste falha de verdade se a regressao voltar
-      - Nenhuma dessas suites consome quota de assinatura
-    gate: unit
-    risk: medium
-    estimate: 4
-
   - id: U06
     phase: planejamento
     title: Planejamento no control plane com reparo limitado
@@ -308,26 +236,6 @@ tasks:
     reviewPolicy: cross-provider-required
     estimate: 7
 
-  - id: U07
-    phase: planejamento
-    title: Configuracao do projeto pelo control plane
-    objective: >
-      Permitir que um projeto sem `.agentic/` seja configurado a partir da interface, com
-      previa do que sera escrito e sem sobrescrever arquivo existente.
-    dependencies: [U03, U06]
-    touches:
-      - apps/server/src/routes/onboarding.ts
-      - apps/server/src/routes/onboarding.test.ts
-      - apps/server/src/server.ts
-    validation:
-      - A previa mostra o conteudo antes de qualquer escrita
-      - Arquivo ja existente e preservado, nunca sobrescrito
-      - O projeto configurado passa a ser reconhecido sem reiniciar o control plane
-      - A configuracao gerada nao declara o fornecedor de teste como revisor
-    gate: unit
-    risk: medium
-    estimate: 4
-
   - id: U08
     phase: interface
     title: Home do projeto no dashboard
@@ -353,26 +261,6 @@ tasks:
     risk: high
     estimate: 7
 
-  - id: U09
-    phase: interface
-    title: Onboarding visual do projeto nao configurado
-    objective: >
-      Trocar o erro tecnico de projeto sem `.agentic/` por uma tela que mostra ambiente,
-      stack detectada, gates sugeridos e fornecedores, e que so escreve depois de confirmacao
-      humana.
-    dependencies: [U07, U08]
-    touches:
-      - apps/web/src/
-    validation:
-      - Projeto sem configuracao abre onboarding em vez de erro tecnico
-      - Gates sugeridos sao apresentados para confirmar ou editar, nunca aplicados sozinhos
-      - Fornecedor real e fornecedor de teste aparecem separados
-      - Ausencia de CLI vira orientacao, nunca tentativa de instalar
-      - A tela nova respeita foco visivel, rotulo acessivel e nao depende de cor
-    gate: web
-    risk: medium
-    estimate: 6
-
   - id: U10
     phase: interface
     title: Nova missao por linguagem natural
@@ -380,7 +268,7 @@ tasks:
       Levar o usuario de um texto livre ate um rascunho compilado desenhado como DAG, sem
       que ele peca validacao nem compilacao e sabendo antes que a acao aciona fornecedor
       real.
-    dependencies: [U06, U08, U09]
+    dependencies: [U06, U08]
     touches:
       - apps/web/src/
     validation:
@@ -416,100 +304,8 @@ tasks:
       - Clique duplo em aprovar e executar nao cria dois runs
       - Depois de aprovar, a tela vai sozinha para o DAG vivo
       - A tela nova respeita foco visivel, rotulo acessivel e nao depende de cor
-    gate: web
+    gate: mission
     risk: high
     estimate: 6
-
-  - id: U11
-    phase: verificacao
-    title: Aceitacao da jornada nova em navegador de verdade
-    objective: >
-      Exercitar em Chromium real, contra backend real e com planejador deterministico, os
-      cenarios que definem a jornada: projeto configurado, projeto sem configuracao, ausencia
-      de run e de missao, criacao de missao ate o DAG, e refresh preservando contexto.
-    dependencies: [U16]
-    touches:
-      - tests/browser/
-    validation:
-      - Projeto configurado chega a Home com missoes listadas
-      - Projeto sem `.agentic/` chega ao onboarding
-      - Sem run e sem missao nenhuma tela fica em carregamento indefinido
-      - Texto livre chega a rascunho, DAG, aprovacao e run com planejador deterministico
-      - Refresh preserva o contexto da tela
-      - Console do navegador limpo no caminho feliz
-      - Nenhum cenario consome quota de assinatura
-    gate: unit
-    risk: high
-    estimate: 7
-
-  - id: U17
-    phase: verificacao
-    title: Smoke de planejamento com fornecedor real
-    objective: >
-      Provar pela interface, uma unica vez e com fornecedor real, que o planejamento produz
-      uma missao rascunho compilada, e registrar a saida observada — sem implementar a
-      melhoria proposta e sem executar o plano gerado.
-    description: >
-      A suite automatizada exercita o planejador com CLI falsa, e CLI falsa ja escondeu
-      defeito real neste repositorio antes: o modo de permissao de escrita so apareceu quando
-      um smoke com CLI de verdade mostrou o agente recusando gravar. Este smoke fecha essa
-      lacuna. Teto rigido de 2 invocacoes reais. Termina no rascunho compilado; o rascunho
-      pode ser descartado depois. Nao entra em nenhuma suite automatizada, para nao violar a
-      constraint de que teste nunca consome assinatura.
-    dependencies: [U16]
-    touches:
-      - docs/missions/DA-UX-001-planner-smoke.md
-    validation:
-      - O smoke roda pela interface, nao por chamada interna nem por edicao de YAML
-      - No maximo 2 invocacoes reais do planejador, com o numero efetivo registrado
-      - Termina em rascunho compilado; nada e aprovado nem executado
-      - A saida do fornecedor esta transcrita como foi observada, nao parafraseada
-      - Depois do smoke o repositorio nao tem arquivo alterado alem do artefato da missao
-      - Nenhuma suite automatizada passou a consumir assinatura
-    gate: unit
-    risk: medium
-    estimate: 3
-
-  - id: U14
-    phase: aceitacao
-    title: Quickstart e documentacao da jornada nova
-    objective: >
-      Reescrever o caminho de entrada do produto em torno de instalar uma vez, entrar no
-      projeto e rodar `agentic`, com todo comando publicado executado antes de publicar, e
-      preservando o modo avancado como modo avancado.
-    dependencies: [U11, U13]
-    touches:
-      - docs/product/QUICKSTART.md
-      - docs/product/TROUBLESHOOTING.md
-      - README.md
-      - CLAUDE.md
-    validation:
-      - Todo comando publicado foi executado e a saida conferida antes de publicar
-      - A jornada principal aparece antes do modo avancado, nao depois
-      - O guia de problemas so contem caso realmente observado
-      - Nenhuma promessa de distribuicao que ainda nao existe
-    gate: unit
-    risk: low
-    estimate: 4
-
-  - id: U15
-    phase: aceitacao
-    title: Aceitacao de produto e veredito
-    objective: >
-      Medir a jornada nova como usuario, contar as interacoes ate o DAG de uma missao nova,
-      atualizar a matriz de prontidao preservando o historico e fechar o Mission Gate com
-      evidencia apontada.
-    dependencies: [U12, U14, U17]
-    touches:
-      - docs/missions/DA-UX-001-report.md
-      - docs/product/PRODUCT-READINESS.md
-    validation:
-      - O numero de interacoes ate o DAG foi contado de verdade, nao estimado
-      - A matriz mostra a evolucao entre missoes, sem apagar o estado anterior
-      - Cada item do veredito aponta evidencia observada
-      - build, verify, test:e2e e test:browser passam
-    gate: mission
-    risk: medium
-    estimate: 4
 
 missionGate: mission
