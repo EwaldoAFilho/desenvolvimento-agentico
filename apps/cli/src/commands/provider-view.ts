@@ -1,40 +1,25 @@
-import type { ProviderDiagnosticDto, ProviderHealthDto, Tristate } from '@agentic/schemas'
+import {
+  PROVIDER_STATES,
+  type ProviderDiagnosticDto,
+  type ProviderHealthDto,
+  type ProviderState,
+  providerStateOf,
+  type Tristate,
+  UNKNOWN,
+} from '@agentic/schemas'
 import { pad, tristate } from '../output.js'
 import { sanitize } from '../redact.js'
 
 /**
- * Os cinco estados de um fornecedor. Existem porque `installed` e `ready` sozinhos deixam
- * o operador adivinhando: "nao instalado" e "instalado, prontidao nao apurada" tem
- * conserto diferente, e `unknown` nao e nenhum dos dois (ADR-0010, DASHBOARD 5.1).
- */
-export const PROVIDER_STATES = [
-  'READY',
-  'NOT_READY',
-  'INSTALLED',
-  'NOT_INSTALLED',
-  'UNKNOWN',
-] as const
-
-export type ProviderState = (typeof PROVIDER_STATES)[number]
-
-export const UNKNOWN = 'unknown'
-
-/**
- * Total e sem ambiguidade:
+ * Os cinco estados e a derivacao moraram aqui ate o dashboard precisar dos mesmos cinco.
+ * Agora vivem no contrato (`@agentic/schemas`), o unico pacote que terminal e navegador
+ * compartilham — duas derivacoes com a mesma intencao divergem, e a divergencia aparece como
+ * fornecedor verde de um lado e amarelo do outro (ADR-0013).
  *
- * - `NOT_INSTALLED` — nao ha executavel; nada mais importa ate isso mudar.
- * - `NOT_READY`     — existe (ou pode existir), mas a sonda de sessao REPROVOU.
- * - `UNKNOWN`       — a propria instalacao nao foi apurada.
- * - `READY`         — instalado e sonda de sessao aprovou.
- * - `INSTALLED`     — instalado, prontidao nao apurada. Nao e READY, e nao e falha.
+ * A reexportacao fica: o ponto de entrada da CLI ja publica estes nomes, e tirar um nome
+ * publicado para mover codigo seria quebrar contrato por conveniencia de arquivo.
  */
-export function providerStateOf(health: ProviderHealthDto): ProviderState {
-  if (health.installed === false) return 'NOT_INSTALLED'
-  if (health.ready === false) return 'NOT_READY'
-  if (health.installed === UNKNOWN) return 'UNKNOWN'
-  if (health.ready === true) return 'READY'
-  return 'INSTALLED'
-}
+export { PROVIDER_STATES, type ProviderState, providerStateOf, UNKNOWN }
 
 /**
  * O que o doctor mostra por fornecedor, ja saneado. `running` aceita `unknown`: quando o
