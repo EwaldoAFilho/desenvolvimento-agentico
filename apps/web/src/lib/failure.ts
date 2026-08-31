@@ -25,6 +25,18 @@ export interface GateReport {
   readonly commands: number
 }
 
+/**
+ * A evidencia mais recente da task: o ultimo `EvidenceRef` registrado e, quando nao ha
+ * nenhum, a ultima referencia de saida que os eventos citaram. `none` e resposta legitima —
+ * dizer "sem evidencia" e melhor do que apontar para um arquivo que ninguem gravou.
+ */
+export interface LatestEvidence {
+  readonly origin: 'evidence' | 'log' | 'none'
+  readonly label: string
+  readonly ref?: string
+  readonly digest?: string
+}
+
 export interface FailureView {
   readonly code: string
   readonly detail?: string
@@ -34,6 +46,7 @@ export interface FailureView {
   readonly gate: GateReport
   readonly retry: RetryAvailability
   readonly retryDetail: string
+  readonly evidence: LatestEvidence
 }
 
 function scopeVerdictOf(task: TaskDetail): ScopeVerdict {
@@ -45,7 +58,7 @@ function scopeVerdictOf(task: TaskDetail): ScopeVerdict {
  * O gate "chegou a rodar?" e questao de fato: quem responde e o evento `gate.started` do
  * run, com os resultados de comando como confirmacao.
  */
-function gateReportOf(task: TaskDetail): GateReport {
+export function gateReportOf(task: TaskDetail): GateReport {
   const started = task.events.some((event) => event.type === 'gate.started')
   const finished = task.events.some((event) => event.type === 'gate.finished')
   const commands = task.quality.commandResults.length
@@ -94,6 +107,22 @@ function retryOf(task: TaskDetail): { retry: RetryAvailability; retryDetail: str
   }
 }
 
+export function latestEvidenceOf(task: TaskDetail): LatestEvidence {
+  const evidence = task.facts.evidence[task.facts.evidence.length - 1]
+  if (evidence !== undefined) {
+    return {
+      origin: 'evidence',
+      label: `${evidence.kind} · ${evidence.sourceId}`,
+      ref: evidence.artifactPath,
+      digest: evidence.digest,
+    }
+  }
+  const refs = logRefsFromEvents(task.events)
+  const last = refs[refs.length - 1]
+  if (last !== undefined) return { origin: 'log', label: last.label, ref: last.ref }
+  return { origin: 'none', label: 'nenhuma evidência registrada para esta tentativa' }
+}
+
 export function failureViewOf(task: TaskDetail): FailureView | undefined {
   if (task.failure === undefined) return undefined
   const { retry, retryDetail } = retryOf(task)
@@ -106,11 +135,22 @@ export function failureViewOf(task: TaskDetail): FailureView | undefined {
     gate: gateReportOf(task),
     retry,
     retryDetail,
+    evidence: latestEvidenceOf(task),
   }
+}
+
+/** O tipo do bloqueio em portugues: `POLICY` sozinho nao diz a ninguem o que aconteceu. */
+export const BLOCKAGE_KIND_LABEL: Record<BlockageDto['kind'], string> = {
+  ARCHITECTURAL: 'decisão de arquitetura pendente',
+  DEPENDENCY: 'dependência que terminou mal',
+  POLICY: 'política do produto',
+  ATTEMPTS_EXHAUSTED: 'orçamento de tentativas esgotado',
+  EXTERNAL: 'causa externa ao run',
 }
 
 export interface BlockedView {
   readonly kind: BlockageDto['kind']
+  readonly kindLabel: string
   readonly reason: string
   readonly needs: string
   readonly raisedBy: string
@@ -131,6 +171,7 @@ export function blockedViewOf(
   if (blockage === undefined) return undefined
   return {
     kind: blockage.kind,
+    kindLabel: BLOCKAGE_KIND_LABEL[blockage.kind],
     reason: blockage.reason,
     needs: blockage.needs,
     raisedBy: blockage.raisedBy,

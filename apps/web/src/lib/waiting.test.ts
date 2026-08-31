@@ -3,6 +3,7 @@ import {
   ATTEMPTS_EXHAUSTED_BLOCKAGE,
   CROSS_PROVIDER_BLOCKAGE,
   makeSnapshot,
+  POLICY_BLOCKAGE,
   withRunStatus,
   withSaturatedProviders,
   withTaskStatus,
@@ -87,9 +88,39 @@ describe('motivo de espera', () => {
     expect(reason?.needs).toBe('decisao humana sobre o formato do slot')
   })
 
-  it('READY com capacidade livre so aguarda o proximo despacho', () => {
+  it('READY com capacidade livre diz que esta pronta e aguarda vaga — sem inventar causa', () => {
     const reason = waitingReasonOf(makeSnapshot(), 'T12')
     expect(reason?.cause).toBe('dispatch')
+    expect(reason?.summary).toBe('pronta — aguardando vaga')
+    expect(reason?.needs).toBeUndefined()
+  })
+
+  it('aguardando revisor enquanto a task esta em REVIEW', () => {
+    const snapshot = withTaskStatus(makeSnapshot(), 'T12', { status: 'REVIEW' })
+    const reason = waitingReasonOf(snapshot, 'T12')
+    expect(reason?.cause).toBe('reviewer')
+    expect(reason?.summary).toBe('aguardando revisor')
+    expect(reason?.detail).toContain('revisor ≠ executor')
+    expect(reason?.needs).toBe('veredito do revisor')
+  })
+
+  it('bloqueio de politica que nao e revisao cruzada diz que a politica barrou', () => {
+    const snapshot = withTaskStatus(makeSnapshot(), 'T12', {
+      status: 'BLOCKED',
+      blockage: POLICY_BLOCKAGE,
+    })
+    const reason = waitingReasonOf(snapshot, 'T12')
+    expect(reason?.cause).toBe('policy')
+    expect(reason?.summary).toBe('bloqueada por política')
+    expect(reason?.detail).toContain('DENY_PATH')
+    expect(reason?.needs).toBe('corrigir os touches da task no YAML da missao')
+  })
+
+  it('RUNNING, VERIFYING e INTEGRATING nunca contam como espera — ha trabalho em curso', () => {
+    for (const status of ['RUNNING', 'VERIFYING', 'INTEGRATING'] as const) {
+      const snapshot = withTaskStatus(makeSnapshot(), 'T12', { status })
+      expect(waitingReasonOf(snapshot, 'T12')).toBeUndefined()
+    }
   })
 
   it('limite de paralelismo do run e espera de vaga, nao de fornecedor', () => {
@@ -115,7 +146,7 @@ describe('motivo de espera', () => {
     expect(reasons.has('T09')).toBe(false)
     expect(reasons.has('T01')).toBe(false)
     for (const task of snapshot.tasks) {
-      const waiting = ['PENDING', 'READY', 'RETRY', 'BLOCKED'].includes(task.status)
+      const waiting = ['PENDING', 'READY', 'RETRY', 'BLOCKED', 'REVIEW'].includes(task.status)
       expect(reasons.has(task.id)).toBe(waiting)
     }
   })

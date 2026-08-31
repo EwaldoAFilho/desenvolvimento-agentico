@@ -148,7 +148,7 @@ describe('rajada de eventos SSE no dashboard', () => {
     })
 
     expect(screen.getByTestId('task-node-T11').getAttribute('data-status')).toBe('READY')
-    expect(screen.getByTestId('waiting-cause').textContent).toBe('aguardando despacho')
+    expect(screen.getByTestId('waiting-cause').textContent).toBe('pronta — aguardando vaga')
   })
 
   it('o no parado mostra o motivo em vez de so o estado', async () => {

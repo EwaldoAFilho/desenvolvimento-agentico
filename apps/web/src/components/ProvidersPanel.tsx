@@ -80,7 +80,7 @@ function EnvironmentRow({
 }): JSX.Element {
   return (
     <tr className="providers__env" data-testid={`provider-${provider.providerId}-env`}>
-      <td colSpan={5}>
+      <td colSpan={compact ? 5 : 6}>
         {compact || provider.resolvedPath === undefined ? null : (
           <span className="providers__env-item" data-tone={unknownableTone(provider.resolvedPath)}>
             <span className="providers__env-label">resolvedPath</span>
@@ -128,6 +128,7 @@ export function ProvidersPanel({ providers, compact = false }: ProvidersPanelPro
             <th scope="col">ready</th>
             <th scope="col">version</th>
             <th scope="col">running/capacity</th>
+            {compact ? null : <th scope="col">razão da prontidão</th>}
           </tr>
         </thead>
         {providers.map((provider) => (
@@ -149,6 +150,14 @@ export function ProvidersPanel({ providers, compact = false }: ProvidersPanelPro
                 </span>
                 <span>{slots(provider)}</span>
               </td>
+              {/* `detail` explica o `unknown`: "CLI nao expoe estado de autenticacao" nao e defeito. */}
+              {compact ? null : (
+                <td className="providers__reason">
+                  <span data-testid={`provider-${provider.providerId}-reason`}>
+                    {provider.detail.length === 0 ? '—' : provider.detail}
+                  </span>
+                </td>
+              )}
             </tr>
             {hasEnvironment(provider, compact) ? (
               <EnvironmentRow provider={provider} compact={compact} />

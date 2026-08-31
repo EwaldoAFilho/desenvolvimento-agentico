@@ -9,7 +9,9 @@ import { isDependencySatisfied, type RunStatus, type TaskStatus } from './status
  */
 export type WaitingCause =
   | 'dependencies'
+  | 'reviewer'
   | 'cross-provider-review'
+  | 'policy'
   | 'provider-capacity'
   | 'run-capacity'
   | 'mission-approval'
@@ -36,11 +38,18 @@ export interface WaitingReason {
   readonly needs?: string
 }
 
+/**
+ * Estados em que a task **depende de outra coisa para andar**. `REVIEW` entra porque quem
+ * espera ali e a task: o executor terminou e o veredito do revisor e que decide o proximo
+ * estado. `RUNNING`, `VERIFYING` e `INTEGRATING` ficam de fora — nesses ha trabalho em curso
+ * medido pelo control plane, e chamar isso de espera seria mentir na tela.
+ */
 const WAITING_STATUSES: ReadonlySet<string> = new Set<TaskStatus>([
   'PENDING',
   'READY',
   'RETRY',
   'BLOCKED',
+  'REVIEW',
 ])
 
 export function isWaitingStatus(status: TaskStatus): boolean {
@@ -100,6 +109,14 @@ function fromBlockage(blockage: BlockageDto): WaitingReason {
       cause: 'attempts-exhausted',
       summary: 'aguardando decisão humana',
       detail: `orçamento de tentativas esgotado: ${blockage.reason}`,
+    }
+  }
+  if (blockage.kind === 'POLICY') {
+    return {
+      ...base,
+      cause: 'policy',
+      summary: 'bloqueada por política',
+      detail: `política de execução barrou esta task: ${blockage.reason}`,
     }
   }
   if (blockage.kind === 'DEPENDENCY') {
@@ -184,9 +201,10 @@ function whileReady(snapshot: RunSnapshot): WaitingReason {
       waitingOn: [],
     }
   }
+  // Nao da para saber mais do que isto sem inventar: a task esta pronta e aguarda vaga.
   return {
     cause: 'dispatch',
-    summary: 'aguardando despacho',
+    summary: 'pronta — aguardando vaga',
     detail: 'dependências satisfeitas e capacidade livre: entra no próximo tick do scheduler.',
     waitingOn: [],
   }
@@ -210,6 +228,19 @@ export function waitingReasonOfTask(
 
   if (task.blockage !== undefined && task.blockage.resolvedAt === undefined) {
     return fromBlockage(task.blockage)
+  }
+
+  // `REVIEW` nao espera capacidade nem dependencia: espera o veredito de outro agente (I3).
+  if (task.status === 'REVIEW') {
+    return {
+      cause: 'reviewer',
+      summary: 'aguardando revisor',
+      detail:
+        'revisor independente avaliando a evidência da tentativa — o veredito decide entre ' +
+        'INTEGRATING e FAILED (I3: revisor ≠ executor).',
+      waitingOn: [],
+      needs: 'veredito do revisor',
+    }
   }
 
   const pending = unsatisfiedDependencies(snapshot, task.id)
