@@ -21,7 +21,7 @@ import {
   providerId as toProviderId,
 } from '@agentic/domain'
 import { type GateProfiles, GateRunner, loadGateProfiles } from '@agentic/gates'
-import { openPersistence, type Persistence } from '@agentic/persistence'
+import { canonicalIfPresent, openPersistence, type Persistence } from '@agentic/persistence'
 import {
   createProviderRegistryFromProject,
   type MockScript,
@@ -100,12 +100,19 @@ export interface AdoptionResult {
 }
 
 /**
- * O que o control plane precisa saber da posse do projeto (I14): quem somos e se ainda
- * somos. Nada de adquirir ou soltar — isso e do processo que fez o boot. `ControlPlaneLease`
- * de `@agentic/persistence` satisfaz esta forma.
+ * O que o control plane precisa saber da posse do projeto (I14): quem somos, O QUE possuimos
+ * e se ainda possuimos. Nada de adquirir ou soltar — isso e do processo que fez o boot.
+ * `ControlPlaneLease` de `@agentic/persistence` satisfaz esta forma.
+ *
+ * `ownedDir` nao e informativo: e o que amarra a posse ao projeto. Sem ele, um lease legitimo
+ * de `/repo-A` autorizava um plane aberto sobre `/repo-B` — "ter algum lease" nao prova posse
+ * DESTE projeto, e o control plane de B disputaria a propria posse sem saber que ja havia
+ * outro escritor.
  */
 export interface OwnershipLease {
   readonly instanceId: string
+  /** Diretorio de estado que este lease protege — o `.agentic` canonico do projeto. */
+  readonly ownedDir: string
   readonly held: boolean
 }
 
@@ -169,7 +176,7 @@ export interface ControlPlane {
 }
 
 /**
- * O que um plane SEM posse pode chamar em cada store da persistencia.
+ * O que uma leitura pode chamar em cada store da persistencia.
  *
  * Recusar so na fachada (`plane.createRun`) nao bastava: `plane.persistence` e publico, e
  * `plane.persistence.runs.createRun(...)` chegava ao banco sem passar por guarda nenhuma.
@@ -177,10 +184,9 @@ export interface ControlPlane {
  * invariante nao pode depender.
  *
  * A lista e de LEITURAS, nao de escritas, e a inversao e o ponto. Uma lista de bloqueios
- * envelhece em silencio: `runs.commit` e `runs.withRecoveryTransaction` escrevem tanto
- * quanto `withTransaction` e passariam despercebidos: metodo novo entraria liberado por
- * omissao. Com allowlist, o default e RECUSA — a mesma regra que 003B aplicou a posse —, e
- * uma leitura nova esquecida falha alto, no teste, em vez de abrir um buraco calado.
+ * envelhece em silencio — `runs.commit` e `runs.withRecoveryTransaction` escrevem tanto
+ * quanto `withTransaction` e passariam por omissao. Com allowlist, o default e RECUSA, a
+ * mesma regra que 003B aplicou a posse; uma leitura nova esquecida falha alto, no teste.
  */
 const LEITURAS_DA_PERSISTENCIA = {
   runs: ['loadRun', 'listRuns', 'loadTaskRuns', 'loadAttempts', 'loadAttempt', 'listLocks'],
@@ -199,42 +205,78 @@ const LEITURAS_DA_PERSISTENCIA = {
 } as const satisfies Readonly<Record<string, readonly string[]>>
 
 /**
- * Espelho somente-leitura de um store: passa o que le, recusa todo o resto.
+ * As portas que entregam a CONEXAO crua, por onde qualquer SQL passa sem allowlist nenhuma.
+ *
+ * Bloquear so metodos deixava `plane.persistence.database.db.prepare('UPDATE runs ...')`
+ * — e o mesmo handle sai por `runs.db`, `events.db`, `artifacts.db` e `queries.db`. Um
+ * espelho que fecha os metodos e deixa a porta dos fundos aberta nao e somente-leitura: e
+ * uma afirmacao falsa, que e pior que a ausencia dela.
+ */
+const PORTAS_DA_CONEXAO = ['db'] as const
+const PORTA_DA_PERSISTENCIA = ['database'] as const
+
+interface RegrasDeAcesso {
+  /** Metodos permitidos sem posse. `undefined` = todos os metodos deste alvo sao leitura. */
+  readonly leituras?: readonly string[]
+  /** Propriedades que entregam a conexao crua: exigem posse, sempre. */
+  readonly handles: readonly string[]
+}
+
+/**
+ * Espelho que segue a posse EM TEMPO DE CHAMADA.
+ *
+ * Decidir na construcao era o defeito: o plane escolhia "persistencia inteira" porque havia
+ * lease, e continuava com ela depois de `lease.release()` — enquanto outro processo, ja dono
+ * legitimo, escrevia o mesmo banco. A fachada consultava `held` a cada chamada; a
+ * persistencia publica, nao. Agora as duas perguntam a mesma coisa, na mesma hora.
  *
  * `Proxy` em vez de copia porque os stores sao classes com campo privado (`#handle`): um
- * objeto derivado por `Object.create` perderia o `this` e quebraria na primeira leitura. O
- * `bind` no alvo mantem os metodos legitimos funcionando exatamente como antes; o que nao e
- * funcao (getters como `db` e `notifier`) passa direto, porque ler nao muda nada.
- *
- * Isto NAO e a fatia do modo `readonly` da conexao (D9, ainda em aberto): a conexao continua
- * `readwrite`. O que muda e a CAPACIDADE exposta — sem posse, nao ha por onde escrever.
+ * objeto derivado por `Object.create` perderia o `this` e quebraria na primeira leitura.
  */
-function somenteLeitura<T extends object>(store: T, leituras: readonly string[]): T {
-  return new Proxy(store, {
+function comPosse<T extends object>(
+  alvo: T,
+  regras: RegrasDeAcesso,
+  podeEscrever: () => boolean,
+): T {
+  const recusa = (acao: string): CommandRefusedError =>
+    new CommandRefusedError(`control plane sem posse do projeto: ${acao} recusado (I14)`)
+  return new Proxy(alvo, {
     get(target, prop, _receiver): unknown {
+      if (typeof prop === 'string' && regras.handles.includes(prop)) {
+        // Lancado, nao rejeitado: `database` e `db` sao propriedades, e devolver uma promessa
+        // aqui seria devolver um objeto que o chamador usaria como se fosse a conexao.
+        if (!podeEscrever()) throw recusa(`acesso a conexao por \`${prop}\``)
+        return Reflect.get(target, prop, target)
+      }
       const value: unknown = Reflect.get(target, prop, target)
       if (typeof value !== 'function') return value
-      if (typeof prop === 'string' && !leituras.includes(prop)) {
-        return (): Promise<never> =>
-          Promise.reject(
-            new CommandRefusedError(
-              `control plane aberto sem posse do projeto: ${prop} recusado (I14)`,
-            ),
-          )
-      }
-      return value.bind(target)
+      const leitura =
+        regras.leituras === undefined ||
+        (typeof prop === 'string' && regras.leituras.includes(prop))
+      if (leitura || podeEscrever()) return value.bind(target)
+      return (): Promise<never> => Promise.reject(recusa(String(prop)))
     },
   })
 }
 
-/** A persistencia como um plane SEM posse pode expo-la: le tudo, nao escreve nada. */
-function persistenciaDeLeitura(persistence: Persistence): Persistence {
-  return {
+/**
+ * A persistencia como o plane pode expo-la: escreve enquanto for dono, le sempre.
+ *
+ * Envolver TAMBEM o plane com posse e proposital — e o que faz a capacidade morrer junto com
+ * o lease, em vez de sobreviver a ele.
+ */
+function persistenciaSobPosse(persistence: Persistence, podeEscrever: () => boolean): Persistence {
+  const store = <T extends object>(alvo: T, leituras: readonly string[]): T =>
+    comPosse(alvo, { leituras, handles: PORTAS_DA_CONEXAO }, podeEscrever)
+  const espelho: Persistence = {
     ...persistence,
-    runs: somenteLeitura(persistence.runs, LEITURAS_DA_PERSISTENCIA.runs),
-    events: somenteLeitura(persistence.events, LEITURAS_DA_PERSISTENCIA.events),
-    artifacts: somenteLeitura(persistence.artifacts, LEITURAS_DA_PERSISTENCIA.artifacts),
+    runs: store(persistence.runs, LEITURAS_DA_PERSISTENCIA.runs),
+    events: store(persistence.events, LEITURAS_DA_PERSISTENCIA.events),
+    artifacts: store(persistence.artifacts, LEITURAS_DA_PERSISTENCIA.artifacts),
+    // `queries` so tem SELECT; o que precisa de guarda ali e a conexao crua.
+    queries: comPosse(persistence.queries, { handles: PORTAS_DA_CONEXAO }, podeEscrever),
   }
+  return comPosse(espelho, { handles: PORTA_DA_PERSISTENCIA }, podeEscrever)
 }
 
 /** Perfis declarados no projeto; sem declaracao, um por papel suportado pelo provider. */
@@ -290,13 +332,36 @@ interface RunWiring {
  */
 export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const repoRoot = resolve(config.repoRoot ?? config.project.project.repoRoot)
+  const baseDir = config.baseDir ?? resolve(repoRoot, '.agentic')
+  const lease = config.lease
+  /**
+   * O lease tem de proteger ESTE projeto, nao um qualquer.
+   *
+   * "Ter algum lease" nao e prova de posse: um lease legitimo de `/repo-A` autorizava um
+   * plane aberto sobre `/repo-B`, e ai o control plane de B — que disputou a posse de B
+   * corretamente — ganharia um segundo escritor sem nunca saber. A conferencia e por caminho
+   * REAL, a mesma da posse, entao alias e link simbolico continuam sendo o mesmo projeto.
+   */
+  if (lease !== undefined && canonicalIfPresent(lease.ownedDir) !== canonicalIfPresent(baseDir)) {
+    throw new CommandRefusedError(
+      `posse de ${lease.ownedDir} nao autoriza operar ${baseDir}: um lease vale para o ` +
+        'projeto que ele protege, e so para ele (I14)',
+    )
+  }
   const aberta = openPersistence({
-    baseDir: config.baseDir ?? resolve(repoRoot, '.agentic'),
+    baseDir,
     ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
   })
-  // Sem posse declarada, a ESCRITA nao e exposta — nem pela fachada, nem pela persistencia
-  // publica. Com posse, e a persistencia inteira: quem provou ser dono escreve.
-  const persistence = config.lease === undefined ? persistenciaDeLeitura(aberta) : aberta
+  /**
+   * A capacidade de escrever segue a posse EM TEMPO DE CHAMADA, e nao e escolhida aqui.
+   *
+   * Decidir na construcao deixava o plane com a persistencia inteira depois de
+   * `lease.release()` — enquanto outro processo, ja dono legitimo, escrevia o mesmo banco.
+   */
+  // `=== true` de proposito: `lease?.held` devolveria `undefined` sem lease, e um
+  // `undefined` circulando como "talvez" e a forma exata do defeito que esta fatia fechou.
+  const podeEscrever = (): boolean => lease?.held === true
+  const persistence = persistenciaSobPosse(aberta, podeEscrever)
   const clock = config.clock ?? systemClock()
   const ids = config.ids ?? ulidGenerator({ clock })
   const registry =
@@ -318,8 +383,6 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     clock,
     ids,
   }
-
-  const lease = config.lease
 
   /**
    * I14 na pratica: MUTAR exige posse DECLARADA e ainda VIVA.

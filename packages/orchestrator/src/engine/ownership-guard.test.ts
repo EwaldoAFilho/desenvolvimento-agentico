@@ -159,6 +159,21 @@ describe('plane sem posse declarada nao muta (I14)', () => {
     void compiled
   })
 
+  it('a conexao crua nao passa: nao ha porta dos fundos para SQL sem posse', async () => {
+    const { plane } = await cenario({ comPosse: false })
+
+    // Bloquear METODOS e deixar o handle aberto nao e somente-leitura: e uma afirmacao
+    // falsa. O mesmo handle sai por cinco portas, e todas precisam estar fechadas.
+    expect(() => plane.persistence.database).toThrow(/sem posse do projeto/i)
+    expect(() => plane.persistence.runs.db).toThrow(/sem posse do projeto/i)
+    expect(() => plane.persistence.events.db).toThrow(/sem posse do projeto/i)
+    expect(() => plane.persistence.artifacts.db).toThrow(/sem posse do projeto/i)
+    expect(() => plane.persistence.queries.db).toThrow(/sem posse do projeto/i)
+
+    // E as CONSULTAS continuam respondendo: e por elas que status e report existem.
+    expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
+  })
+
   it('a recusa acontece ANTES de escrever: nenhum run entra no banco', async () => {
     const { plane } = await cenario({ comPosse: false })
     const { spec, compiled } = missaoCompilada()
@@ -191,6 +206,56 @@ describe('plane COM posse continua funcionando', () => {
     expect(run.status).toBe('DRAFT')
     const aprovado = await plane.approveMission({ runId: run.id, actor: 'humano@teste' })
     expect(aprovado.status).toBe('APPROVED')
+  })
+
+  it('posse SOLTA revoga tambem a persistencia, nao so a fachada', async () => {
+    const aberto = await cenario({ comPosse: true })
+    const { spec, compiled } = missaoCompilada()
+    const run = await aberto.plane.createRun({ mission: spec, compiled, missionText: MISSION })
+
+    // Ate aqui e dono: escreve pela persistencia publica.
+    await aberto.plane.persistence.events.append({
+      runId: run.id,
+      ts: new Date('2026-01-01T00:00:00.000Z'),
+      type: 'run.created',
+      actor: { kind: 'human', id: 'teste' },
+      payload: {},
+    } as never)
+
+    // Devolveu o projeto. Dali em diante OUTRO processo pode ser o dono legitimo — e este
+    // plane nao pode continuar escrevendo o mesmo banco so porque ja teve posse um dia.
+    aberto.lease?.release()
+
+    await expect(
+      aberto.plane.persistence.events.append({ runId: run.id } as never),
+    ).rejects.toThrow(/sem posse do projeto/i)
+    await expect(
+      aberto.plane.persistence.runs.withTransaction(async () => undefined),
+    ).rejects.toThrow(/sem posse do projeto/i)
+    expect(() => aberto.plane.persistence.database).toThrow(/sem posse do projeto/i)
+    // Leitura continua: perder a posse tira o direito de escrever, nao o de olhar.
+    expect(await aberto.plane.persistence.runs.loadRun(run.id)).toBeDefined()
+  })
+
+  it('lease de OUTRO projeto nao autoriza este: o plane nem chega a abrir', async () => {
+    const dono = await cenario({ comPosse: true })
+    const alheio = await cenario({ comPosse: true })
+    const project = parseProjectFile(PROJECT)
+    if (!project.ok) throw new Error('fixture: project.yaml invalido')
+    const gates = parseGatesFile(GATES)
+    if (!gates.ok) throw new Error('fixture: gates.yaml invalido')
+
+    // Um lease legitimo — do projeto ERRADO. "Ter algum lease" nao prova posse deste
+    // projeto, e sem esta conferencia o dono legitimo ganharia um segundo escritor.
+    expect(() =>
+      createControlPlane({
+        project: project.value,
+        gatesFile: gates.value,
+        repoRoot: alheio.root,
+        baseDir: join(alheio.root, '.agentic'),
+        lease: dono.lease as never,
+      }),
+    ).toThrow(/nao autoriza operar/i)
   })
 
   it('posse SOLTA no meio do caminho volta a recusar', async () => {

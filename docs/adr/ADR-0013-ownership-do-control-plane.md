@@ -258,6 +258,23 @@ Três achados, todos legítimos, todos fechados na mesma fatia:
   `readonly` da conexão (D9, ainda em aberto): a conexão continua `readwrite`, o que muda é a
   capacidade exposta.
 
+### O que a segunda revisão independente cobrou
+
+Três achados, os três reais, os três fechados:
+
+- **O espelho somente-leitura tinha porta dos fundos.** Ele fechava métodos e deixava passar
+  qualquer valor que não fosse função — inclusive a conexão SQLite crua, alcançável por
+  `persistence.database`, `runs.db`, `events.db`, `artifacts.db` e `queries.db`. Um SQL
+  arbitrário passava sem allowlist e sem evento (I1). As cinco portas passam a exigir posse.
+- **A capacidade era decidida na construção e não morria com o lease.** Um plane aberto com
+  posse continuava com a persistência inteira depois de `release()` — enquanto outro processo,
+  já dono legítimo, escrevia o mesmo banco. A fachada consultava `held` a cada chamada; a
+  persistência, não. Agora as duas perguntam a mesma coisa, na mesma hora.
+- **O lease não estava amarrado ao projeto que protege.** `OwnershipLease` só dizia
+  `instanceId` e `held`, então uma posse legítima de `/repo-A` autorizava um plane aberto
+  sobre `/repo-B`. O lease passa a declarar `ownedDir`, e `createControlPlane` recusa a
+  construção quando ele não bate com o `baseDir` — por caminho real, como a própria posse.
+
 ### Limite que continua declarado
 
 `release()` marca a posse como perdida **antes** de tentar fechar a conexão. Se o `close`

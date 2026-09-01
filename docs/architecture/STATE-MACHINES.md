@@ -254,10 +254,14 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   `409 PROJECT_MISMATCH`. Sondar a identidade antes e mandar o comando depois deixaria a
   janela em que o dono encerra e outro control plane reaproveita a porta.
 
-  A posse morre com o processo, inclusive sob `SIGKILL` — não há lock stale para interpretar,
-  não há sonda de vivacidade e um `release()` que falhe não tranca o projeto. Por isso **o pid
-  não participa da autoridade**: ele é informação para o humano, e pid reutilizado por outro
-  programa não decide nada.
+  A posse morre com o processo, inclusive sob `SIGKILL` — não há lock stale para interpretar
+  e não há sonda de vivacidade. Por isso **o pid não participa da autoridade**: ele é
+  informação para o humano, e pid reutilizado por outro programa não decide nada.
+
+  Um `release()` que falhe ao fechar a conexão **não cria um segundo dono** (o plane perde a
+  autorização na hora, e nenhuma mutação passa com `held: false`), mas pode segurar o lock de
+  arquivo até o processo morrer — atrasando o *takeover*, nunca duplicando-o. É o limite
+  declarado em ADR-0013, e é a razão de a posse ser sempre de vida curta fora do `serve`.
 
   `control-plane.json` continua sendo **descoberta, não posse**. Ele diz onde falar com o
   dono; ausente, velho ou apagado, não cria um segundo. Os dois se ligam pelo `instanceId`, e
