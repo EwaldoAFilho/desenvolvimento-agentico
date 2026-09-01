@@ -144,6 +144,7 @@ export function fakePlane(partial: Partial<ControlPlane>): ControlPlane {
     getTaskDetail: missing('getTaskDetail') as never,
     generateMissionReport: missing('generateMissionReport') as never,
     open: missing('open') as never,
+    adoptRecoverableRuns: missing('adoptRecoverableRuns') as never,
     close: () => Promise.resolve(),
     ...partial,
   }

@@ -1,4 +1,4 @@
-import type { ControlPlane } from '@agentic/orchestrator'
+import type { AdoptionResult, ControlPlane } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { type BindAddress, loadProjectSources, resolveBind, type ServerConfig } from './config.js'
@@ -47,6 +47,11 @@ export interface RunningServer {
   /** Caminho do `control-plane.json` publicado, quando foi possivel grava-lo. */
   readonly runtimeFile?: string
   readonly runtime?: ControlPlaneRuntime
+  /**
+   * Quem ganhou dono no boot (I13). Presente so em `startServer`: `attachServer` publica
+   * sobre um plane que ja tem dono e adotar ali criaria um segundo.
+   */
+  readonly adoption?: AdoptionResult
   close(): Promise<void>
 }
 
@@ -152,11 +157,26 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
       ? {}
       : { publishRuntimeFile: config.publishRuntimeFile }),
   })
+  const close = async (): Promise<void> => {
+    await running.close()
+    await plane.close()
+  }
+
+  // READY e depois disto, nao antes: um run recuperavel sem dono e um run que o banco diz
+  // estar andando e que ninguem faz andar (I13). A adocao vem DEPOIS do `listen` de
+  // proposito — assim o dashboard ja atende enquanto os runs sao reassumidos, e uma
+  // reconciliacao demorada nao adia a porta. Falha aqui nao deixa meio servidor de pe.
+  let adoption: AdoptionResult
+  try {
+    adoption = await plane.adoptRecoverableRuns()
+  } catch (error) {
+    await close()
+    throw error
+  }
+
   return {
     ...running,
-    close: async (): Promise<void> => {
-      await running.close()
-      await plane.close()
-    },
+    adoption,
+    close,
   }
 }

@@ -22,7 +22,13 @@ export {
 } from './artifacts.js'
 export type { AssignmentContext, ReviewAssignmentContext } from './assignment.js'
 export { buildExecuteAssignment, buildReviewAssignment } from './assignment.js'
-export type { ControlPlane, ControlPlaneConfig } from './control-plane.js'
+export type {
+  AdoptionResult,
+  ControlPlane,
+  ControlPlaneConfig,
+  RunAdoption,
+  RunAdoptionRefusal,
+} from './control-plane.js'
 export { createControlPlane, DEFAULT_AGENT_ENV_ALLOW, profilesOf } from './control-plane.js'
 export {
   CommandRefusedError,

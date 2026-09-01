@@ -30,6 +30,7 @@ import {
   ensureBranch,
   removeWorktree,
   revParse,
+  worktreeAtPath,
   worktreeOnBranch,
 } from './repo.js'
 import {
@@ -225,6 +226,7 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     const mission = await ensureBranch(this.#repoRoot, branch, this.#config.missionBase ?? 'HEAD')
     const path = resolve(this.#worktreeRoot, request.runId, 'mission')
     const id = `${request.runId}/mission`
+    await this.#reclaimMissionWorktree(path)
     await this.#assertFreePath(path)
     await mkdir(dirname(path), { recursive: true })
     // O mission gate valida a ENTREGA INTEGRADA, que e um COMMIT — nao precisa da branch
@@ -269,6 +271,31 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
       setup,
     })
     return workspace
+  }
+
+  /**
+   * Devolve ao control plane a worktree do gate da missao que um reinicio deixou para tras.
+   *
+   * O caminho e fixo por run (`<worktreeRoot>/<runId>/mission`), e o `finally` que a
+   * liberaria nao roda quando o processo morre. Sem isto, adotar um run em `VERIFYING`
+   * bateria em `#assertFreePath` e — com I12 convertendo a falha em desfecho de gate — o
+   * run iria a FAILED por causa de um diretorio, nao de uma reprovacao.
+   *
+   * A remocao e estreita de proposito. So acontece quando o git DESTE repositorio reconhece
+   * aquele caminho exato como worktree sua: e a diferenca entre devolver o que e nosso e
+   * apagar arvore alheia. Diretorio que existe mas nao esta registrado nao e tocado — segue
+   * para `#assertFreePath`, que recusa a aquisicao em vez de destruir o que nao entendemos.
+   */
+  async #reclaimMissionWorktree(path: string): Promise<void> {
+    const existing = await stat(path).catch(() => null)
+    if (existing === null) return
+    const registered = await worktreeAtPath(this.#repoRoot, path)
+    if (registered === undefined) return
+    // A arvore principal nunca esta sob `worktreeRoot`; recusar explicitamente e barato e
+    // fecha a unica forma de esta remocao alcancar o repositorio orquestrado.
+    const main = await worktreeAtPath(this.#repoRoot, this.#repoRoot)
+    if (main !== undefined && main.path === registered.path) return
+    await removeWorktree(this.#repoRoot, path)
   }
 
   async #assertFreePath(path: string): Promise<void> {

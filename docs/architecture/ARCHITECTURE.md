@@ -300,6 +300,13 @@ o mesmo SHA: a mesma árvore, sem disputar o ref nem mexer em quem já o segura.
 livre, nada muda. Falhar em adquirir essa worktree é `WORKSPACE_ERROR` e **encerra o run**
 com razão observável (I12) — nunca deixa o run parado em `VERIFYING`.
 
+Uma worktree de gate deixada por um processo que morreu é devolvida na aquisição seguinte, e
+só ela: a remoção exige que o git **deste** repositório reconheça aquele caminho exato
+(`<worktreeRoot>/<runId>/mission`) como worktree sua. Diretório que ele não reconhece não é
+tocado — a aquisição é recusada em vez de destruir o que não entendemos. Sem essa devolução,
+adotar um run em `VERIFYING` depois de uma queda o levaria a `FAILED` por causa de um
+diretório, e não de uma reprovação.
+
 Ao final do run, a branch da missão fica pronta para PR. O control plane **não** faz push
 nem abre PR no MVP: operação externa é decisão humana (P15).
 

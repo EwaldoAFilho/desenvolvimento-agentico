@@ -51,6 +51,13 @@ governança.
 | I10 | `cross-provider-required` nunca é rebaixada em silêncio |
 | I11 | Todo processo de agente inicia com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
+| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** |
+
+I13 tem um limite que precisa ser dito em voz alta: ela vale **dentro de um processo**.
+Dois `agentic serve` sobre o mesmo projeto adotam o mesmo run e viram dois donos — o
+control plane único é premissa, não mecanismo. Fechar isso é a fatia
+`SINGLE CONTROL PLANE OWNERSHIP`; enquanto ela não existir, I13 não promete nada entre
+processos e o texto que disser o contrário está errado.
 
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**

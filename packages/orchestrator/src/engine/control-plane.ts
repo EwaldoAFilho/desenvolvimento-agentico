@@ -7,10 +7,14 @@ import {
   type Clock,
   type IdGenerator,
   type Integrator,
+  isRunId,
+  isRunStatus,
   type MissionSpec,
   type ProviderRegistry,
+  RECOVERABLE_ACTIVE_RUN_STATUSES,
   type Run,
   type RunId,
+  type RunStatus,
   type TaskId,
   agentProfileId as toAgentProfileId,
   providerId as toProviderId,
@@ -74,6 +78,26 @@ import type {
 /** Allowlist minima para o processo do agente. Nenhuma credencial e injetada (P17). */
 export const DEFAULT_AGENT_ENV_ALLOW = ['PATH', 'HOME', 'LANG', 'TERM', 'TMPDIR'] as const
 
+/** Um run que passou a ter dono nesta instancia (ou que ja tinha). */
+export interface RunAdoption {
+  readonly runId: RunId
+  readonly status: RunStatus
+  /** `true` = a instancia ja era dona; a chamada nao criou orquestrador nenhum (I13). */
+  readonly alreadyOwned: boolean
+}
+
+/** Run recuperavel que NAO ganhou dono, com o motivo — silencio aqui seria pior que a falha. */
+export interface RunAdoptionRefusal {
+  readonly runId: RunId
+  readonly status: RunStatus
+  readonly reason: string
+}
+
+export interface AdoptionResult {
+  readonly adopted: readonly RunAdoption[]
+  readonly refused: readonly RunAdoptionRefusal[]
+}
+
 export interface ControlPlaneConfig {
   readonly project: ProjectFile
   readonly gatesFile: GatesFile
@@ -118,6 +142,7 @@ export interface ControlPlane {
   getTaskDetail(runId: RunId, taskId: TaskId): Promise<TaskDetail>
   generateMissionReport(runId: RunId): Promise<MissionReport>
   open(runId: RunId): Promise<Orchestrator>
+  adoptRecoverableRuns(): Promise<AdoptionResult>
   close(): Promise<void>
 }
 
@@ -299,6 +324,47 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     return orchestrator
   }
 
+  /**
+   * I13: depois do boot, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem UM orquestrador
+   * vivo COM O LOOP LIGADO nesta instancia.
+   *
+   * `open` sozinho nao serve. Ele cria o dono, mas deixa `#autoTick` desligado: e por isso
+   * que hoje um `resume` depois de um reinicio despacha trabalho num tick unico e nunca
+   * colhe o resultado. Quem adota tem de ligar o loop — por isso `start()`.
+   *
+   * Nada e reexecutado as cegas: o primeiro tick comeca por `#reconcile`, que ENCERRA como
+   * `INTERRUPTED` o que ficou em voo em vez de retomar. O despacho so acontece depois,
+   * sobre estado ja limpo.
+   *
+   * Um run recuperavel que nao abre (MissionSpec ausente, worktree ocupada) nao derruba o
+   * boot nem os outros: vira recusa registrada. E isto protege UM processo — dois control
+   * planes sobre o mesmo projeto continuam sendo dois donos (D4, fora desta fatia).
+   */
+  const adoptRecoverableRuns = async (): Promise<AdoptionResult> => {
+    const adopted: RunAdoption[] = []
+    const refused: RunAdoptionRefusal[] = []
+    const rows = persistence.queries.listRuns({ status: [...RECOVERABLE_ACTIVE_RUN_STATUSES] })
+    for (const row of rows) {
+      if (!isRunId(row.id) || !isRunStatus(row.status)) continue
+      const runId = row.id
+      const status = row.status
+      // Lido ANTES de `open`, que e quem cria: depois da chamada todo run parece ja possuido.
+      const alreadyOwned = orchestrators.has(runId)
+      try {
+        const orchestrator = await open(runId)
+        orchestrator.start()
+        adopted.push({ runId, status, alreadyOwned })
+      } catch (error) {
+        refused.push({
+          runId,
+          status,
+          reason: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+    return { adopted, refused }
+  }
+
   return {
     persistence,
     registry,
@@ -322,6 +388,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     getTaskDetail: (runId, taskId) => getTaskDetail(deps, runId, taskId),
     generateMissionReport: (runId) => generateMissionReport(deps, runId),
     open,
+    adoptRecoverableRuns,
     close: async () => {
       for (const orchestrator of orchestrators.values()) await orchestrator.abandon()
       orchestrators.clear()

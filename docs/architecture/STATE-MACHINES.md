@@ -184,6 +184,29 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   "apurando fatos" com ninguém apurando — a mesma mentira que `claims` sem medição.
   Auditável com o control plane parado:
   `select id from runs where status='VERIFYING' and mission_gate_execution_id is null;`
+- **Liveness depois de um reinício (I13):** um estado persistido não faz nada sozinho —
+  quem faz um run andar é um `Orchestrator` com o loop ligado, e esse objeto morre com o
+  processo. Por isso o boot do control plane consulta o banco e readota:
+
+  `RECOVERABLE_ACTIVE_RUN_STATUSES = {RUNNING, PAUSED, BLOCKED, VERIFYING}`
+
+  A lista não é "todo estado não terminal". `DRAFT` e `APPROVED` esperam ato humano
+  registrado — aprovar (R2) e dar START MISSION (R3) — e dar dono a eles seria o control
+  plane decidindo por conta própria o que o produto exige de uma pessoa. Os quatro da lista
+  têm trabalho que só o loop faz: `RUNNING` despacha e colhe; `PAUSED` não despacha executor
+  mas ainda precisa encerrar a tentativa que ficou órfã; `BLOCKED` pode voltar a `RUNNING`
+  sozinho quando o impedimento sai (R7); `VERIFYING` tem o mission gate para executar.
+
+  Adotar **não** reexecuta efeito às cegas: o primeiro tick começa pela reconciliação, que
+  encerra como `INTERRUPTED` o que ficou em voo em vez de retomar; o despacho só vem depois,
+  sobre estado limpo. E reiniciar não é ato humano — nenhum `run.resumed` é fabricado por
+  causa de um boot.
+
+  I13 vale **por instância**. Dois control planes sobre o mesmo projeto adotam o mesmo run e
+  viram dois donos; a garantia entre processos depende da fatia
+  `SINGLE CONTROL PLANE OWNERSHIP`, ainda aberta. I12 depende de I13 para significar algo
+  depois de uma queda: sem dono, um run em `VERIFYING` satisfaz I12 vacuamente e mesmo assim
+  não sai do lugar.
 - `COMPLETED`: `∀ task: status ∈ {DONE, SKIPPED}` ∧ mission gate `PASS` ∧ branch da missão
   consolidada. Uma task `CANCELLED` impede `COMPLETED` — o run termina `FAILED` com razão
   explícita. Concluir uma entrega com pedaço cancelado seria mentir no relatório.
@@ -206,3 +229,4 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 | I10 | `cross-provider-required` nunca é rebaixada; `cross-provider-preferred` só rebaixa com `policyOutcome: downgraded` e evento correspondente |
 | I11 | Todo processo de agente é iniciado com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem execução de mission gate em voo **ou** resultado de gate persistido — nunca nenhum dos dois |
+| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem exatamente um orquestrador vivo, com o loop ligado, **naquela instância** |
