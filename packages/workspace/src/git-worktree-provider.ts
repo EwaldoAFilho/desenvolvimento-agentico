@@ -1,5 +1,5 @@
 import { mkdir, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve, sep } from 'node:path'
 import type {
   AttemptId,
   CommitRef,
@@ -13,6 +13,7 @@ import type {
 import type { AttemptObservation, WorkspaceScope } from './diff.js'
 import { WorkspaceError } from './errors.js'
 import { Mutex } from './lease.js'
+import { proveMissionOwnership, writeMissionOwner } from './mission-owner.js'
 import {
   attemptWorktreePath,
   DEFAULT_MISSION_BRANCH_PREFIX,
@@ -228,8 +229,14 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     const mission = await ensureBranch(this.#repoRoot, branch, this.#config.missionBase ?? 'HEAD')
     const path = resolve(this.#worktreeRoot, request.runId, 'mission')
     const id = `${request.runId}/mission`
-    await this.#reclaimMissionWorktree(id, path, branch, mission.sha)
-    await this.#assertFreePath(path)
+    // O `runId` chega como texto. Um id com `..` faria o caminho escapar do territorio do
+    // Agentic, e a devolucao — que e uma REMOCAO — passaria a alcancar arvore de terceiro.
+    // A checagem e barata e fecha isso antes de qualquer efeito.
+    this.#assertInsideWorktreeRoot(path)
+    const recusa = await this.#reclaimMissionWorktree(id, path, branch, mission.sha, request.runId)
+    // O caminho continuar ocupado sem que a posse tenha sido provada nao e um detalhe: e a
+    // unica coisa que o humano precisa saber para destravar o run.
+    await this.#assertFreePath(path, recusa)
     await mkdir(dirname(path), { recursive: true })
     // O mission gate valida a ENTREGA INTEGRADA, que e um COMMIT — nao precisa da branch
     // anexada. Quando alguem ja a tem em check-out (o proprio repositorio orquestrado, no
@@ -252,6 +259,10 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     } else {
       await addWorktreeDetached(this.#repoRoot, path, mission.sha, 'acquire')
     }
+    // A PROVA DE POSSE vem logo apos o `add`, antes de qualquer outro trabalho: e o que
+    // permite devolver esta arvore depois de uma queda. Escreve-la mais tarde alargaria a
+    // janela em que um crash deixa para tras uma worktree que nao conseguimos reivindicar.
+    await writeMissionOwner(path, { runId: request.runId, repoRoot: this.#repoRoot })
     // MEDIDO na arvore criada, nunca presumido do ref: entre ler o sha e criar a worktree
     // a branch pode ter andado, e `baseCommit` precisa ser o commit que o gate de fato viu.
     const baseCommit = await revParse(path, 'HEAD', 'acquire')
@@ -275,6 +286,17 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     return workspace
   }
 
+  /** O caminho da worktree tem de cair DENTRO do territorio do Agentic, sempre. */
+  #assertInsideWorktreeRoot(path: string): void {
+    const root = resolve(this.#worktreeRoot)
+    const alvo = resolve(path)
+    if (alvo !== root && !alvo.startsWith(`${root}${sep}`)) {
+      throw new WorkspaceError('acquire', 'caminho de worktree fora do worktreeRoot', {
+        detail: alvo,
+      })
+    }
+  }
+
   /**
    * Devolve ao control plane a worktree do gate da missao que um reinicio deixou para tras.
    *
@@ -283,53 +305,67 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
    * bateria em `#assertFreePath` e — com I12 convertendo a falha em desfecho de gate — o
    * run iria a FAILED por causa de um diretorio, nao de uma reprovacao.
    *
-   * A remocao e estreita de proposito. So acontece quando o git DESTE repositorio reconhece
-   * aquele caminho exato como worktree sua: e a diferenca entre devolver o que e nosso e
-   * apagar arvore alheia. Diretorio que existe mas nao esta registrado nao e tocado — segue
-   * para `#assertFreePath`, que recusa a aquisicao em vez de destruir o que nao entendemos.
+   * Devolver e REMOVER, entao a barra e prova, nao indicio. Caminho, branch, SHA e
+   * ancestralidade continuam sendo verificados, mas nenhum deles diz quem criou a arvore —
+   * todos podem ser reproduzidos por quem quiser. Quem decide e o marcador de posse que
+   * `#acquireMission` escreve: sem ele, ou com ele apontando para outro run ou outro
+   * repositorio, nada e removido e a recusa sobe com o motivo.
+   *
+   * Devolve `undefined` quando nao havia o que devolver ou a devolucao funcionou; devolve
+   * o motivo quando encontrou algo ali e decidiu NAO tocar.
    */
   async #reclaimMissionWorktree(
     id: string,
     path: string,
     branch: string,
     missionSha: string,
-  ): Promise<void> {
+    runId: string,
+  ): Promise<string | undefined> {
     // Lease vivo NESTE provider significa que a worktree esta em uso agora, aqui — nao e
     // rastro de processo morto. Devolve-la seria arrancar o chao de quem esta usando; a
     // recusa de `#assertFreePath` e a resposta certa para uso concorrente.
-    if (this.#leases.has(id)) return
+    if (this.#leases.has(id)) return 'a worktree esta em uso por este control plane agora'
     const existing = await stat(path).catch(() => null)
-    if (existing === null) return
+    if (existing === null) return undefined
     // Nao basta existir um diretorio ali: o git DESTE repositorio precisa reconhece-lo
     // como worktree sua. O que ele nao reconhece nao e nosso e nao e tocado.
     const registered = await worktreeAtPath(this.#repoRoot, path)
-    if (registered === undefined) return
+    if (registered === undefined) {
+      return 'o caminho existe mas o git deste repositorio nao o reconhece como worktree sua'
+    }
     // A arvore principal nunca esta sob `worktreeRoot`; recusar explicitamente e barato e
     // fecha a unica forma de esta remocao alcancar o repositorio orquestrado.
     const main = await worktreeAtPath(this.#repoRoot, this.#repoRoot)
-    if (main !== undefined && main.path === registered.path) return
-    // E precisa ser a worktree DO GATE, nao uma qualquer que calhou de ocupar o caminho.
-    // `#acquireMission` so cria de duas formas: anexada a branch da missao, ou detached
-    // sobre o commit dela. "Detached" sozinho nao prova nada — uma arvore solta em SHA
-    // arbitrario tambem e detached — entao o caso detached exige que o HEAD dela esteja na
-    // LINHA da missao. Nao comparamos com o sha de agora: a branch pode ter andado desde
-    // que aquela worktree nasceu, e exigir igualdade deixaria justamente as mais antigas
-    // sem devolucao, que e o defeito de origem.
+    if (main !== undefined && main.path === registered.path) {
+      return 'o caminho aponta para a arvore principal do repositorio'
+    }
+    // PROVA DE POSSE. E o unico sinal que um terceiro nao consegue produzir sem querer:
+    // ele existe porque NOS o escrevemos, naquela arvore, para aquele run.
+    const posse = await proveMissionOwnership(path, { runId, repoRoot: this.#repoRoot })
+    if (!posse.ok) return posse.reason
+    // Confirmacoes adicionais, agora que a posse esta provada: a arvore do gate nasce
+    // anexada a branch da missao ou detached sobre um commit da linha dela. Um marcador
+    // valido sobre uma arvore que nao e nenhuma das duas e incoerente — e diante de
+    // incoerencia a resposta continua sendo nao remover.
     const daBranch = registered.branch === branch
     const daLinha =
       registered.detached &&
       registered.head !== undefined &&
       (await isAncestor(this.#repoRoot, registered.head, missionSha))
-    if (!daBranch && !daLinha) return
+    if (!daBranch && !daLinha) {
+      return 'a worktree tem marcador de posse mas nao esta na branch nem na linha da missao'
+    }
     // Sem `rm -rf` de consolo: se o git recusar devolver, preferimos recusar a aquisicao a
     // apagar por conta propria algo que ele nao quis soltar.
-    await removeWorktreeStrict(this.#repoRoot, path)
+    const removida = await removeWorktreeStrict(this.#repoRoot, path)
+    return removida ? undefined : 'o git recusou devolver a worktree'
   }
 
-  async #assertFreePath(path: string): Promise<void> {
+  async #assertFreePath(path: string, reason?: string): Promise<void> {
     const existing = await stat(path).catch(() => null)
     if (existing !== null) {
-      throw new WorkspaceError('acquire', 'caminho de worktree ja existe', { detail: path })
+      const detail = reason === undefined ? path : `${path}: ${reason}`
+      throw new WorkspaceError('acquire', 'caminho de worktree ja existe', { detail })
     }
   }
 

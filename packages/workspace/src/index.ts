@@ -35,6 +35,16 @@ export { GitIntegrator } from './integrator.js'
 export type { BusyPolicy } from './lease.js'
 export { Mutex, WriteGate } from './lease.js'
 export {
+  MISSION_OWNER_FILE,
+  MISSION_OWNER_KIND,
+  MISSION_OWNER_VERSION,
+  type MissionOwnerMarker,
+  missionOwnerPath,
+  type OwnershipProof,
+  proveMissionOwnership,
+  writeMissionOwner,
+} from './mission-owner.js'
+export {
   attemptDirName,
   attemptWorktreePath,
   DEFAULT_MISSION_BRANCH_PREFIX,
