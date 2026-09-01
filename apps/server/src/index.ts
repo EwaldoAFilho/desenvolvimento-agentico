@@ -49,6 +49,8 @@ export {
   resolveMissionPath,
   warningsOf,
 } from './missions.js'
+export type { OwnershipStepInput } from './ownership.js'
+export { ControlPlaneBusyError, claimControlPlane } from './ownership.js'
 export { optionalInt } from './query.js'
 export type { CommandResult, StartRunResult } from './routes/commands.js'
 export { DEFAULT_ACTOR, registerCommandRoutes } from './routes/commands.js'

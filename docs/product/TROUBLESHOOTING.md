@@ -416,6 +416,48 @@ Depois disso, confirme que o `agentic` que você chama é o dessa instalação
 porta **real** em `.agentic/control-plane.json`, em vez da configurada — então
 `cat .agentic/control-plane.json` é a fonte confiável do endereço.
 
+### `agentic serve` diz que o control plane já está no ar
+
+**Sintoma.** O segundo terminal não sobe nada:
+
+```console
+$ agentic serve
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.
+```
+
+**Isto é o comportamento correto, não uma falha.** Um projeto tem **um** control plane owner
+(I14, ADR-0013). O segundo processo descobre o dono e termina com sucesso — abra o endereço
+informado, ou use `agentic mission start`, que entrega o START ao dono.
+
+A garantia é por projeto, não por porta:
+
+```console
+$ agentic serve --port 4401
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+este projeto ja tem dono: `--port` nao cria um segundo control plane.
+```
+
+Isso é deliberado. Antes, `--port` criava um segundo control plane sobre o **mesmo**
+`state.db`: os dois adotavam o mesmo run, disputavam a mesma worktree e o trabalho de um deles
+era descartado sem aviso.
+
+Projetos diferentes continuam podendo rodar ao mesmo tempo — a chave é o diretório do
+projeto, resolvido com `realpath` (então um link simbólico para o mesmo repositório também
+não cria um segundo dono).
+
+**Se o dono não existe mais.** Não existe lock a limpar: a posse morre com o processo,
+inclusive sob `kill -9` ou queda de energia. Se o `serve` insiste que há dono, existe um
+processo vivo — encontre-o pelo pid que a mensagem informa:
+
+```sh
+cat .agentic/control-plane.json     # endereco e pid do dono
+ps -p "$(node -e "console.log(require('./.agentic/control-plane.json').pid)")"
+```
+
+`.agentic/control-plane.lock.db` é um arquivo de zero byte e **não guarda estado nenhum** —
+apagá-lo não libera nada enquanto o dono vive, e não é o caminho para resolver problema algum.
+
 ---
 
 ## Missão e execução

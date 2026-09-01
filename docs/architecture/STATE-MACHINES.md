@@ -215,11 +215,34 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   Um gate cujos comandos tivessem efeito colateral externo quebraria essa premissa — é por
   isso que `gates.yaml` descreve verificação, e não trabalho.
 
-  I13 vale **por instância**. Dois control planes sobre o mesmo projeto adotam o mesmo run e
-  viram dois donos; a garantia entre processos depende da fatia
-  `SINGLE CONTROL PLANE OWNERSHIP`, ainda aberta. I12 depende de I13 para significar algo
-  depois de uma queda: sem dono, um run em `VERIFYING` satisfaz I12 vacuamente e mesmo assim
-  não sai do lugar.
+  I13 vale **por instância** — e é I14 que faz isso bastar. Sozinha, ela não dizia nada entre
+  processos: dois control planes sobre o mesmo projeto adotavam o mesmo run e viravam dois
+  donos, cada um convencido de ser o único. Com posse única por projeto, só existe uma
+  instância com direito a instâncias, e "naquela instância" passa a significar "naquele
+  projeto". I12 depende de I13 para significar algo depois de uma queda: sem dono, um run em
+  `VERIFYING` satisfaz I12 vacuamente e mesmo assim não sai do lugar.
+- **Posse do projeto (I14):** um estado persistido não pertence a quem chegar primeiro no
+  disco — pertence a quem detém a posse do projeto. Antes de abrir o banco em `readwrite`
+  (que já escreve: WAL e migrações), o control plane disputa uma transação `BEGIN EXCLUSIVE`
+  sobre `.agentic/control-plane.lock.db`, um banco dedicado e vazio cuja única função é o
+  lock de arquivo que o sistema operacional sustenta (ADR-0013).
+
+  Quem perde não vira cliente por educação: ele **não chega** às operações mutáveis. Não abre
+  banco, não publica porta, não adota run, não reconcilia e não despacha agente — sai com o
+  endereço do dono vivo no motivo.
+
+  A chave é `<repoRoot>/.agentic` canonicalizado, nunca a porta: `agentic serve --port N` no
+  mesmo projeto esbarra na mesma parede. Projetos diferentes têm donos independentes, que é
+  uso normal.
+
+  A posse morre com o processo, inclusive sob `SIGKILL` — não há lock stale para interpretar,
+  não há sonda de vivacidade e um `release()` que falhe não tranca o projeto. Por isso **o pid
+  não participa da autoridade**: ele é informação para o humano, e pid reutilizado por outro
+  programa não decide nada.
+
+  `control-plane.json` continua sendo **descoberta, não posse**. Ele diz onde falar com o
+  dono; ausente, velho ou apagado, não cria um segundo. Os dois se ligam pelo `instanceId`, e
+  é por ele que um processo em encerramento não apaga o registro de uma instância nova.
 - `COMPLETED`: `∀ task: status ∈ {DONE, SKIPPED}` ∧ mission gate `PASS` ∧ branch da missão
   consolidada. Uma task `CANCELLED` impede `COMPLETED` — o run termina `FAILED` com razão
   explícita. Concluir uma entrega com pedaço cancelado seria mentir no relatório.
@@ -243,3 +266,4 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 | I11 | Todo processo de agente é iniciado com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem execução de mission gate em voo **ou** resultado de gate persistido — nunca nenhum dos dois |
 | I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem exatamente um orquestrador vivo com o loop ligado **naquela instância** — ou uma recusa de adoção com motivo observável |
+| I14 | Para um `repoRoot` canônico existe no máximo **um** Control Plane Owner. Só ele abre `Orchestrator`, adota runs, reconcilia estado e despacha efeito; qualquer outro processo é cliente ou tem a inicialização recusada com o endereço do dono no motivo |

@@ -8,6 +8,19 @@ export {
   RUNS_DIRECTORY,
 } from './artifact-store.js'
 export {
+  type AcquireOwnershipOptions,
+  acquireControlPlaneOwnership,
+  CONTROL_PLANE_LOCK_FILE,
+  type ControlPlaneLease,
+  canonicalDir,
+  controlPlaneLockPath,
+  DEFAULT_LOCK_BUSY_TIMEOUT_MS,
+  newInstanceId,
+  OWNERSHIP_ALREADY_HELD,
+  type OwnershipOutcome,
+  type OwnershipRefused,
+} from './control-plane-lock.js'
+export {
   busyTimeout,
   type DatabaseHandle,
   type DatabaseMode,

@@ -60,6 +60,8 @@ export interface ServePlaneInput {
   readonly port?: number
   /** Onde gravar `control-plane.json`; e onde a CLI procura o control plane no ar. */
   readonly runtimeDir?: string
+  /** Identidade do dono: liga o registro de descoberta a posse que este processo detem. */
+  readonly instanceId?: string
 }
 
 /** Recorte de `RunningServer` de @agentic/server que a CLI realmente usa. */

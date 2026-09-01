@@ -52,12 +52,22 @@ governança.
 | I11 | Todo processo de agente inicia com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
 | I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** — ou recusa de adoção com motivo observável |
+| I14 | Para um `repoRoot` canônico existe **no máximo um** Control Plane Owner; qualquer outro processo é cliente ou tem a inicialização recusada |
 
-I13 tem um limite que precisa ser dito em voz alta: ela vale **dentro de um processo**.
-Dois `agentic serve` sobre o mesmo projeto adotam o mesmo run e viram dois donos — o
-control plane único é premissa, não mecanismo. Fechar isso é a fatia
-`SINGLE CONTROL PLANE OWNERSHIP`; enquanto ela não existir, I13 não promete nada entre
-processos e o texto que disser o contrário está errado.
+I13 vale dentro de um processo, e é I14 que faz isso bastar: a posse do projeto é disputada
+antes de abrir o banco, e quem perde não chega às operações mutáveis. O mecanismo é uma
+transação `BEGIN EXCLUSIVE` mantida sobre `.agentic/control-plane.lock.db` — um banco
+dedicado e vazio, cuja única função é o lock de arquivo do sistema operacional (ADR-0013).
+
+Três consequências que o código cobra:
+
+- **A chave é o projeto, nunca a porta.** `agentic serve --port N` no mesmo `repoRoot`
+  esbarra na mesma parede; projetos diferentes têm donos independentes.
+- **O pid não é autoridade.** A posse morre com o processo, inclusive sob `SIGKILL`, então
+  não há lock stale para interpretar nem sonda de vivacidade para acertar. `pid` é
+  diagnóstico; a identidade estável é o `instanceId`.
+- **`control-plane.json` é descoberta, não posse.** Ausente, velho ou apagado, ele nunca cria
+  um segundo dono.
 
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**

@@ -26,6 +26,7 @@ export type {
   AdoptionResult,
   ControlPlane,
   ControlPlaneConfig,
+  OwnershipLease,
   RunAdoption,
   RunAdoptionRefusal,
 } from './control-plane.js'

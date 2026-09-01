@@ -71,6 +71,8 @@ export interface ServerConfig {
   readonly runtimeDir?: string
   /** `false` desliga a publicacao do registro de descoberta. */
   readonly publishRuntimeFile?: boolean
+  /** Identidade deste control plane. Injetavel para o teste; por padrao, uma nova por boot. */
+  readonly instanceId?: string
 }
 
 export interface BindAddress {

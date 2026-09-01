@@ -1,27 +1,21 @@
-import { startServer } from '@agentic/server'
+import { ControlPlaneBusyError, startServer } from '@agentic/server'
 import { describe, expect, it } from 'vitest'
-import type { StepFn } from './support/agents.js'
-import { pass, review } from './support/agents.js'
-import { ENTREGAS } from './support/entregas.js'
 import { createMissionHarness } from './support/harness.js'
 
 /**
- * O LIMITE de I13, escrito como teste para nao virar nota de rodape esquecida.
+ * A garantia que faltava a I13, agora que I14 existe.
  *
- * A adocao garante UM dono por run DENTRO de uma instancia do control plane. Ela nao
- * garante nada entre processos: dois `agentic serve` sobre o mesmo projeto adotam o MESMO
- * run e viram dois donos, cada um convencido de ser o unico. Isto e D4 e continua aberto —
- * e agora e pior de propria conta, porque antes a duplicacao exigia um comando humano em
- * cada processo e agora acontece sozinha no boot.
+ * I13 diz que um run recuperavel tem exatamente um dono NAQUELA INSTANCIA. Sozinha, ela nao
+ * dizia nada entre processos: dois `agentic serve` sobre o mesmo projeto adotavam o mesmo run
+ * e viravam dois donos, cada um convencido de ser o unico — e a adocao automatica no boot
+ * fazia isso acontecer sem ninguem pedir.
  *
- * Este teste NAO conserta nada. Ele fixa a limitacao para que a proxima fatia a encontre
- * falhando de forma barulhenta quando o dono unico entre processos existir.
+ * Este arquivo nasceu fixando essa limitacao. Agora ele fixa o contrario: o segundo control
+ * plane sobre o mesmo projeto NAO sobe. A prova aqui e no MESMO processo de proposito — se a
+ * exclusividade dependesse de processos separados, ela dependeria do sistema operacional
+ * distinguir chamadores, e nao e isso que sustenta a posse. A prova entre processos de
+ * verdade esta em `control-plane-ownership.test.ts`.
  */
-
-const lento: StepFn = (context) => {
-  if (context.kind === 'review') return review('PASS')
-  return pass(`${context.taskId}: entrega lenta`, ENTREGAS[context.taskId] ?? {}, 60_000)
-}
 
 function comAgentesInProcess(projectText: string): string {
   const inicio = projectText.indexOf('  default: claude-code')
@@ -43,22 +37,13 @@ function comAgentesInProcess(projectText: string): string {
   return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
 }
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-
-describe('D4 — a adocao NAO tem garantia entre processos', () => {
-  it('dois control planes sobre o mesmo projeto adotam o MESMO run', async () => {
-    const h = await createMissionHarness({ step: lento, project: comAgentesInProcess })
+describe('I14 — a adocao tem dono unico tambem entre control planes', () => {
+  it('o segundo control plane sobre o mesmo projeto e recusado, e o primeiro segue dono', async () => {
+    const h = await createMissionHarness({ project: comAgentesInProcess })
     try {
       await h.start()
-      h.orchestrator.start()
-      const limite = Date.now() + 30_000
-      while ((await h.tasks()).every((task) => task.status !== 'RUNNING')) {
-        if (Date.now() > limite) throw new Error('nenhuma task chegou a RUNNING')
-        await sleep(20)
-      }
+      await h.plane.pauseRun(h.runId, { actor: 'humano@estoque-cli' })
+      // O processo do teste solta o banco: sobra um run recuperavel esperando um dono.
       await h.plane.close()
 
       const a = await startServer({
@@ -67,6 +52,35 @@ describe('D4 — a adocao NAO tem garantia entre processos', () => {
         publishRuntimeFile: false,
         webDist: h.root,
       })
+      try {
+        expect(a.adoption?.adopted.map((entry) => entry.runId)).toEqual([h.runId])
+        expect(a.lease?.held).toBe(true)
+
+        // Porta EFEMERA nos dois: nenhum EADDRINUSE participa desta recusa. O que barra o
+        // segundo e a posse do projeto, e a mensagem tem de dizer qual projeto.
+        const segundo = await startServer({
+          repoRoot: h.root,
+          port: 0,
+          publishRuntimeFile: false,
+          webDist: h.root,
+        }).then(
+          (running) => running,
+          (error: unknown) => error,
+        )
+
+        expect(segundo).toBeInstanceOf(ControlPlaneBusyError)
+        const recusa = segundo as ControlPlaneBusyError
+        expect(recusa.code).toBe('OWNERSHIP_ALREADY_HELD')
+        expect(recusa.ownedDir).toContain('.agentic')
+
+        // E o dono nao foi perturbado: continua com posse e com o run.
+        expect(a.lease?.held).toBe(true)
+        expect(a.plane.instanceId).toBe(a.lease?.instanceId)
+      } finally {
+        await a.close()
+      }
+
+      // Encerrado o dono, o projeto volta a estar disponivel — e o run e readotado.
       const b = await startServer({
         repoRoot: h.root,
         port: 0,
@@ -74,15 +88,10 @@ describe('D4 — a adocao NAO tem garantia entre processos', () => {
         webDist: h.root,
       })
       try {
-        // Nenhum dos dois foi recusado, e ambos assumiram o mesmo run: o dono e unico por
-        // INSTANCIA, nao por projeto. Enquanto isto passar, D4 esta aberto.
-        expect(a.adoption?.adopted.map((entry) => entry.runId)).toEqual([h.runId])
         expect(b.adoption?.adopted.map((entry) => entry.runId)).toEqual([h.runId])
-        expect(a.url).not.toBe(b.url)
-        expect(a.plane).not.toBe(b.plane)
+        expect(b.lease?.instanceId).toBeDefined()
       } finally {
         await b.close()
-        await a.close()
       }
     } finally {
       await h.cleanup().catch(() => undefined)

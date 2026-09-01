@@ -1,5 +1,6 @@
 import type { AdoptionResult, ControlPlane } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
+import type { ControlPlaneLease } from '@agentic/persistence'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { type BindAddress, loadProjectSources, resolveBind, type ServerConfig } from './config.js'
 import {
@@ -11,6 +12,7 @@ import {
 } from './control-plane-file.js'
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
+import { claimControlPlane } from './ownership.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
 import { registerReadRoutes } from './routes/read.js'
@@ -52,6 +54,11 @@ export interface RunningServer {
    * sobre um plane que ja tem dono e adotar ali criaria um segundo.
    */
   readonly adoption?: AdoptionResult
+  /**
+   * Posse do projeto (I14). Presente so em `startServer`, que e quem disputa: `attachServer`
+   * publica sobre um plane cuja posse ja foi resolvida por quem o abriu.
+   */
+  readonly lease?: ControlPlaneLease
   close(): Promise<void>
 }
 
@@ -64,6 +71,8 @@ export interface AttachServerInput extends ServerDepsInput {
   readonly runtimeDir?: string
   /** `false` desliga a publicacao do registro de descoberta. */
   readonly publishRuntimeFile?: boolean
+  /** Identidade do dono, para a descoberta apontar para a MESMA instancia que tem a posse. */
+  readonly instanceId?: string
 }
 
 /** Porta REAL do socket: com `port: 0` o valor pedido nao serve para ninguem se conectar. */
@@ -101,11 +110,16 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
 
   // Publicar o registro e conveniencia de descoberta, nao o produto: se o disco recusar,
   // a API continua no ar e a CLI cai no endereco declarado em `project.yaml`.
+  // Registro velho de um dono que morreu e sobrescrito aqui, sem cerimonia: quem chegou a
+  // este ponto tem a posse, entao o endereco antigo so pode estar errado (FASE 10).
   let runtime: ControlPlaneRuntime | undefined
   if (input.publishRuntimeFile !== false) {
-    runtime = await writeControlPlaneFile(runtimeDir, { host: address.host, port }).catch(
-      () => undefined,
-    )
+    runtime = await writeControlPlaneFile(runtimeDir, {
+      host: address.host,
+      port,
+      repoRoot: deps.repoRoot,
+      ...(input.instanceId === undefined ? {} : { instanceId: input.instanceId }),
+    }).catch(() => undefined)
   }
 
   return {
@@ -116,11 +130,20 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
     url: `http://${address.host}:${port}`,
     ...(runtime === undefined ? {} : { runtime, runtimeFile: controlPlaneFilePath(runtimeDir) }),
     close: async (): Promise<void> => {
-      // So apaga o registro se ele ainda for o NOSSO: outro processo pode ter subido depois.
-      if (runtime !== undefined) {
-        await removeControlPlaneFile(runtimeDir, { pid: runtime.pid, port: runtime.port })
-      }
+      // Fecha a porta ANTES de tirar o endereco do mapa: entre uma coisa e outra ninguem
+      // pode receber um comando que este processo ja nao vai executar.
       await app.close()
+      // So apaga o registro se ele ainda for o NOSSO. `instanceId` e a prova forte — pid e
+      // porta sao reaproveitados, e um processo em encerramento nao pode apagar o registro
+      // de uma instancia NOVA que subiu no lugar dele.
+      if (runtime !== undefined) {
+        await removeControlPlaneFile(
+          runtimeDir,
+          runtime.instanceId === undefined
+            ? { pid: runtime.pid, port: runtime.port }
+            : { instanceId: runtime.instanceId },
+        )
+      }
     },
   }
 }
@@ -128,19 +151,31 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
 /**
  * Control plane no ar SEM run ativo — e o que torna possivel dar START MISSION pelo
  * dashboard (ARCHITECTURE 4). O bind e loopback por padrao; sair dele exige flag.
+ *
+ * A ordem do boot nao e estilo, e a garantia (I14). A posse do projeto e disputada ANTES de
+ * `createControlPlane`, porque `createControlPlane` ja escreve: abre o banco em `readwrite`,
+ * liga WAL e roda as migracoes. Quem perde a disputa sai por `ControlPlaneBusyError` sem ter
+ * tocado em nada — sem banco, sem porta, sem descoberta, sem adocao.
  */
 export async function startServer(config: ServerConfig = {}): Promise<RunningServer> {
   const sources = await loadProjectSources(config)
   // Recusa de bind acontece ANTES de abrir banco: nada e criado por um endereco proibido.
   resolveBind(config, sources.project)
+  // Aqui, e so aqui, se decide quem manda neste projeto. `--port` nao participa.
+  const lease = await claimControlPlane({
+    repoRoot: sources.repoRoot,
+    ...(config.instanceId === undefined ? {} : { instanceId: config.instanceId }),
+  })
   const plane = createControlPlane({
     project: sources.project,
     gatesFile: sources.gatesFile,
     repoRoot: sources.repoRoot,
+    lease,
     ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
   })
   const running = await attachServer({
     plane,
+    instanceId: lease.instanceId,
     project: sources.project,
     projectText: sources.projectText,
     gatesText: sources.gatesText,
@@ -157,9 +192,16 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
       ? {}
       : { publishRuntimeFile: config.publishRuntimeFile }),
   })
+  // Ordem do encerramento, e ela tambem e garantia: para de atender, tira o endereco do
+  // mapa (so o NOSSO), abandona os orquestradores e SO ENTAO solta a posse. Soltar antes
+  // deixaria uma janela em que outro processo assume um projeto que ainda tem loop andando.
   const close = async (): Promise<void> => {
-    await running.close()
-    await plane.close()
+    try {
+      await running.close()
+      await plane.close()
+    } finally {
+      lease.release()
+    }
   }
 
   // READY e depois disto, nao antes: um run recuperavel sem dono e um run que o banco diz
@@ -177,6 +219,7 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
   return {
     ...running,
     adoption,
+    lease,
     close,
   }
 }

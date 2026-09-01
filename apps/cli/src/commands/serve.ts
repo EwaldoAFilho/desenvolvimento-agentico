@@ -1,7 +1,7 @@
 import { startServer } from '@agentic/server'
 import { loadProjectContext } from '../context.js'
 import type { CommandDeps } from '../deps.js'
-import { describeEndpoint, resolveEndpoint } from '../discovery.js'
+import { describeEndpoint, discoverRuntime, resolveEndpoint } from '../discovery.js'
 import { createOutput } from '../output.js'
 import { type CommandResult, failure, ok } from '../result.js'
 
@@ -14,7 +14,21 @@ export interface ServeArgs {
 export interface ServeData {
   readonly endpoint: string
   readonly running: boolean
+  /** `true` = este comando NAO subiu nada: ja havia dono e ele foi reaproveitado (I14). */
+  readonly reused?: boolean
   readonly reason?: string
+}
+
+/**
+ * A recusa por posse nao e falha: e a resposta certa. Reconhecida pelo codigo, nao pela
+ * classe, para que o teste possa injetar um `bootServer` que a simule sem montar servidor.
+ */
+function posseDeOutro(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { readonly code?: unknown }).code === 'OWNERSHIP_ALREADY_HELD'
+  )
 }
 
 /** Entrada equivalente publicada pelo proprio pacote do servidor. */
@@ -62,6 +76,22 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     await running.close()
     return ok('serve', { endpoint: running.url, running: true } satisfies ServeData)
   } catch (error) {
+    if (posseDeOutro(error)) {
+      // Este projeto ja tem dono. A descoberta e consultada SEM a flag de porta de proposito:
+      // `--port` diz onde ESTE processo queria atender, e o que interessa agora e onde o dono
+      // REAL esta. Foi exatamente por essa flag que dois control planes coexistiam (D4/D7).
+      const dono = await discoverRuntime(context)
+      const url = dono?.url ?? endpoint
+      out.line(`control plane ja no ar em ${url}${dono === undefined ? '' : ` (pid ${dono.pid})`}`)
+      if (args.port !== undefined) {
+        out.line('este projeto ja tem dono: `--port` nao cria um segundo control plane.')
+      }
+      if (dono === undefined) {
+        out.line('o dono ainda nao publicou o endereco; tente de novo em instantes.')
+      }
+      out.line('nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.')
+      return ok('serve', { endpoint: url, running: true, reused: true } satisfies ServeData)
+    }
     const reason = error instanceof Error ? error.message : String(error)
     out.line(`nao foi possivel subir o control plane em ${endpoint}`)
     out.line(reason)

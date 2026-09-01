@@ -99,6 +99,16 @@ export interface AdoptionResult {
   readonly refused: readonly RunAdoptionRefusal[]
 }
 
+/**
+ * O que o control plane precisa saber da posse do projeto (I14): quem somos e se ainda
+ * somos. Nada de adquirir ou soltar — isso e do processo que fez o boot. `ControlPlaneLease`
+ * de `@agentic/persistence` satisfaz esta forma.
+ */
+export interface OwnershipLease {
+  readonly instanceId: string
+  readonly held: boolean
+}
+
 export interface ControlPlaneConfig {
   readonly project: ProjectFile
   readonly gatesFile: GatesFile
@@ -118,10 +128,18 @@ export interface ControlPlaneConfig {
   /** Teto, redacao e espera do log do agente gravado por tentativa (ARCHITECTURE 6.1). */
   readonly agentLog?: AgentLogConfig
   readonly safetyIntervalMs?: number
+  /**
+   * Posse do projeto. Presente = este plane so age enquanto for o dono (I14). Ausente =
+   * plane sem posse: serve para ler e para teste, e NAO deve abrir orquestrador em producao.
+   * Quem sobe control plane de verdade (`startServer`, `mission start`) sempre passa uma.
+   */
+  readonly lease?: OwnershipLease
 }
 
 export interface ControlPlane {
   readonly persistence: Persistence
+  /** Identidade do dono, quando este plane tem posse. Liga a posse a descoberta. */
+  readonly instanceId?: string
   readonly registry: ProviderRegistry
   readonly gates: GateProfiles
   readonly clock: Clock
@@ -224,6 +242,22 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     registry,
     clock,
     ids,
+  }
+
+  const lease = config.lease
+
+  /**
+   * I14 na pratica: um plane que declarou posse nao age depois de perde-la.
+   *
+   * O perdedor da disputa nem chega aqui — `startServer` recusa antes de abrir banco. Esta
+   * guarda cobre o outro caso, mais silencioso: a posse foi solta (encerramento em curso,
+   * ordem de `close` trocada) e alguma rota ainda tenta abrir um dono. Agir sem posse e
+   * exatamente o defeito que D4 descreve, entao aqui ele vira recusa com motivo.
+   */
+  const exigirPosse = (acao: string): void => {
+    if (lease !== undefined && !lease.held) {
+      throw new CommandRefusedError(`control plane sem posse do projeto: ${acao} recusado (I14)`)
+    }
   }
 
   const orchestrators = new Map<string, Orchestrator>()
@@ -340,6 +374,11 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     if (closed) {
       return Promise.reject(new CommandRefusedError('control plane encerrado: nada a abrir'))
     }
+    try {
+      exigirPosse(`abrir orquestrador do run ${runId}`)
+    } catch (error) {
+      return Promise.reject(error)
+    }
     const existing = orchestrators.get(runId)
     if (existing !== undefined) return Promise.resolve(existing)
     const pending = opening.get(runId)
@@ -371,10 +410,13 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * repositorio (ver STATE-MACHINES, I13).
    *
    * Um run recuperavel que nao abre (MissionSpec ausente, worktree ocupada) nao derruba o
-   * boot nem os outros: vira recusa registrada. E isto protege UM processo — dois control
-   * planes sobre o mesmo projeto continuam sendo dois donos (D4, fora desta fatia).
+   * boot nem os outros: vira recusa registrada. Entre PROCESSOS, quem garante que so existe
+   * um adotante e a posse do projeto (I14): sem ela, esta funcao recusa.
    */
   const adoptRecoverableRuns = async (): Promise<AdoptionResult> => {
+    // Somente o dono adota. Dois processos adotando o mesmo run foi o dano medido em D4:
+    // duas worktrees no mesmo caminho e tentativas descartadas por transicao invalida.
+    exigirPosse('adotar runs recuperaveis')
     const adopted: RunAdoption[] = []
     const refused: RunAdoptionRefusal[] = []
     const rows = persistence.queries.listRuns({ status: [...RECOVERABLE_ACTIVE_RUN_STATUSES] })
@@ -413,6 +455,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
 
   return {
     persistence,
+    ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,
     gates,
     clock,

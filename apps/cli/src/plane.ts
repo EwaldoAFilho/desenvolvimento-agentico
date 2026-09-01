@@ -1,20 +1,30 @@
 import type { Run, RunId, TaskId } from '@agentic/domain'
 import { isRunId, isTaskId } from '@agentic/domain'
-import type { ControlPlane } from '@agentic/orchestrator'
+import type { ControlPlane, OwnershipLease } from '@agentic/orchestrator'
 import type { ProjectContext } from './context.js'
 import type { CommandDeps } from './deps.js'
 import { describeEndpoint, resolveEndpoint } from './discovery.js'
 import type { ControlPlaneLink } from './link.js'
 import { CliError, usageError } from './result.js'
 
-/** Abre o control plane local a partir do projeto ja validado. */
-export function openPlane(deps: CommandDeps, context: ProjectContext): ControlPlane {
+/**
+ * Abre o control plane local a partir do projeto ja validado.
+ *
+ * Com `lease`, o plane so age enquanto for o dono do projeto (I14) — e o que `mission start`
+ * usa quando orquestra em primeiro plano. Sem `lease`, e um plane sem posse: serve para ler.
+ */
+export function openPlane(
+  deps: CommandDeps,
+  context: ProjectContext,
+  lease?: OwnershipLease,
+): ControlPlane {
   return deps.controlPlane({
     project: context.project,
     gatesFile: context.gatesFile,
     repoRoot: context.repoRoot,
     baseDir: context.baseDir,
     registry: deps.registry(context.project),
+    ...(lease === undefined ? {} : { lease }),
   })
 }
 
@@ -23,8 +33,9 @@ export async function withPlane<T>(
   deps: CommandDeps,
   context: ProjectContext,
   work: (plane: ControlPlane) => Promise<T>,
+  lease?: OwnershipLease,
 ): Promise<T> {
-  const plane = openPlane(deps, context)
+  const plane = openPlane(deps, context, lease)
   try {
     return await work(plane)
   } finally {
