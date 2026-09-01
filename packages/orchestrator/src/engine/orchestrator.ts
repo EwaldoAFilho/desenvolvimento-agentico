@@ -87,6 +87,7 @@ import {
   denyScopes,
   FAILED_TRIGGER,
 } from './policy.js'
+import { redactLogText } from './redact.js'
 import type { EngineDeps } from './types.js'
 import { parseReview } from './verdict.js'
 
@@ -184,6 +185,33 @@ export interface DrainOptions {
   readonly maxTicks?: number
 }
 
+/** Teto do detalhe que entra na razao do run: diagnostico, nao despejo de log. */
+const MISSION_GATE_DETAIL_MAX = 300
+
+/**
+ * A mensagem do erro diz QUAL comando falhou; o `detail` que o adapter anexou diz POR QUE
+ * (a linha do `git`, por exemplo). Os dois so sao juntados aqui: mexer em
+ * `failureReasonOf` mudaria o detalhe de TODA falha do orquestrador, inclusive as que ja
+ * embutem o proprio detail na mensagem — e passaria a duplica-lo.
+ *
+ * Redigido e limitado de proposito: esta razao vai para `run.failed`, para o banco e para a
+ * UI, entao nao pode virar canal de vazamento de segredo nem despejo de stdout de setup.
+ */
+function missionGateFailureOf(error: unknown): FailureReason {
+  const failure = failureReasonOf(error, 'WORKSPACE_ERROR')
+  const raw =
+    typeof error === 'object' && error !== null
+      ? (error as { readonly detail?: unknown }).detail
+      : undefined
+  const base = failure.detail ?? ''
+  const joined =
+    typeof raw === 'string' && raw.length > 0 && !base.includes(raw) ? `${base}: ${raw}` : base
+  // Redige e limita o TEXTO INTEIRO: a mensagem tambem carrega o comando que falhou, e um
+  // `workspaceSetup` pode ter segredo na propria linha de comando.
+  const detail = redactLogText(joined).replace(/\s+/g, ' ').trim().slice(0, MISSION_GATE_DETAIL_MAX)
+  return { ...failure, detail }
+}
+
 /** Intervalo do timer de seguranca quando o chamador nao escolhe um (ARCHITECTURE 3.3). */
 export const DEFAULT_SAFETY_INTERVAL_MS = 1_000
 
@@ -209,7 +237,9 @@ export class Orchestrator {
   readonly #errors: unknown[] = []
   #inbox: Message[] = []
   #chain: Promise<void> = Promise.resolve()
-  #missionGate: { readonly status: GateStatus; readonly executionId?: string } | undefined
+  #missionGate:
+    | { readonly status: GateStatus; readonly executionId?: string; readonly detail?: string }
+    | undefined
   #missionGateStarted = false
   #grantsLoaded = false
   #status: RunStatus | undefined
@@ -965,6 +995,22 @@ export class Orchestrator {
     await this.#release(inflight, 'discard')
   }
 
+  /**
+   * Escrita do desfecho do mission gate. Se a transacao falhar, a trava de "ja despachei"
+   * TEM de cair junto: senao `#missionGate` fica indefinido, `#missionGateStarted` fica
+   * `true` e nenhum tick tenta de novo — o run ficaria em VERIFYING para sempre, que e
+   * exatamente o defeito que I12 proibe. Soltar a trava custa reexecutar o gate; nao
+   * soltar custa um run travado para sempre.
+   */
+  async #writeMissionGate(mutation: Mutation): Promise<void> {
+    try {
+      await this.#write(mutation)
+    } catch (error) {
+      this.#missionGateStarted = false
+      throw error
+    }
+  }
+
   async #onMissionGate(
     state: TickState,
     message: Extract<Message, { kind: 'mission-gate' }>,
@@ -972,8 +1018,11 @@ export class Orchestrator {
     const now = this.#deps.clock.now()
     const execution = message.execution
     if (execution === undefined) {
-      this.#missionGate = { status: 'ERROR' }
-      await this.#write({
+      // O detalhe da falha e a UNICA explicacao de por que o gate nao produziu execucao;
+      // ele sobe ate a razao de `run.failed` (I12), que persiste em `runs.failure_reason`.
+      const detail = message.failure?.detail
+      // Mesma ordem do caso com execucao: o fato primeiro, o cache em memoria depois.
+      await this.#writeMissionGate({
         events: [
           this.#event(
             now,
@@ -986,24 +1035,14 @@ export class Orchestrator {
           ),
         ],
       })
+      this.#missionGate = { status: 'ERROR', ...(detail === undefined ? {} : { detail }) }
       return
     }
-    this.#missionGate = { status: execution.status, executionId: execution.id }
-    // O relatorio final cita o gate da missao mesmo depois de o control plane reiniciar.
-    await this.#deps.artifacts
-      .write({
-        runId: this.#runId,
-        kind: 'mission-gate',
-        relativePath: MISSION_GATE_ARTIFACT,
-        content: JSON.stringify(execution, null, 2),
-      })
-      .catch((error: unknown) => {
-        this.#errors.push(error)
-        return undefined
-      })
     const run: Run = { ...state.run, missionGateExecutionId: execution.id }
-    state.run = run
-    await this.#write({
+    // O FATO primeiro. Se esta transacao falhar, `#missionGate` continua indefinido e o
+    // proximo tick reavalia: sem isso, um `#write` reprovado deixaria o cache em memoria
+    // dizendo PASS e o run poderia concluir citando uma GateExecution que nao existe (I1).
+    await this.#writeMissionGate({
       run,
       gate: execution,
       events: [
@@ -1027,6 +1066,21 @@ export class Orchestrator {
         ),
       ],
     })
+    this.#missionGate = { status: execution.status, executionId: execution.id }
+    state.run = run
+    // O relatorio final cita o gate da missao mesmo depois de o control plane reiniciar.
+    // Copia de conveniencia: a verdade ja esta na transacao acima.
+    await this.#deps.artifacts
+      .write({
+        runId: this.#runId,
+        kind: 'mission-gate',
+        relativePath: MISSION_GATE_ARTIFACT,
+        content: JSON.stringify(execution, null, 2),
+      })
+      .catch((error: unknown) => {
+        this.#errors.push(error)
+        return undefined
+      })
   }
 
   async #toIntegrating(
@@ -2040,6 +2094,12 @@ export class Orchestrator {
             execution: outcome.execution,
             failure: outcome.failure,
           })
+        } catch (error) {
+          // I12: adquirir a worktree da missao pode falhar (branch ja em check-out, disco,
+          // setup). Sem esta mensagem a excecao morreria em `#errors` — memoria que nada le
+          // — e, com `#missionGateStarted` ja travado, NENHUM tick tentaria de novo: o run
+          // ficaria em VERIFYING para sempre, afirmando que verifica sem nada verificando.
+          this.#push({ kind: 'mission-gate', failure: missionGateFailureOf(error) })
         } finally {
           if (workspace !== undefined && provider !== undefined) {
             await provider.release(workspace, 'discard').catch(() => undefined)
@@ -2101,7 +2161,11 @@ export class Orchestrator {
       return
     }
     // Task CANCELLED presente impede COMPLETED: o run termina FAILED com razao explicita.
-    const reason = completion.ok ? `mission gate terminou ${gate.status}` : completion.detail
+    const base = completion.ok ? `mission gate terminou ${gate.status}` : completion.detail
+    // `checkRunCompletion` so sabe dizer "mission gate esta ERROR". O motivo pelo qual ele
+    // nao chegou a executar vive no detalhe da falha — sem anexa-lo aqui, a unica copia
+    // ficaria no array em memoria que I12 existe para nao depender.
+    const reason = gate.detail === undefined ? base : `${base}: ${gate.detail}`
     const trigger: RunTrigger =
       gate.status === 'PASS' ? 'RUN_NOT_COMPLETABLE' : 'MISSION_GATE_FAILED'
     await this.#guard(() =>

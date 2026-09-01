@@ -23,7 +23,15 @@ import {
   taskBranchName,
 } from './naming.js'
 import { type AttemptCommit, commitWorkingTree, observeWorkingTree } from './ops.js'
-import { addWorktree, addWorktreeForBranch, ensureBranch, removeWorktree } from './repo.js'
+import {
+  addWorktree,
+  addWorktreeDetached,
+  addWorktreeForBranch,
+  ensureBranch,
+  removeWorktree,
+  revParse,
+  worktreeOnBranch,
+} from './repo.js'
 import {
   EMPTY_SETUP_RESULT,
   runWorkspaceSetup,
@@ -219,13 +227,38 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     const id = `${request.runId}/mission`
     await this.#assertFreePath(path)
     await mkdir(dirname(path), { recursive: true })
-    await addWorktreeForBranch(this.#repoRoot, path, branch, 'acquire')
+    // O mission gate valida a ENTREGA INTEGRADA, que e um COMMIT — nao precisa da branch
+    // anexada. Quando alguem ja a tem em check-out (o proprio repositorio orquestrado, no
+    // dogfooding), `git worktree add <path> <branch>` falha com exit 128; ai vamos de
+    // detach sobre o MESMO sha: mesma arvore, sem disputar o ref. Com a branch livre, nada
+    // muda — o gate continua rodando com HEAD nela.
+    let attached = (await worktreeOnBranch(this.#repoRoot, branch)) === undefined
+    if (attached) {
+      try {
+        await addWorktreeForBranch(this.#repoRoot, path, branch, 'acquire')
+      } catch (error) {
+        // Distingue colisao de branch de QUALQUER outra falha sem depender do texto do
+        // git: se agora alguem segura a branch, era a corrida; senao o erro e outro (disco,
+        // permissao, caminho ocupado) e sobe inalterado — cair para detached ali mascararia
+        // defeito, e apagar o caminho poderia destruir a worktree de outro processo.
+        if ((await worktreeOnBranch(this.#repoRoot, branch)) === undefined) throw error
+        attached = false
+        await addWorktreeDetached(this.#repoRoot, path, mission.sha, 'acquire')
+      }
+    } else {
+      await addWorktreeDetached(this.#repoRoot, path, mission.sha, 'acquire')
+    }
+    // MEDIDO na arvore criada, nunca presumido do ref: entre ler o sha e criar a worktree
+    // a branch pode ter andado, e `baseCommit` precisa ser o commit que o gate de fato viu.
+    const baseCommit = await revParse(path, 'HEAD', 'acquire')
     const workspace: Workspace = {
       id,
       kind: 'git-worktree',
       path,
-      branch,
-      baseCommit: mission.sha,
+      // Detached: HEAD nao esta em branch nenhuma e dizer que esta seria mentir sobre a
+      // arvore. O `baseCommit` continua sendo o fato que o gate julga.
+      ...(attached ? { branch } : {}),
+      baseCommit,
       leasedBy: request.attemptId,
     }
     const setup = await this.#setupOrCleanup(path)

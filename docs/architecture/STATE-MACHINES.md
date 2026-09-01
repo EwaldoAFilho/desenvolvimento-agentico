@@ -176,6 +176,14 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 - `BLOCKED` (derivado a cada tick): `∄ task ∈ {READY, RUNNING, VERIFYING, REVIEW,
   INTEGRATING, RETRY}` ∧ `∃ task ∈ {BLOCKED}`.
 - `VERIFYING`: `∀ task: status ∈ {DONE, SKIPPED, CANCELLED}` ∧ `∃ task: status = DONE`.
+- **Liveness de `VERIFYING` (I12):** entrar em `VERIFYING` obriga a despachar o mission
+  gate, e **todo** desfecho desse trabalho — inclusive falhar ao adquirir a worktree —
+  volta ao loop como mensagem e vira estado. Um run em `VERIFYING` sem gate em voo e sem
+  `GateExecution` de escopo `mission` persistida é **defeito do control plane**, não
+  espera: o run termina `FAILED` com a razão no event log. Sem isso o estado oficial diria
+  "apurando fatos" com ninguém apurando — a mesma mentira que `claims` sem medição.
+  Auditável com o control plane parado:
+  `select id from runs where status='VERIFYING' and mission_gate_execution_id is null;`
 - `COMPLETED`: `∀ task: status ∈ {DONE, SKIPPED}` ∧ mission gate `PASS` ∧ branch da missão
   consolidada. Uma task `CANCELLED` impede `COMPLETED` — o run termina `FAILED` com razão
   explícita. Concluir uma entrega com pedaço cancelado seria mentir no relatório.
@@ -197,3 +205,4 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 | I9 | Nenhum despacho excede `maxConcurrent` do provider escolhido |
 | I10 | `cross-provider-required` nunca é rebaixada; `cross-provider-preferred` só rebaixa com `policyOutcome: downgraded` e evento correspondente |
 | I11 | Todo processo de agente é iniciado com `cwd` na worktree da tentativa |
+| I12 | Run em `VERIFYING` tem execução de mission gate em voo **ou** resultado de gate persistido — nunca nenhum dos dois |

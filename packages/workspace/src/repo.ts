@@ -130,6 +130,20 @@ export async function addWorktreeForBranch(
   await git(['worktree', 'add', path, branch], { cwd, stage })
 }
 
+/**
+ * Worktree presa a um COMMIT, sem anexar branch. O git recusa duas worktrees na mesma
+ * branch; quando so precisamos LER a arvore de um commit — o caso do mission gate — o
+ * detach evita a colisao sem forcar nada nem mexer em quem ja segura a branch.
+ */
+export async function addWorktreeDetached(
+  cwd: string,
+  path: string,
+  commit: string,
+  stage: WorkspaceStage = 'acquire',
+): Promise<void> {
+  await git(['worktree', 'add', '--detach', path, commit], { cwd, stage })
+}
+
 /** Remocao tolerante: o disco precisa ficar limpo mesmo se o registro do git ja divergiu. */
 export async function removeWorktree(cwd: string, path: string): Promise<void> {
   const result = await git(['worktree', 'remove', '--force', path], { cwd, allowFailure: true })

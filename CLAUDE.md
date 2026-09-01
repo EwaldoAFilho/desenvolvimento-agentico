@@ -50,6 +50,7 @@ governança.
 | I9 | Nenhum despacho excede `maxConcurrent` do provider escolhido |
 | I10 | `cross-provider-required` nunca é rebaixada em silêncio |
 | I11 | Todo processo de agente inicia com `cwd` na worktree da tentativa |
+| I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
 
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**

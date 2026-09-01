@@ -293,6 +293,13 @@ e sua falha é `WORKSPACE_ERROR` — nunca confundida com falha de gate.
 O **mission gate** roda em uma worktree própria da branch `mission/<missionId>`, com o mesmo
 `workspaceSetup`: valida a entrega integrada, não a última tentativa.
 
+O que ele julga é um **commit**, não um ref. Quando a branch da missão já está em check-out
+em outra worktree — o caso normal quando o repositório orquestrado é o próprio projeto — o
+git recusa uma segunda worktree na mesma branch, e a aquisição passa a usar `--detach` sobre
+o mesmo SHA: a mesma árvore, sem disputar o ref nem mexer em quem já o segura. Com a branch
+livre, nada muda. Falhar em adquirir essa worktree é `WORKSPACE_ERROR` e **encerra o run**
+com razão observável (I12) — nunca deixa o run parado em `VERIFYING`.
+
 Ao final do run, a branch da missão fica pronta para PR. O control plane **não** faz push
 nem abre PR no MVP: operação externa é decisão humana (P15).
 
