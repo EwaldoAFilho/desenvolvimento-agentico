@@ -1,12 +1,24 @@
-import type { CompileReportDto, ProjectHomeDto, RunHeaderDto } from '@agentic/schemas'
+import type {
+  CompileReportDto,
+  MissionSummaryDto,
+  ProjectHomeDto,
+  RunHeaderDto,
+} from '@agentic/schemas'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeEmptyProjectHome, makeIdleProjectHome, makeProjectHome } from './__fixtures__/home.js'
-import { makePlanResult, REAL_PLANNER } from './__fixtures__/planning.js'
+import {
+  makeDraftResult,
+  makeDraftSnapshot,
+  makePlanResult,
+  makePlanTaskDetail,
+  REAL_PLANNER,
+} from './__fixtures__/planning.js'
 import { makeCompileReport, makeSnapshot, PROVIDERS } from './__fixtures__/snapshot.js'
 import { App, type AppDeps } from './App.js'
 import { ApiError, type PlanOutcome } from './api.js'
 import type { NewMissionDeps } from './components/NewMission.js'
+import type { PlanReviewDeps } from './components/PlanReview.js'
 import type { EventSourceLike, RunStreamDeps } from './hooks/useRunStream.js'
 import { installReactFlowEnv } from './test/react-flow-env.js'
 
@@ -20,11 +32,19 @@ const RUN_STREAM: RunStreamDeps = {
   createEventSource: () => SILENT_SOURCE,
 }
 
-function approvedRun(missionId: string): RunHeaderDto {
+/**
+ * O run precisa declarar QUAL versao do plano ele aprovou. Sem `specHash` a tela nao pode
+ * distinguir "esta missao ja foi aprovada" de "esta VERSAO do plano ja foi aprovada" — e um
+ * run antigo faria um YAML novo nascer aprovado.
+ */
+const REPORT_SPEC_HASH = 'sha256:limpo'
+
+function approvedRun(missionId: string, specHash = REPORT_SPEC_HASH): RunHeaderDto {
   return {
     id: '01J8ZC0X00000000000APPROVED',
     missionId,
     status: 'APPROVED',
+    specHash,
     timestamps: { createdAt: '2026-01-08T12:05:00.000Z' },
     policies: makeSnapshot().run.policies,
   }
@@ -47,6 +67,44 @@ const PLAN_DEPS: Partial<NewMissionDeps> = {
 
 function renderAppWithPlanning(deps: Partial<AppDeps> = {}) {
   return render(<App deps={deps} runStream={RUN_STREAM} newMission={PLAN_DEPS} />)
+}
+
+/** Revisao do plano sem servidor: o rascunho e congelado de mentira, e nada e executado. */
+const REVIEW_DEPS: Partial<PlanReviewDeps> = {
+  createDraft: async () => makeDraftResult(),
+  loadSnapshot: async () => makeDraftSnapshot(),
+  loadTaskDetail: async () => makePlanTaskDetail(),
+}
+
+const MISSION_FILE = '.agentic/missions/DA-BPM-021.mission.yaml'
+
+function missionSummary(missionId: string): MissionSummaryDto {
+  return {
+    id: missionId,
+    file: MISSION_FILE,
+    title: 'Refinar painel de propriedades',
+    state: 'DRAFT',
+    tasks: 17,
+    phases: 7,
+    errors: 0,
+    warnings: 0,
+  }
+}
+
+function renderMissionScreen(deps: Partial<AppDeps> = {}) {
+  return render(
+    <App
+      deps={{
+        loadCompileReport: async () => makeCompileReport('clean'),
+        loadProviders: async () => PROVIDERS,
+        loadRuns: async () => [],
+        loadMissions: async () => [missionSummary('DA-BPM-021')],
+        ...deps,
+      }}
+      runStream={RUN_STREAM}
+      planReview={REVIEW_DEPS}
+    />,
+  )
 }
 
 afterEach(() => {
@@ -300,6 +358,15 @@ describe('a tela de missao compilada continua', () => {
     expect(screen.getByTestId('mission-status').textContent).toContain('APPROVED')
   })
 
+  it('a revisão do plano abre junto da missão, com o caminho do YAML à vista', async () => {
+    goTo('?mission=DA-BPM-021')
+    renderMissionScreen()
+
+    await screen.findByRole('main', { name: 'Missão compilada' })
+    expect(await screen.findByRole('region', { name: 'Canvas do DAG' })).toBeTruthy()
+    expect((await screen.findByTestId('plan-file')).textContent).toBe(MISSION_FILE)
+  })
+
   it('a partida entrega a tela ao run e escreve o run na URL', async () => {
     goTo('?mission=DA-BPM-021')
     const start = vi.fn(async () => '01J8ZC0X0000000000000000AA')
@@ -317,5 +384,190 @@ describe('a tela de missao compilada continua', () => {
     expect(await screen.findByRole('region', { name: 'Canvas do DAG' })).toBeTruthy()
     await waitFor(() => expect(window.location.search).toContain('run='))
     expect(start).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('revisar, aprovar e executar num ato só', () => {
+  it('aprova antes de iniciar e a tela vai sozinha para o DAG vivo', async () => {
+    goTo('?mission=DA-BPM-021')
+    const ordem: string[] = []
+    const approve = vi.fn(async () => {
+      ordem.push('approve')
+    })
+    const start = vi.fn(async () => {
+      ordem.push('start')
+      return '01J8ZC0X0000000000000000AA'
+    })
+    renderMissionScreen({ approve, start })
+
+    await screen.findByRole('main', { name: 'Missão compilada' })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    fireEvent.change(screen.getByLabelText(/nota da aprovação/i), {
+      target: { value: 'plano revisado nó a nó' },
+    })
+    fireEvent.click(screen.getByTestId('approve-and-start'))
+
+    // O DAG vivo assume a tela sem nenhum clique a mais: os contadores do run só existem lá.
+    expect(await screen.findByTestId('counter-RUNNING')).toBeTruthy()
+    expect(screen.queryByRole('main', { name: 'Missão compilada' })).toBeNull()
+    await waitFor(() => expect(window.location.search).toContain('run='))
+    // Duas chamadas, nesta ordem — e a aprovação carrega quem aprovou.
+    expect(ordem).toEqual(['approve', 'start'])
+    // A aprovacao carrega quem aprovou E qual plano foi inspecionado: o control plane recusa
+    // se o arquivo tiver mudado desde a revisao.
+    expect(approve).toHaveBeenCalledWith('DA-BPM-021', {
+      actor: 'ewaldo',
+      note: 'plano revisado nó a nó',
+      specHash: REPORT_SPEC_HASH,
+    })
+    expect(start).toHaveBeenCalledWith({
+      missionId: 'DA-BPM-021',
+      acceptWarnings: false,
+      actor: 'ewaldo',
+    })
+  })
+
+  it('clique duplo em aprovar e executar não cria dois runs', async () => {
+    goTo('?mission=DA-BPM-021')
+    // A aprovação demora: e é justamente na janela entre os dois cliques que nasceria o
+    // segundo run.
+    const approve = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 10)))
+    const start = vi.fn(async () => '01J8ZC0X0000000000000000AA')
+    renderMissionScreen({ approve, start })
+
+    await screen.findByRole('main', { name: 'Missão compilada' })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    const button = screen.getByTestId('approve-and-start')
+    fireEvent.click(button)
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    expect(await screen.findByTestId('counter-RUNNING')).toBeTruthy()
+    expect(approve).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledTimes(1)
+  })
+
+  it('partida que falhou não desfaz a aprovação já registrada, e destrava a tela', async () => {
+    goTo('?mission=DA-BPM-021')
+    const approve = vi.fn(async () => {})
+    const start = vi.fn(async (): Promise<string> => {
+      throw new ApiError(400, JSON.stringify({ error: { code: 'WARNINGS_NOT_ACCEPTED' } }))
+    })
+    renderMissionScreen({ approve, start })
+
+    await screen.findByRole('main', { name: 'Missão compilada' })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    fireEvent.click(screen.getByTestId('approve-and-start'))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('WARNINGS_NOT_ACCEPTED'),
+    )
+    // A missão continua APPROVED (o ato humano aconteceu) e a partida volta a ser possível
+    // pelo caminho de sempre — sem pedir a mesma aprovação de novo.
+    expect(screen.getByTestId('mission-status').textContent).toContain('APPROVED')
+    expect(screen.queryByTestId('approve-and-start')).toBeNull()
+    await waitFor(() =>
+      expect(screen.getByTestId('start-mission').hasAttribute('disabled')).toBe(false),
+    )
+    expect(approve).toHaveBeenCalledTimes(1)
+  })
+
+  it('nada é aprovado nem executado sem o ato humano', async () => {
+    goTo('?mission=DA-BPM-021')
+    const approve = vi.fn(async () => {})
+    const start = vi.fn(async () => '01J8ZC0X0000000000000000AA')
+    renderMissionScreen({ approve, start })
+
+    await screen.findByRole('main', { name: 'Missão compilada' })
+    expect(await screen.findByRole('region', { name: 'Canvas do DAG' })).toBeTruthy()
+    // Congelar o plano para revisão não aprova e não parte: o rascunho é só geometria.
+    expect(approve).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(screen.getByTestId('mission-status').textContent).toContain('DRAFT')
+    // E sem `actor` o ato sequer está disponível.
+    expect(screen.getByTestId('approve-and-start').hasAttribute('disabled')).toBe(true)
+  })
+})
+
+/**
+ * Os tres achados que bloquearam U16 na revisao independente. Os dois primeiros sao de
+ * AUTORIDADE: aprovar um plano que o humano nao inspecionou.
+ */
+describe('aprovacao so vale para o plano que foi inspecionado', () => {
+  it('run APPROVED de OUTRA versao do plano nao faz a missao nascer aprovada', async () => {
+    goTo('?mission=DA-BPM-021')
+    renderApp({
+      loadCompileReport: async () => makeCompileReport('clean'),
+      loadProviders: async () => PROVIDERS,
+      // Aprovacao antiga, de um plano que nao e este.
+      loadRuns: async () => [approvedRun('DA-BPM-021', 'sha256:versao-antiga')],
+    })
+    await screen.findByRole('main', { name: 'Missão compilada' })
+
+    // Herdar a aprovacao liberaria executar um plano que ninguem viu.
+    expect(screen.getByTestId('mission-status').textContent).not.toContain('APPROVED')
+  })
+
+  it('a aprovacao declara QUAL plano foi inspecionado, para o control plane poder recusar', async () => {
+    goTo('?mission=DA-BPM-021')
+    const approve = vi.fn(async () => undefined)
+    renderApp({
+      loadCompileReport: async () => makeCompileReport('clean'),
+      loadProviders: async () => PROVIDERS,
+      loadRuns: async () => [],
+      approve,
+    })
+    await screen.findByRole('main', { name: 'Missão compilada' })
+
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'Ewaldo' } })
+    fireEvent.click(screen.getByTestId('approve-and-start'))
+
+    // Conferir no cliente antes de chamar so encolheria a janela; quem fecha e o servidor,
+    // recusando na mesma transacao em que aprovaria.
+    await waitFor(() =>
+      expect(approve).toHaveBeenCalledWith(
+        'DA-BPM-021',
+        expect.objectContaining({ specHash: REPORT_SPEC_HASH }),
+      ),
+    )
+  })
+
+  it('recusa do control plane por plano mudado vira mensagem, e nada e executado', async () => {
+    goTo('?mission=DA-BPM-021')
+    const start = vi.fn(async () => 'run-nao-deveria')
+    renderApp({
+      loadCompileReport: async () => makeCompileReport('clean'),
+      loadProviders: async () => PROVIDERS,
+      loadRuns: async () => [],
+      approve: async () => {
+        throw new Error('o arquivo da missao mudou depois do plano inspecionado')
+      },
+      start,
+    })
+    await screen.findByRole('main', { name: 'Missão compilada' })
+
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'Ewaldo' } })
+    fireEvent.click(screen.getByTestId('approve-and-start'))
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('CONTROLE: com o YAML intacto, aprovar de fato aprova', async () => {
+    // Sem este controle o teste acima passaria vazio: bastaria o botao nunca disparar.
+    goTo('?mission=DA-BPM-021')
+    const approve = vi.fn(async () => undefined)
+    renderApp({
+      loadCompileReport: async () => makeCompileReport('clean'),
+      loadProviders: async () => PROVIDERS,
+      loadRuns: async () => [],
+      approve,
+    })
+    await screen.findByRole('main', { name: 'Missão compilada' })
+
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'Ewaldo' } })
+    fireEvent.click(screen.getByTestId('approve-and-start'))
+
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
   })
 })

@@ -6,6 +6,13 @@ export const ApproveMissionCommandSchema = z
   .object({
     actor: NonEmptyStringSchema,
     note: z.string().optional(),
+    /**
+     * Versao do plano que o humano inspecionou. O endpoint RECOMPILA o arquivo, entao sem
+     * isto a aprovacao registra o que estiver no disco NA HORA — que pode nao ser o que
+     * estava na tela. Declarando, o control plane recusa quando o arquivo mudou no meio, e a
+     * janela deixa de existir em vez de so encolher.
+     */
+    specHash: z.string().optional(),
   })
   .strict()
 

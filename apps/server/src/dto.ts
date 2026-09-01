@@ -13,6 +13,7 @@ export function toRunHeader(run: Run): RunHeaderDto {
     id: run.id,
     missionId: run.missionId,
     status: run.status,
+    specHash: run.specHash,
     timestamps: {
       createdAt: run.createdAt.toISOString(),
       approvedAt: isoOf(run.approvedAt),

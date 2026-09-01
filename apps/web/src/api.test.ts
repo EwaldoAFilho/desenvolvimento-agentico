@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { makePlanFailure, makePlanResult, REAL_PLANNER } from './__fixtures__/planning.js'
+import {
+  makeDraftResult,
+  makePlanFailure,
+  makePlanResult,
+  REAL_PLANNER,
+} from './__fixtures__/planning.js'
 import { makeSnapshot } from './__fixtures__/snapshot.js'
 import {
   ApiError,
   approveMission,
+  createMissionDraft,
+  getMissions,
   getPlanners,
   getRunSnapshot,
   planMission,
@@ -102,6 +109,47 @@ describe('cliente da API', () => {
   it('erro HTTP vira ApiError com status', async () => {
     stubFetch({ message: 'missao nao aprovada' }, false, 409)
     await expect(getRunSnapshot('run-1')).rejects.toBeInstanceOf(ApiError)
+  })
+})
+
+describe('revisão do plano pela API', () => {
+  it('as missões do projeto trazem o caminho do arquivo, validado pelo contrato', async () => {
+    const calls = stubFetch([
+      {
+        id: 'DA-BPM-021',
+        file: '.agentic/missions/DA-BPM-021.mission.yaml',
+        title: 'Refinar painel',
+        state: 'DRAFT',
+        tasks: 17,
+        phases: 7,
+        errors: 0,
+        warnings: 2,
+      },
+    ])
+    const missions = await getMissions()
+    expect(calls[0]?.url).toBe('/api/missions')
+    expect(missions[0]?.file).toBe('.agentic/missions/DA-BPM-021.mission.yaml')
+  })
+
+  it('o rascunho e pedido por UMA referencia — arquivo ou id, nunca as duas', async () => {
+    const calls = stubFetch(makeDraftResult(), true, 201)
+    const draft = await createMissionDraft({ missionId: 'DA-BPM-021' })
+    expect(calls[0]?.method).toBe('POST')
+    expect(calls[0]?.url).toBe('/api/missions/draft')
+    expect(calls[0]?.body).toEqual({ missionId: 'DA-BPM-021' })
+    expect(draft.alreadyExisted).toBe(false)
+
+    await expect(
+      createMissionDraft({
+        missionId: 'DA-BPM-021',
+        missionPath: '.agentic/missions/DA-BPM-021.mission.yaml',
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('resposta de rascunho fora do contrato nao vira DAG na tela', async () => {
+    stubFetch({ run: { id: 'run-1' } }, true, 201)
+    await expect(createMissionDraft({ missionId: 'DA-BPM-021' })).rejects.toThrow()
   })
 })
 

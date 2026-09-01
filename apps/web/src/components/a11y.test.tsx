@@ -5,7 +5,10 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { makeProjectHome } from '../__fixtures__/home.js'
 import {
+  makeDraftResult,
+  makeDraftSnapshot,
   makePlanResult,
+  makePlanTaskDetail,
   REAL_PLANNER,
   SECOND_PLANNER,
   SIMULATED_PLANNER,
@@ -20,6 +23,7 @@ import { installReactFlowEnv } from '../test/react-flow-env.js'
 import { DagCanvas } from './DagCanvas.js'
 import { ErrorScreen } from './ErrorScreen.js'
 import { NewMission, type NewMissionDeps } from './NewMission.js'
+import { PlanReview, type PlanReviewDeps } from './PlanReview.js'
 import { ProjectHome } from './ProjectHome.js'
 import { ProvidersPanel } from './ProvidersPanel.js'
 import { StartMission } from './StartMission.js'
@@ -36,6 +40,24 @@ function renderNewMission(planners = [REAL_PLANNER, SECOND_PLANNER, SIMULATED_PL
     loadSnapshot: async () => makeSnapshot(),
   }
   return render(<NewMission deps={deps} onCancel={noop} onOpenMission={noop} />)
+}
+
+/** Revisao do plano sem servidor e sem planejador: nada aqui congela plano de verdade. */
+const REVIEW_DEPS: Partial<PlanReviewDeps> = {
+  createDraft: async () => makeDraftResult(),
+  loadSnapshot: async () => makeDraftSnapshot(),
+  loadTaskDetail: async () => makePlanTaskDetail(),
+}
+
+function renderPlanReview() {
+  return render(
+    <PlanReview
+      report={makeCompileReport('warning')}
+      missionFile=".agentic/missions/DA-BPM-021.mission.yaml"
+      deps={REVIEW_DEPS}
+      onReload={noop}
+    />,
+  )
 }
 
 /**
@@ -250,6 +272,54 @@ describe('rotulos acessiveis dos controles', () => {
     const phase = await screen.findByTestId('plan-phase')
     expect(phase.getAttribute('role')).toBe('status')
     expect(phase.textContent).toContain('descreva o que você quer')
+  })
+
+  it('todo controle da revisão do plano tem rótulo próprio e recebe foco', async () => {
+    renderPlanReview()
+    await screen.findByRole('region', { name: 'Canvas do DAG' })
+    fireEvent.click(screen.getByTestId('task-node-T09'))
+    await screen.findByTestId('plan-node')
+
+    const controls = screen.getAllByRole('button').filter((b) => !b.hasAttribute('disabled'))
+    const names = new Set<string>()
+    for (const control of controls) {
+      const name = (control.getAttribute('aria-label') ?? control.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+      names.add(name)
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    // Dois botoes de copiar na mesma tela precisam dizer o que cada um copia.
+    expect(names.size).toBe(controls.length)
+  })
+
+  it('o nó do plano diz risco e revisão por texto, não por cor', async () => {
+    renderPlanReview()
+    await screen.findByRole('region', { name: 'Canvas do DAG' })
+    fireEvent.click(screen.getByTestId('task-node-T09'))
+
+    const risk = await screen.findByTestId('plan-node-risk')
+    // `data-risk` serve ao CSS; quem le a tela recebe a palavra.
+    expect(risk.querySelector('[data-risk="high"]')).not.toBeNull()
+    expect(risk.textContent).toContain('alto')
+    expect(screen.getByTestId('plan-node-review').textContent).toContain('revisor')
+  })
+
+  it('o conflito do plano é lido como par de tasks, não como cor de linha', () => {
+    render(
+      <StartMission
+        report={makeCompileReport('warning')}
+        approved={false}
+        providers={PROVIDERS_WITH_ENVIRONMENT}
+        onApprove={noop}
+        onStart={noop}
+        onApproveAndStart={noop}
+      />,
+    )
+    const conflicts = screen.getByTestId('conflicts')
+    expect(conflicts.textContent).toContain('T07 ↔ T09')
+    expect(conflicts.textContent).toContain('escopo')
+    expect(conflicts.querySelector('li')?.getAttribute('data-severity')).toBe('WARNING')
   })
 
   it('o campo de actor continua associado ao seu rotulo', () => {
