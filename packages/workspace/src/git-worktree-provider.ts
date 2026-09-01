@@ -226,7 +226,7 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     const mission = await ensureBranch(this.#repoRoot, branch, this.#config.missionBase ?? 'HEAD')
     const path = resolve(this.#worktreeRoot, request.runId, 'mission')
     const id = `${request.runId}/mission`
-    await this.#reclaimMissionWorktree(id, path)
+    await this.#reclaimMissionWorktree(id, path, branch)
     await this.#assertFreePath(path)
     await mkdir(dirname(path), { recursive: true })
     // O mission gate valida a ENTREGA INTEGRADA, que e um COMMIT — nao precisa da branch
@@ -286,19 +286,27 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
    * apagar arvore alheia. Diretorio que existe mas nao esta registrado nao e tocado — segue
    * para `#assertFreePath`, que recusa a aquisicao em vez de destruir o que nao entendemos.
    */
-  async #reclaimMissionWorktree(id: string, path: string): Promise<void> {
+  async #reclaimMissionWorktree(id: string, path: string, branch: string): Promise<void> {
     // Lease vivo NESTE provider significa que a worktree esta em uso agora, aqui — nao e
     // rastro de processo morto. Devolve-la seria arrancar o chao de quem esta usando; a
     // recusa de `#assertFreePath` e a resposta certa para uso concorrente.
     if (this.#leases.has(id)) return
     const existing = await stat(path).catch(() => null)
     if (existing === null) return
+    // Nao basta existir um diretorio ali: o git DESTE repositorio precisa reconhece-lo
+    // como worktree sua. O que ele nao reconhece nao e nosso e nao e tocado.
     const registered = await worktreeAtPath(this.#repoRoot, path)
     if (registered === undefined) return
     // A arvore principal nunca esta sob `worktreeRoot`; recusar explicitamente e barato e
     // fecha a unica forma de esta remocao alcancar o repositorio orquestrado.
     const main = await worktreeAtPath(this.#repoRoot, this.#repoRoot)
     if (main !== undefined && main.path === registered.path) return
+    // E precisa ser a worktree DO GATE, nao uma qualquer que calhou de ocupar o caminho.
+    // `#acquireMission` so cria de duas formas: anexada a branch da missao ou detached
+    // sobre o commit dela. Qualquer outra coisa naquele slot e desconhecida — recusamos a
+    // aquisicao em vez de remover algo cuja procedencia nao sabemos explicar.
+    const doGate = registered.detached || registered.branch === branch
+    if (!doGate) return
     await removeWorktree(this.#repoRoot, path)
   }
 

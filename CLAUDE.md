@@ -51,7 +51,7 @@ governança.
 | I10 | `cross-provider-required` nunca é rebaixada em silêncio |
 | I11 | Todo processo de agente inicia com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
-| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** |
+| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** — ou recusa de adoção com motivo observável |
 
 I13 tem um limite que precisa ser dito em voz alta: ela vale **dentro de um processo**.
 Dois `agentic serve` sobre o mesmo projeto adotam o mesmo run e viram dois donos — o

@@ -7,6 +7,7 @@ import {
   type Clock,
   type IdGenerator,
   type Integrator,
+  isRecoverableActiveRunStatus,
   isRunId,
   isRunStatus,
   type MissionSpec,
@@ -226,6 +227,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   }
 
   const orchestrators = new Map<string, Orchestrator>()
+  /** Aberturas em voo, por run: o que impede dois donos nascerem em paralelo (I13). */
+  const opening = new Map<string, Promise<Orchestrator>>()
 
   const wiringFor = (mission: MissionSpec): RunWiring => {
     const execution = config.project.execution
@@ -281,9 +284,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     }
   }
 
-  const open = async (runId: RunId): Promise<Orchestrator> => {
-    const existing = orchestrators.get(runId)
-    if (existing !== undefined) return existing
+  const build = async (runId: RunId): Promise<Orchestrator> => {
     const run = await loadRun(deps, runId)
     const mission = await loadMissionSpec(deps, runId)
     if (mission === undefined) {
@@ -319,9 +320,33 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       ...(config.agentLog === undefined ? {} : { agentLog: config.agentLog }),
       safetyIntervalMs: config.safetyIntervalMs,
     }
-    const orchestrator = new Orchestrator(engineDeps, runId)
-    orchestrators.set(runId, orchestrator)
-    return orchestrator
+    return new Orchestrator(engineDeps, runId)
+  }
+
+  /**
+   * UM orquestrador por run nesta instancia (I13), inclusive sob chamadas concorrentes.
+   *
+   * Guardar a INSTANCIA nao bastava: entre consultar o mapa e povoa-lo, `build` atravessa
+   * varios `await` (banco, artefato, `ensureMissionBranch`), e duas chamadas simultaneas
+   * — a adocao do boot e uma rota HTTP, por exemplo, ja que a API atende antes de a adocao
+   * terminar — construiriam dois donos, com o segundo sobrescrevendo o primeiro no mapa e
+   * o primeiro seguindo vivo e invisivel. Guardar a PROMESSA fecha a janela: a segunda
+   * chamada espera a primeira em vez de comecar outra.
+   */
+  const open = (runId: RunId): Promise<Orchestrator> => {
+    const existing = orchestrators.get(runId)
+    if (existing !== undefined) return Promise.resolve(existing)
+    const pending = opening.get(runId)
+    if (pending !== undefined) return pending
+    const promise = build(runId)
+      .then((orchestrator) => {
+        orchestrators.set(runId, orchestrator)
+        return orchestrator
+      })
+      // Falha nao deixa a promessa presa no mapa: a proxima chamada tenta de novo.
+      .finally(() => opening.delete(runId))
+    opening.set(runId, promise)
+    return promise
   }
 
   /**
@@ -332,9 +357,12 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * que hoje um `resume` depois de um reinicio despacha trabalho num tick unico e nunca
    * colhe o resultado. Quem adota tem de ligar o loop — por isso `start()`.
    *
-   * Nada e reexecutado as cegas: o primeiro tick comeca por `#reconcile`, que ENCERRA como
-   * `INTERRUPTED` o que ficou em voo em vez de retomar. O despacho so acontece depois,
-   * sobre estado ja limpo.
+   * Adotar nao RETOMA trabalho de agente: o primeiro tick comeca por `#reconcile`, que
+   * ENCERRA como `INTERRUPTED` o que ficou em voo em vez de continua-lo. O despacho so vem
+   * depois, sobre estado limpo, como tentativa nova cobrada do orcamento (I4). O mission
+   * gate e excecao declarada — sem marcador duravel de inicio, uma execucao interrompida e
+   * refeita do zero. Isso e seguro porque o gate MEDE um commit em vez de mudar o
+   * repositorio (ver STATE-MACHINES, I13).
    *
    * Um run recuperavel que nao abre (MissionSpec ausente, worktree ocupada) nao derruba o
    * boot nem os outros: vira recusa registrada. E isto protege UM processo — dois control
@@ -347,17 +375,29 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     for (const row of rows) {
       if (!isRunId(row.id) || !isRunStatus(row.status)) continue
       const runId = row.id
-      const status = row.status
       // Lido ANTES de `open`, que e quem cria: depois da chamada todo run parece ja possuido.
-      const alreadyOwned = orchestrators.has(runId)
+      const alreadyOwned = orchestrators.has(runId) || opening.has(runId)
       try {
         const orchestrator = await open(runId)
+        // A linha da consulta e um retrato; abrir leva varios `await` e a API ja atende.
+        // Um `stop` no meio do caminho torna o run terminal, e ligar um loop para ele
+        // seria manter um timer aceso sobre trabalho que ninguem mais quer.
+        const atual = await deps.store.loadRun(runId)
+        const status = atual?.status ?? row.status
+        if (atual === undefined || !isRecoverableActiveRunStatus(status)) {
+          refused.push({
+            runId,
+            status,
+            reason: `run deixou de ser recuperavel durante a adocao (${status})`,
+          })
+          continue
+        }
         orchestrator.start()
         adopted.push({ runId, status, alreadyOwned })
       } catch (error) {
         refused.push({
           runId,
-          status,
+          status: row.status,
           reason: error instanceof Error ? error.message : String(error),
         })
       }

@@ -496,6 +496,82 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
     }
   }, 240_000)
 
+  it('adocao concorrente com uma rota HTTP nao cria dois donos', async () => {
+    const h = await createMissionHarness({ step: lento, project: comAgentesInProcess })
+    try {
+      await h.start()
+      h.orchestrator.start()
+      await esperar('uma task chegar a RUNNING', async () =>
+        (await h.tasks()).some((task) => task.status === 'RUNNING'),
+      )
+      await h.plane.close()
+
+      const { createControlPlane } = await import('@agentic/orchestrator')
+      const plane = createControlPlane({
+        project: h.project,
+        gatesFile: h.gatesFile,
+        repoRoot: h.root,
+      })
+      try {
+        // `open` atravessa varios `await` antes de povoar o mapa. Disparar a adocao e uma
+        // abertura em paralelo — o que a API faz quando atende antes de a adocao terminar —
+        // tem de devolver O MESMO dono, nao dois.
+        const [resultado, ...aberturas] = await Promise.all([
+          plane.adoptRecoverableRuns(),
+          plane.open(h.runId),
+          plane.open(h.runId),
+          plane.open(h.runId),
+        ])
+        expect(resultado.adopted.map((entry) => entry.runId)).toEqual([h.runId])
+        expect(new Set(aberturas).size).toBe(1)
+        expect(await plane.open(h.runId)).toBe(aberturas[0])
+      } finally {
+        await plane.close()
+      }
+    } finally {
+      await h.cleanup().catch(() => undefined)
+    }
+  }, 240_000)
+
+  it('run que vira terminal durante a adocao e recusado, nao ganha loop', async () => {
+    const h = await createMissionHarness({ step: lento, project: comAgentesInProcess })
+    try {
+      await h.start()
+      h.orchestrator.start()
+      await esperar('uma task chegar a RUNNING', async () =>
+        (await h.tasks()).some((task) => task.status === 'RUNNING'),
+      )
+      await h.plane.close()
+
+      const { createControlPlane } = await import('@agentic/orchestrator')
+      const plane = createControlPlane({
+        project: h.project,
+        gatesFile: h.gatesFile,
+        repoRoot: h.root,
+      })
+      try {
+        // A linha da consulta e um retrato. Cancelar entre a consulta e o `start` e
+        // exatamente o que um `stop` pela API faria enquanto o boot ainda adota.
+        const adocao = plane.adoptRecoverableRuns()
+        await plane.stopRun(h.runId, { actor: 'humano@teste', reason: 'parado no meio' })
+        const resultado = await adocao
+        expect((await plane.persistence.runs.loadRun(h.runId))?.status).toBe('CANCELLED')
+        // Adotado ou recusado, o run terminal nao pode ficar com um loop aceso em cima.
+        const comLoop = resultado.adopted.filter((entry) => entry.runId === h.runId)
+        if (comLoop.length > 0) {
+          expect(comLoop[0]?.status).not.toBe('CANCELLED')
+        }
+        const antes = (await plane.persistence.events.list(h.runId)).length
+        await sleep(1_500)
+        expect((await plane.persistence.events.list(h.runId)).length).toBe(antes)
+      } finally {
+        await plane.close()
+      }
+    } finally {
+      await h.cleanup().catch(() => undefined)
+    }
+  }, 240_000)
+
   it('DRAFT, APPROVED e run terminal NAO recebem dono', async () => {
     const h = await createMissionHarness({ step: lento, project: comAgentesInProcess })
     try {

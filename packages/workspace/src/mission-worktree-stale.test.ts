@@ -91,6 +91,23 @@ describe('worktree do mission gate deixada por um reinicio', () => {
     expect(await repo.exists(join('.agentic/worktrees', RUN, 'mission', 'README.md'))).toBe(true)
   })
 
+  it('NAO devolve worktree registrada que nao seja a do gate da missao', async () => {
+    repo = await createTestRepo()
+    const path = missionPath(repo.root)
+    // Worktree legitima do git deste repositorio, mas de OUTRA branch, ocupando o slot.
+    // Registro no repo certo nao e prova de procedencia: `#acquireMission` so cria
+    // anexada a branch da missao ou detached sobre o commit dela.
+    await repo.git('branch', 'alguma-outra-coisa')
+    await repo.git('worktree', 'add', path, 'alguma-outra-coisa')
+
+    await expect(
+      providerOf(repo.root).acquireMissionWorkspace(request('mission-gate-1')),
+    ).rejects.toBeInstanceOf(WorkspaceError)
+    const esperado = missionPath(repo.root)
+    const ainda = (await listWorktrees(repo.root)).find((entry) => entry.path === esperado)
+    expect(ainda?.branch).toBe('alguma-outra-coisa')
+  })
+
   it('nunca alcanca a arvore principal do repositorio orquestrado', async () => {
     repo = await createTestRepo()
     await providerOf(repo.root).ensureMissionBranch(MISSION)

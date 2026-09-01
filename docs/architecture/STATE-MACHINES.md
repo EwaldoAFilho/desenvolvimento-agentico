@@ -190,6 +190,11 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 
   `RECOVERABLE_ACTIVE_RUN_STATUSES = {RUNNING, PAUSED, BLOCKED, VERIFYING}`
 
+  Um run recuperável que não abre — `MissionSpec` ausente, worktree ocupada, disco — **não
+  derruba o boot nem os outros**: vira recusa com motivo, devolvida pela adoção e exposta em
+  `RunningServer.adoption`. Por isso I13 tem duas metades: dono vivo **ou** recusa
+  observável. Um run recuperável sem nenhuma das duas é defeito do control plane.
+
   A lista não é "todo estado não terminal". `DRAFT` e `APPROVED` esperam ato humano
   registrado — aprovar (R2) e dar START MISSION (R3) — e dar dono a eles seria o control
   plane decidindo por conta própria o que o produto exige de uma pessoa. Os quatro da lista
@@ -197,10 +202,18 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   mas ainda precisa encerrar a tentativa que ficou órfã; `BLOCKED` pode voltar a `RUNNING`
   sozinho quando o impedimento sai (R7); `VERIFYING` tem o mission gate para executar.
 
-  Adotar **não** reexecuta efeito às cegas: o primeiro tick começa pela reconciliação, que
-  encerra como `INTERRUPTED` o que ficou em voo em vez de retomar; o despacho só vem depois,
-  sobre estado limpo. E reiniciar não é ato humano — nenhum `run.resumed` é fabricado por
-  causa de um boot.
+  Adotar não **retoma** trabalho de agente: o primeiro tick começa pela reconciliação, que
+  encerra como `INTERRUPTED` a tentativa que ficou em voo em vez de continuá-la; o despacho
+  só vem depois, sobre estado limpo, como tentativa nova e cobrada do orçamento (I4). E
+  reiniciar não é ato humano — nenhum `run.resumed` é fabricado por causa de um boot.
+
+  O **mission gate é exceção declarada**: ele não tem marcador durável de início, então uma
+  execução interrompida por uma queda é refeita do zero — semântica de *ao menos uma vez*.
+  Isso é seguro porque o gate é **medição** sobre um commit, não efeito: rodar os comandos
+  de verificação de novo não muda o repositório nem consome tentativa. O que ele produz
+  (`GateExecution`) só existe depois de terminar, e é essa persistência que decide o run.
+  Um gate cujos comandos tivessem efeito colateral externo quebraria essa premissa — é por
+  isso que `gates.yaml` descreve verificação, e não trabalho.
 
   I13 vale **por instância**. Dois control planes sobre o mesmo projeto adotam o mesmo run e
   viram dois donos; a garantia entre processos depende da fatia
@@ -229,4 +242,4 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 | I10 | `cross-provider-required` nunca é rebaixada; `cross-provider-preferred` só rebaixa com `policyOutcome: downgraded` e evento correspondente |
 | I11 | Todo processo de agente é iniciado com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem execução de mission gate em voo **ou** resultado de gate persistido — nunca nenhum dos dois |
-| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem exatamente um orquestrador vivo, com o loop ligado, **naquela instância** |
+| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem exatamente um orquestrador vivo com o loop ligado **naquela instância** — ou uma recusa de adoção com motivo observável |
