@@ -226,7 +226,7 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     const mission = await ensureBranch(this.#repoRoot, branch, this.#config.missionBase ?? 'HEAD')
     const path = resolve(this.#worktreeRoot, request.runId, 'mission')
     const id = `${request.runId}/mission`
-    await this.#reclaimMissionWorktree(path)
+    await this.#reclaimMissionWorktree(id, path)
     await this.#assertFreePath(path)
     await mkdir(dirname(path), { recursive: true })
     // O mission gate valida a ENTREGA INTEGRADA, que e um COMMIT — nao precisa da branch
@@ -286,7 +286,11 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
    * apagar arvore alheia. Diretorio que existe mas nao esta registrado nao e tocado — segue
    * para `#assertFreePath`, que recusa a aquisicao em vez de destruir o que nao entendemos.
    */
-  async #reclaimMissionWorktree(path: string): Promise<void> {
+  async #reclaimMissionWorktree(id: string, path: string): Promise<void> {
+    // Lease vivo NESTE provider significa que a worktree esta em uso agora, aqui — nao e
+    // rastro de processo morto. Devolve-la seria arrancar o chao de quem esta usando; a
+    // recusa de `#assertFreePath` e a resposta certa para uso concorrente.
+    if (this.#leases.has(id)) return
     const existing = await stat(path).catch(() => null)
     if (existing === null) return
     const registered = await worktreeAtPath(this.#repoRoot, path)

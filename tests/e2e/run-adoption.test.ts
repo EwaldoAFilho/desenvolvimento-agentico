@@ -250,6 +250,8 @@ describe('B — PAUSED: ganha dono e reconcilia, mas nao volta a despachar', () 
       const pendentesAntes = (await h.tasks()).filter((task) => task.status === 'PENDING').length
       const tentativasAntes = (await h.attempts()).length
       expect(pendentesAntes).toBeGreaterThan(0)
+      const anteriores = await h.events()
+      const ultimoSeqAntes = anteriores[anteriores.length - 1]?.seq ?? 0
       await h.plane.close()
 
       const servidor = await boot(h.root)
@@ -275,9 +277,14 @@ describe('B — PAUSED: ganha dono e reconcilia, mas nao volta a despachar', () 
         expect((await servidor.plane.persistence.runs.loadAttempts(h.runId)).length).toBe(
           tentativasAntes,
         )
-        // Recovery de processo NAO e ato humano: nada de `run.resumed` fabricado.
+        // Recovery de processo NAO e ato humano. A prova nao e a ausencia de um tipo de
+        // evento — e a ausencia de ATOR humano em tudo que o boot escreveu: um restart nao
+        // pode assinar por ninguem.
         const eventos = await servidor.plane.persistence.events.list(h.runId)
-        expect(eventos.filter((event) => event.type === 'run.resumed')).toHaveLength(0)
+        const doBoot = eventos.filter((event) => event.seq > ultimoSeqAntes)
+        expect(doBoot.length).toBeGreaterThan(0)
+        expect(doBoot.filter((event) => event.actor.kind === 'human')).toEqual([])
+        expect(doBoot.filter((event) => event.type === 'run.resumed')).toEqual([])
       } finally {
         await servidor.close()
       }

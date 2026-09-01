@@ -78,6 +78,19 @@ describe('worktree do mission gate deixada por um reinicio', () => {
     ).toBe(true)
   })
 
+  it('NAO devolve worktree que o PROPRIO provider ainda tem em uso', async () => {
+    repo = await createTestRepo()
+    const provider = providerOf(repo.root)
+    await provider.ensureMissionBranch(MISSION)
+    // Mesmo provider, lease vivo: a segunda aquisicao e uso concorrente, nao rastro de
+    // processo morto. Recusar e certo; devolver seria arrancar a arvore de quem a usa.
+    await provider.acquireMissionWorkspace(request('mission-gate-1'))
+    await expect(
+      provider.acquireMissionWorkspace(request('mission-gate-2')),
+    ).rejects.toBeInstanceOf(WorkspaceError)
+    expect(await repo.exists(join('.agentic/worktrees', RUN, 'mission', 'README.md'))).toBe(true)
+  })
+
   it('nunca alcanca a arvore principal do repositorio orquestrado', async () => {
     repo = await createTestRepo()
     await providerOf(repo.root).ensureMissionBranch(MISSION)
