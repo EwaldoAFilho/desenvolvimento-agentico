@@ -235,6 +235,19 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   mesmo projeto esbarra na mesma parede. Projetos diferentes têm donos independentes, que é
   uso normal.
 
+  Essa chave sai de **uma conta só** (`projectIdentityOf`), usada por `serve`,
+  `mission start`, `mission approve`, `startServer` e pela descoberta. Ela separa a âncora
+  de **configuração** (o diretório que contém `.agentic/project.yaml`, contra o qual
+  `repoRoot` e `gates.file` se resolvem) da âncora de **estado** (`<repoRoot>/.agentic`, onde
+  moram posse, `state.db`, `control-plane.json`, `runs/` e `worktrees/`). Com
+  `project.repoRoot: .` as duas coincidem; quando não coincidem, derivá-las em lugares
+  diferentes rendia dois donos para um projeto só (ADR-0013, correção de 003B).
+
+  E **mutar exige posse declarada e viva**: `createRun`, `approveMission`, `startRun`,
+  `open` e `adoptRecoverableRuns` recusam num plane sem lease. Ausência de posse é recusa,
+  nunca permissão. Um plane sem lease continua servindo LEITURA — é o que mantém `status`,
+  `report` e `inspect` sem disputa.
+
   A posse morre com o processo, inclusive sob `SIGKILL` — não há lock stale para interpretar,
   não há sonda de vivacidade e um `release()` que falhe não tranca o projeto. Por isso **o pid
   não participa da autoridade**: ele é informação para o humano, e pid reutilizado por outro

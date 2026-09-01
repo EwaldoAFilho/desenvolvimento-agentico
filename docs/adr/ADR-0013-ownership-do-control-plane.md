@@ -187,3 +187,55 @@ nenhum outro processo consegue publicar antes de ele ser solto.
 - **A garantia é por diretório de estado.** Dois `repoRoot` distintos apontando para o mesmo
   `.agentic` disputam a mesma posse (correto); um `repoRoot` cujo `state.db` foi movido por
   `databasePath` sai da chave (não acontece no uso normal).
+
+## Correção de 003B — a chave existia, mas não era a mesma para todos
+
+A decisão acima estava certa e implementada pela metade. O lock funcionava; o que faltava
+era todo mundo pedir **a mesma chave**. Medido empiricamente, com dois processos e a CLI de
+verdade:
+
+- com `project.repoRoot: .` — o caso comum — `<dir do project.yaml>/.agentic` e
+  `<repoRoot>/.agentic` são o mesmo diretório, e a divergência ficava invisível;
+- com `repoRoot` apontando para fora, `agentic serve` disputava um diretório e
+  `agentic mission start` disputava outro. **Dois donos reais para um projeto só**, cada um
+  com o seu `state.db`.
+
+E a guarda de mutação lia a **ausência de posse como permissão**: um plane construído sem
+lease — `agentic mission approve` pelo caminho local, uma composição esquecida — criava run
+e gravava aprovação no projeto de outro processo.
+
+### O que passou a valer
+
+**Uma conta só, em `projectIdentityOf`.** Todo entrypoint mutável passa por ela: `serve`,
+`mission start`, `mission approve`, `startServer`, o binário `agentic-server` e a
+descoberta. Ela separa três âncoras que estavam confundidas:
+
+| Âncora | O que é | O que resolve contra ela |
+| --- | --- | --- |
+| `projectDir` | diretório que contém `.agentic/project.yaml` | **configuração**: `repoRoot` e `gates.file`, porque foi contra ele que o humano escreveu os caminhos |
+| `repoRoot` | repositório alvo, canonicalizado | **identidade**: é ele que dá nome ao projeto (I14) |
+| `runtimeDir` | `<repoRoot>/.agentic` | **estado**: posse, `state.db`, `control-plane.json`, `runs/`, `worktrees/` |
+
+O estado acompanha o **repositório**, não o arquivo de configuração, porque é o repositório
+que as worktrees e os branches modificam — `execution.worktreeRoot` já se resolvia assim.
+`loadProjectSources` deixou de ignorar `project.repoRoot`, então o servidor standalone chega
+à mesma chave que a CLI sem nunca ter visto a CLI.
+
+**Ausência de posse é recusa, nunca permissão.** `createRun`, `approveMission`, `startRun`,
+`open` e `adoptRecoverableRuns` exigem lease **declarado e vivo**. Um plane sem lease
+continua existindo — ele **lê** —, e é isso que mantém `status`, `report` e `inspect` sem
+disputa nenhuma. O que ele não faz é mutar.
+
+**O cliente prova que o endereço é do projeto certo.** `connectHttp` confere o `repoRoot`
+do `/api/health` contra o do projeto, por caminho real. Descoberta velha, `.agentic` copiado
+junto com o diretório ou porta reaproveitada colocam do outro lado um control plane
+**real** — de outro repositório. Sem essa conferência, `approve`, `pause` e `stop` mutariam
+o run errado. Não é autenticação, e não pretende ser: é o mínimo que impede um comando de
+mutação atravessar de projeto.
+
+### Limite que continua declarado
+
+`release()` marca a posse como perdida **antes** de tentar fechar a conexão. Se o `close`
+falhasse, este processo já não poderia agir (nenhuma mutação passa com `held: false`), mas o
+lock de arquivo continuaria preso até o processo morrer — atrasando o *takeover*, nunca
+criando um segundo dono. É o mesmo modelo de sempre: a posse morre com o processo.
