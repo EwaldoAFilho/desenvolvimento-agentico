@@ -171,3 +171,144 @@ export function raceForOwnership(
     losers: linhas.filter((linha) => linha.startsWith('LOSE')),
   }))
 }
+
+export const CLI_SCRIPT = resolve(here, 'cli-process.ts')
+const CLI_RESULT_MARKER = '##CLI-RESULT##'
+
+export interface CliOutcome {
+  readonly code: number
+  readonly stdout: string
+  readonly stderr: string
+  /** Envelope do `--json`, quando o comando foi chamado com ele. */
+  json(): {
+    readonly ok: boolean
+    readonly data?: unknown
+    readonly error?: { readonly code: string; readonly message: string }
+  }
+}
+
+function parseCliResult(buffer: string): CliOutcome | undefined {
+  const marker = buffer.lastIndexOf(CLI_RESULT_MARKER)
+  if (marker === -1) return undefined
+  const line = buffer.slice(marker + CLI_RESULT_MARKER.length).trim()
+  if (line.length === 0) return undefined
+  let parsed: { readonly code: number; readonly stdout: string; readonly stderr: string }
+  try {
+    parsed = JSON.parse(line) as typeof parsed
+  } catch {
+    return undefined
+  }
+  return {
+    ...parsed,
+    json: () => {
+      const start = parsed.stdout.indexOf('{')
+      if (start === -1) throw new Error(`saida sem JSON:\n${parsed.stdout}`)
+      return JSON.parse(parsed.stdout.slice(start)) as never
+    },
+  }
+}
+
+/** Roda um comando da CLI ate o fim, num processo separado. */
+export function runCli(
+  cwd: string,
+  argv: readonly string[],
+  timeoutMs = 90_000,
+): Promise<CliOutcome> {
+  const { child, out, err } = nodeChild(CLI_SCRIPT, [cwd, JSON.stringify(argv)])
+  let stdout = ''
+  let stderr = ''
+  out.on('data', (chunk: unknown) => {
+    stdout += String(chunk)
+  })
+  err.on('data', (chunk: unknown) => {
+    stderr += String(chunk)
+  })
+  return new Promise<CliOutcome>((done, fail) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      fail(
+        new Error(
+          `\`agentic ${argv.join(' ')}\` nao terminou em ${timeoutMs}ms:\n${stdout}\n${stderr}`,
+        ),
+      )
+    }, timeoutMs)
+    child.once('exit', (code: number | null) => {
+      clearTimeout(timer)
+      const outcome = parseCliResult(stdout)
+      if (outcome === undefined) {
+        fail(
+          new Error(
+            `\`agentic ${argv.join(' ')}\` saiu com ${code} sem reportar.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+          ),
+        )
+        return
+      }
+      done(outcome)
+    })
+  })
+}
+
+export interface LiveCli {
+  /** Linha de prontidao que o teste esperava (ex.: o endereco publicado). */
+  readonly ready: string
+  readonly pid: number
+  stop(signal?: 'SIGTERM' | 'SIGINT'): Promise<void>
+  kill(): Promise<void>
+  /** Tudo que o comando imprimiu ate agora. */
+  output(): string
+}
+
+/**
+ * Sobe um comando de PRIMEIRO PLANO (`serve`, `mission start --serve`) e devolve o controle
+ * assim que ele imprime a linha de prontidao. O processo continua vivo ate `stop`/`kill`.
+ */
+export function spawnCli(
+  cwd: string,
+  argv: readonly string[],
+  ready: RegExp,
+  timeoutMs = 90_000,
+): Promise<LiveCli> {
+  const { child, out, err } = nodeChild(CLI_SCRIPT, [cwd, JSON.stringify(argv)])
+  let stdout = ''
+  let stderr = ''
+  err.on('data', (chunk: unknown) => {
+    stderr += String(chunk)
+  })
+  return new Promise<LiveCli>((done, fail) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      fail(
+        new Error(
+          `\`agentic ${argv.join(' ')}\` nao ficou pronto em ${timeoutMs}ms.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+        ),
+      )
+    }, timeoutMs)
+    out.on('data', (chunk: unknown) => {
+      stdout += String(chunk)
+      const match = ready.exec(stdout)
+      if (match === null) return
+      clearTimeout(timer)
+      done({
+        ready: match[0],
+        pid: child.pid ?? -1,
+        output: () => stdout,
+        stop: async (signal = 'SIGTERM'): Promise<void> => {
+          child.kill(signal)
+          await ended(child)
+        },
+        kill: async (): Promise<void> => {
+          child.kill('SIGKILL')
+          await ended(child)
+        },
+      })
+    })
+    child.once('exit', (code: number | null) => {
+      clearTimeout(timer)
+      fail(
+        new Error(
+          `\`agentic ${argv.join(' ')}\` saiu com ${code} sem ficar pronto.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+        ),
+      )
+    })
+  })
+}
