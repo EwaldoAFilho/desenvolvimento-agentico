@@ -312,3 +312,82 @@ export function spawnCli(
     })
   })
 }
+
+export const ENTRYPOINT_RACER_SCRIPT = resolve(here, 'entrypoint-racer.ts')
+
+/** Por qual entrypoint de producao o competidor deriva a chave de posse. */
+export type RaceEntrypoint = 'cli' | 'server'
+
+export interface EntrypointRaceResult extends RaceResult {
+  /** Diretorio que cada competidor disputou. Mais de um valor aqui JA e a falha. */
+  readonly dirs: readonly string[]
+}
+
+/**
+ * A mesma corrida do `raceForOwnership`, mas com os competidores chegando por entrypoints
+ * DIFERENTES sobre o mesmo projeto.
+ *
+ * `entrypoints` e ciclico: com `['cli', 'server']` e oito competidores, quatro derivam a
+ * chave pelo caminho da CLI e quatro pelo caminho do servidor.
+ */
+export function raceEntrypointsForOwnership(
+  projectDir: string,
+  competidores: number,
+  entrypoints: readonly RaceEntrypoint[],
+  margemMs = 2_500,
+): Promise<EntrypointRaceResult> {
+  const at = Date.now() + margemMs
+  const filhos: ChildProcess[] = []
+  const corridas = Array.from({ length: competidores }, (_, index) => {
+    const entrypoint = entrypoints[index % entrypoints.length] ?? 'cli'
+    const { child, out, err } = nodeChild(ENTRYPOINT_RACER_SCRIPT, [
+      projectDir,
+      entrypoint,
+      String(at),
+    ])
+    filhos.push(child)
+    let stdout = ''
+    let stderr = ''
+    err.on('data', (chunk: unknown) => {
+      stderr += String(chunk)
+    })
+    return new Promise<string>((done, fail) => {
+      const veredito = (): string | undefined => {
+        const linha = stdout.trim().split('\n').at(-1) ?? ''
+        return linha.startsWith('WIN') || linha.startsWith('LOSE') ? linha : undefined
+      }
+      // O veredito vem do STDOUT, nao da saida do processo: o vencedor fica vivo segurando
+      // a posse ate o fim da rodada, e e o pai quem decide quando ela acabou. Esperar pela
+      // saida faria o vencedor ter de soltar a posse para reportar — e ai um competidor
+      // lento ganharia legitimamente depois, com a rodada acusando dois vencedores que
+      // nunca coexistiram.
+      out.on('data', (chunk: unknown) => {
+        stdout += String(chunk)
+        const linha = veredito()
+        if (linha !== undefined) done(linha)
+      })
+      child.once('exit', (code: number | null) => {
+        const linha = veredito()
+        if (linha !== undefined) return done(linha)
+        fail(
+          new Error(
+            `competidor (${entrypoint}) saiu com ${code} sem veredito.\nstderr:\n${stderr}`,
+          ),
+        )
+      })
+    })
+  })
+
+  return Promise.all(corridas)
+    .then((linhas) => ({
+      winners: linhas.filter((linha) => linha.startsWith('WIN')),
+      losers: linhas.filter((linha) => linha.startsWith('LOSE')),
+      dirs: [...new Set(linhas.map((linha) => linha.split(' ')[1] ?? '<sem diretorio>'))],
+    }))
+    .finally(async () => {
+      // Fim da rodada: o vencedor solta a posse ao receber o sinal, e a rodada seguinte
+      // comeca com o projeto livre de verdade.
+      for (const filho of filhos) filho.kill('SIGTERM')
+      for (const filho of filhos) await ended(filho)
+    })
+}

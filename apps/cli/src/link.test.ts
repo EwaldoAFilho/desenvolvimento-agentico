@@ -52,6 +52,32 @@ describe('sonda do control plane', () => {
     expect(await connectHttp(endpoint)).toBeUndefined()
   })
 
+  it('control plane de OUTRO projeto nao e o nosso control plane', async () => {
+    // Descoberta velha, `.agentic` copiado junto com o diretorio, porta reaproveitada: do
+    // outro lado ha um control plane REAL, so que de outro repositorio. Aceita-lo faria
+    // `approve`, `pause` e `stop` mutarem o run errado, no projeto errado.
+    const endpoint = await listen(() => ({
+      status: 200,
+      body: { status: 'ok', service: CONTROL_PLANE_SERVICE, repoRoot: '/projetos/outro' },
+    }))
+
+    expect(await connectHttp(endpoint, { repoRoot: '/projetos/nosso' })).toBeUndefined()
+    expect((await connectHttp(endpoint, { repoRoot: '/projetos/outro' }))?.endpoint).toBe(endpoint)
+  })
+
+  it('control plane que nao diz por qual projeto responde e recusado para mutacao', async () => {
+    // Ler a ausencia como "versao antiga, deixa passar" seria o mesmo erro de tratar
+    // `undefined` como permissao que 003B veio corrigir na posse.
+    const endpoint = await listen(() => ({
+      status: 200,
+      body: { status: 'ok', service: CONTROL_PLANE_SERVICE },
+    }))
+
+    expect(await connectHttp(endpoint, { repoRoot: '/projetos/nosso' })).toBeUndefined()
+    // Sem expectativa declarada (sonda de leitura), a identidade do servico ainda basta.
+    expect((await connectHttp(endpoint))?.endpoint).toBe(endpoint)
+  })
+
   it('porta fechada e "nao ha control plane", nao excecao', async () => {
     const endpoint = await listen(() => ({ status: 200, body: {} }))
     const active = server

@@ -484,6 +484,25 @@ describe('D — VERIFYING: worktree stale do gate da missao nao trava o run', ()
         expect(run?.missionGateExecutionId).toBeTypeOf('string')
         const eventos = await servidor.plane.persistence.events.list(h.runId)
         expect(eventos.filter((event) => event.type === 'gate.finished').length).toBeGreaterThan(0)
+
+        /**
+         * QUANTAS execucoes do gate da missao existem depois da adocao?
+         *
+         * A pergunta e obrigatoria porque o estado do gate em memoria (`#missionGate`,
+         * `#missionGateStarted`) NAO e restaurado no boot: um novo dono que encontre o run
+         * em VERIFYING executa o gate. Se a execucao interrompida tivesse deixado rastro
+         * duravel, haveria DUAS medicoes para a mesma entrega.
+         *
+         * Medido: UMA. O processo que caiu morreu com o gate em voo, antes de qualquer
+         * transacao — `missionGateExecutionId` estava ausente no banco frio (verificado
+         * acima) — entao o novo dono nao repete nada: ele faz a primeira e unica medicao.
+         */
+        const iniciosDoGateDaMissao = eventos.filter(
+          (event) =>
+            event.type === 'gate.started' &&
+            (event.payload as { readonly scope?: unknown }).scope === 'mission',
+        )
+        expect(iniciosDoGateDaMissao).toHaveLength(1)
       } finally {
         await servidor.close()
       }

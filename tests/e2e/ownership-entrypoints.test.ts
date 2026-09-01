@@ -1,8 +1,13 @@
-import { access, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type LiveCli, runCli, spawnCli } from './support/cross-process.js'
+import {
+  type LiveCli,
+  raceEntrypointsForOwnership,
+  runCli,
+  spawnCli,
+} from './support/cross-process.js'
 import { type Fixture, materializeFixture } from './support/fixture.js'
 
 /**
@@ -192,6 +197,121 @@ describe('I14 nos entrypoints: uma chave de posse so', () => {
       expect(dados.running).toBe(true)
       expect(dados.reused).toBe(true)
       expect(await existe(join(projeto.configRoot, '.agentic', 'state.db'))).toBe(false)
+    } finally {
+      await encerrar(vivos)
+      await projeto.cleanup()
+    }
+  }, 180_000)
+
+  it('D. oito processos por DOIS entrypoints, dez rodadas: um vencedor, um diretorio', async () => {
+    const projeto = await projetoComConfigForaDoRepo()
+    try {
+      // Metade deriva a chave pelo caminho da CLI, metade pelo do servidor, sobre o mesmo
+      // projeto com `repoRoot` apontando para fora. Duas falhas possiveis, as duas graves:
+      // dois vencedores (as contas divergiram) e zero vencedores (ninguem sobe).
+      for (let rodada = 1; rodada <= 10; rodada += 1) {
+        const resultado = await raceEntrypointsForOwnership(projeto.configRoot, 8, [
+          'cli',
+          'server',
+        ])
+        expect({ rodada, vencedores: resultado.winners.length }).toEqual({
+          rodada,
+          vencedores: 1,
+        })
+        expect(resultado.losers).toHaveLength(7)
+        // Um diretorio so: "um vencedor em cada diretorio" seria a mesma falha disfarcada.
+        expect({ rodada, dirs: resultado.dirs }).toEqual({
+          rodada,
+          dirs: [join(projeto.repoRoot, '.agentic')],
+        })
+      }
+    } finally {
+      await projeto.cleanup()
+    }
+  }, 300_000)
+
+  it('E. endereco descoberto que pertence a OUTRO projeto nao recebe comando de mutacao', async () => {
+    const alheio = await projetoComConfigForaDoRepo()
+    const nosso = await projetoComConfigForaDoRepo()
+    const vivos: LiveCli[] = []
+    try {
+      const outro = await spawnCli(alheio.configRoot, ['serve', '--port', '0'], PRONTO)
+      vivos.push(outro)
+      const urlAlheia = urlDe(outro)
+
+      // O registro de descoberta do NOSSO projeto passa a apontar para o control plane do
+      // projeto ALHEIO. Acontece de verdade: `.agentic` copiado junto com o diretorio,
+      // porta reaproveitada, registro velho de outro checkout.
+      const registroAlheio = JSON.parse(
+        await readFile(join(alheio.repoRoot, '.agentic', 'control-plane.json'), 'utf8'),
+      ) as Record<string, unknown>
+      await mkdir(join(nosso.repoRoot, '.agentic'), { recursive: true })
+      await writeFile(
+        join(nosso.repoRoot, '.agentic', 'control-plane.json'),
+        JSON.stringify(registroAlheio),
+        'utf8',
+      )
+
+      const aprovado = await runCli(nosso.configRoot, [
+        'mission',
+        'approve',
+        nosso.missionPath,
+        '--actor',
+        'humano@003B',
+        '--json',
+      ])
+
+      // O ato NAO foi entregue ao estranho: ele foi feito no proprio projeto, cujo dono
+      // este comando disputou e ganhou.
+      const envelope = aprovado.json()
+      const dados = envelope.data as
+        | { readonly deliveredTo?: string; readonly status?: string }
+        | undefined
+      expect(dados?.deliveredTo).toBeUndefined()
+      expect(dados?.status).toBe('APPROVED')
+
+      // E o projeto alheio continua sem run nenhum: ninguem escreveu la.
+      const runsAlheios = (await (
+        await fetch(`${urlAlheia}/api/runs`)
+      ).json()) as readonly unknown[]
+      expect(runsAlheios).toHaveLength(0)
+    } finally {
+      await encerrar(vivos)
+      await nosso.cleanup()
+      await alheio.cleanup()
+    }
+  }, 180_000)
+
+  it('F. `mission approve` devolve o projeto: o `serve` seguinte vira dono', async () => {
+    const projeto = await projetoComConfigForaDoRepo()
+    const vivos: LiveCli[] = []
+    try {
+      // Sem control plane no ar, `approve` disputa a posse, muta e DEVOLVE. Se a devolucao
+      // fosse so uma flag em memoria — o lock do sistema operacional continuando preso —
+      // o projeto ficaria sem dono possivel ate o processo do `approve` morrer, e o
+      // `serve` abaixo nao subiria.
+      const aprovado = await runCli(projeto.configRoot, [
+        'mission',
+        'approve',
+        projeto.missionPath,
+        '--actor',
+        'humano@003B',
+        '--json',
+      ])
+      expect((aprovado.json().data as { readonly status?: string } | undefined)?.status).toBe(
+        'APPROVED',
+      )
+      // O banco nasceu no diretorio que a posse protege, nao no de configuracao.
+      expect(await existe(join(projeto.repoRoot, '.agentic', 'state.db'))).toBe(true)
+      expect(await existe(join(projeto.configRoot, '.agentic', 'state.db'))).toBe(false)
+
+      const dono = await spawnCli(projeto.configRoot, ['serve', '--port', '0'], PRONTO)
+      vivos.push(dono)
+      // E o dono enxerga a aprovacao: um banco so, no lugar certo.
+      const runs = (await (await fetch(`${urlDe(dono)}/api/runs`)).json()) as readonly {
+        readonly status: string
+      }[]
+      expect(runs.map((run) => run.status)).toEqual(['APPROVED'])
     } finally {
       await encerrar(vivos)
       await projeto.cleanup()
