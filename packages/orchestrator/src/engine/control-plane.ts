@@ -169,34 +169,52 @@ export interface ControlPlane {
 }
 
 /**
- * Os quatro caminhos de ESCRITA da persistencia, por store.
+ * O que um plane SEM posse pode chamar em cada store da persistencia.
  *
  * Recusar so na fachada (`plane.createRun`) nao bastava: `plane.persistence` e publico, e
  * `plane.persistence.runs.createRun(...)` chegava ao banco sem passar por guarda nenhuma.
- * Nenhum handler de producao fazia isso hoje — e "hoje" e exatamente a palavra que a
- * invariante nao pode depender. Um plane sem posse precisa ser somente-leitura de fato, nao
- * por convencao de quem o usa.
+ * Nenhum handler de producao fazia isso hoje — e "hoje" e exatamente a palavra de que uma
+ * invariante nao pode depender.
+ *
+ * A lista e de LEITURAS, nao de escritas, e a inversao e o ponto. Uma lista de bloqueios
+ * envelhece em silencio: `runs.commit` e `runs.withRecoveryTransaction` escrevem tanto
+ * quanto `withTransaction` e passariam despercebidos: metodo novo entraria liberado por
+ * omissao. Com allowlist, o default e RECUSA — a mesma regra que 003B aplicou a posse —, e
+ * uma leitura nova esquecida falha alto, no teste, em vez de abrir um buraco calado.
  */
-const ESCRITAS_DA_PERSISTENCIA = {
-  runs: ['createRun', 'withTransaction'],
-  events: ['append'],
-  artifacts: ['write'],
+const LEITURAS_DA_PERSISTENCIA = {
+  runs: ['loadRun', 'listRuns', 'loadTaskRuns', 'loadAttempts', 'loadAttempt', 'listLocks'],
+  events: ['list', 'listSync', 'latestSeq', 'count', 'subscribe', 'close'],
+  artifacts: [
+    'read',
+    'readText',
+    'readById',
+    'get',
+    'getByPath',
+    'list',
+    'toRecord',
+    'runDirectory',
+    'resolvePath',
+  ],
 } as const satisfies Readonly<Record<string, readonly string[]>>
 
 /**
- * Espelho somente-leitura de um store: tudo passa, menos o que escreve.
+ * Espelho somente-leitura de um store: passa o que le, recusa todo o resto.
  *
  * `Proxy` em vez de copia porque os stores sao classes com campo privado (`#handle`): um
  * objeto derivado por `Object.create` perderia o `this` e quebraria na primeira leitura. O
- * `bind` no alvo mantem os metodos legitimos funcionando exatamente como antes.
+ * `bind` no alvo mantem os metodos legitimos funcionando exatamente como antes; o que nao e
+ * funcao (getters como `db` e `notifier`) passa direto, porque ler nao muda nada.
  *
  * Isto NAO e a fatia do modo `readonly` da conexao (D9, ainda em aberto): a conexao continua
  * `readwrite`. O que muda e a CAPACIDADE exposta — sem posse, nao ha por onde escrever.
  */
-function semEscrita<T extends object>(store: T, bloqueados: readonly string[]): T {
+function somenteLeitura<T extends object>(store: T, leituras: readonly string[]): T {
   return new Proxy(store, {
     get(target, prop, _receiver): unknown {
-      if (typeof prop === 'string' && bloqueados.includes(prop)) {
+      const value: unknown = Reflect.get(target, prop, target)
+      if (typeof value !== 'function') return value
+      if (typeof prop === 'string' && !leituras.includes(prop)) {
         return (): Promise<never> =>
           Promise.reject(
             new CommandRefusedError(
@@ -204,8 +222,7 @@ function semEscrita<T extends object>(store: T, bloqueados: readonly string[]): 
             ),
           )
       }
-      const value: unknown = Reflect.get(target, prop, target)
-      return typeof value === 'function' ? value.bind(target) : value
+      return value.bind(target)
     },
   })
 }
@@ -214,9 +231,9 @@ function semEscrita<T extends object>(store: T, bloqueados: readonly string[]): 
 function persistenciaDeLeitura(persistence: Persistence): Persistence {
   return {
     ...persistence,
-    runs: semEscrita(persistence.runs, ESCRITAS_DA_PERSISTENCIA.runs),
-    events: semEscrita(persistence.events, ESCRITAS_DA_PERSISTENCIA.events),
-    artifacts: semEscrita(persistence.artifacts, ESCRITAS_DA_PERSISTENCIA.artifacts),
+    runs: somenteLeitura(persistence.runs, LEITURAS_DA_PERSISTENCIA.runs),
+    events: somenteLeitura(persistence.events, LEITURAS_DA_PERSISTENCIA.events),
+    artifacts: somenteLeitura(persistence.artifacts, LEITURAS_DA_PERSISTENCIA.artifacts),
   }
 }
 

@@ -130,6 +130,15 @@ describe('plane sem posse declarada nao muta (I14)', () => {
     await expect(plane.persistence.runs.withTransaction(async () => undefined)).rejects.toThrow(
       /sem posse do projeto/i,
     )
+    // `commit` e `withRecoveryTransaction` escrevem tanto quanto `withTransaction`. Uma
+    // lista de BLOQUEIOS os teria deixado passar por omissao — e e exatamente por isso que
+    // a lista e de LEITURAS: o default e recusa.
+    await expect(plane.persistence.runs.commit(async () => undefined)).rejects.toThrow(
+      /sem posse do projeto/i,
+    )
+    await expect(
+      plane.persistence.runs.withRecoveryTransaction(async () => undefined),
+    ).rejects.toThrow(/sem posse do projeto/i)
     await expect(
       plane.persistence.events.append({ runId: RUN_INEXISTENTE } as never),
     ).rejects.toThrow(/sem posse do projeto/i)
@@ -141,6 +150,11 @@ describe('plane sem posse declarada nao muta (I14)', () => {
     expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
     expect(await plane.persistence.runs.loadRun(RUN_INEXISTENTE)).toBeUndefined()
     expect(await plane.persistence.events.list(RUN_INEXISTENTE)).toEqual([])
+    expect(await plane.persistence.runs.listRuns()).toEqual([])
+    expect(await plane.persistence.runs.loadTaskRuns(RUN_INEXISTENTE)).toEqual([])
+    expect(await plane.persistence.runs.loadAttempts(RUN_INEXISTENTE)).toEqual([])
+    expect(plane.persistence.artifacts.list(RUN_INEXISTENTE)).toEqual([])
+    expect(plane.persistence.events.latestSeq()).toBe(0)
     void spec
     void compiled
   })
