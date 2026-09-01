@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Attempt, Run, RunId, TaskRun } from '@agentic/domain'
+import { openPersistence } from '@agentic/persistence'
 import { attachServer, startServer } from '@agentic/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { StepFn } from './support/agents.js'
@@ -527,6 +528,43 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         expect(await plane.open(h.runId)).toBe(aberturas[0])
       } finally {
         await plane.close()
+      }
+    } finally {
+      await h.cleanup().catch(() => undefined)
+    }
+  }, 240_000)
+
+  it('close nao deixa dono fantasma de uma abertura em voo', async () => {
+    const h = await createMissionHarness({ step: lento, project: comAgentesInProcess })
+    try {
+      await h.start()
+      h.orchestrator.start()
+      await esperar('uma task chegar a RUNNING', async () =>
+        (await h.tasks()).some((task) => task.status === 'RUNNING'),
+      )
+      await h.plane.close()
+
+      const { createControlPlane } = await import('@agentic/orchestrator')
+      const plane = createControlPlane({
+        project: h.project,
+        gatesFile: h.gatesFile,
+        repoRoot: h.root,
+      })
+      // Abertura iniciada ANTES do fechamento: sem tratamento, ela terminaria depois e
+      // entregaria um dono vivo sobre um banco ja fechado.
+      const emVoo = plane.open(h.runId)
+      await plane.close()
+      await emVoo.catch(() => undefined)
+      // Depois de fechado, abrir e recusado em vez de devolver algo inutilizavel.
+      await expect(plane.open(h.runId)).rejects.toThrow(/encerrado/)
+      // E nada continua escrevendo: o banco fechou e ninguem ficou ticando por cima dele.
+      const frio = openPersistence({ baseDir: join(h.root, '.agentic'), mode: 'readonly' })
+      try {
+        const antes = (await frio.events.list(h.runId)).length
+        await sleep(1_500)
+        expect((await frio.events.list(h.runId)).length).toBe(antes)
+      } finally {
+        frio.close()
       }
     } finally {
       await h.cleanup().catch(() => undefined)

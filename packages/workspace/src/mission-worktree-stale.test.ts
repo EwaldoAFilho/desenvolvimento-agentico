@@ -108,6 +108,40 @@ describe('worktree do mission gate deixada por um reinicio', () => {
     expect(ainda?.branch).toBe('alguma-outra-coisa')
   })
 
+  it('NAO devolve worktree detached que nao esta na linha da missao', async () => {
+    repo = await createTestRepo()
+    const path = missionPath(repo.root)
+    // Detached sozinho nao prova procedencia: uma arvore solta em SHA arbitrario tambem e
+    // detached. Aqui o commit vive numa linha propria, sem relacao com a branch da missao.
+    await providerOf(repo.root).ensureMissionBranch(MISSION)
+    await repo.git('checkout', '-q', '-b', 'linha-paralela')
+    await repo.write('so-daqui.txt', 'commit fora da linha da missao')
+    await repo.commitAll('commit paralelo')
+    const forasteiro = await repo.git('rev-parse', 'HEAD')
+    await repo.git('checkout', '-q', 'main')
+    await repo.git('worktree', 'add', '--detach', path, forasteiro)
+
+    await expect(
+      providerOf(repo.root).acquireMissionWorkspace(request('mission-gate-1')),
+    ).rejects.toBeInstanceOf(WorkspaceError)
+    const ainda = (await listWorktrees(repo.root)).find((entry) => entry.path === path)
+    expect(ainda?.head).toBe(forasteiro)
+  })
+
+  it('devolve worktree detached cujo commit ESTA na linha da missao', async () => {
+    repo = await createTestRepo()
+    const provider = providerOf(repo.root)
+    const mission = await provider.ensureMissionBranch(MISSION)
+    const path = missionPath(repo.root)
+    // E assim que `#acquireMission` cria quando a branch ja esta em check-out: detached
+    // sobre o commit da missao. Um reinicio deixa exatamente isto para tras.
+    await repo.git('worktree', 'add', '--detach', path, mission.sha)
+
+    const workspace = await providerOf(repo.root).acquireMissionWorkspace(request('mission-gate-2'))
+    expect(workspace.path).toBe(path)
+    expect(workspace.leasedBy).toBe(attemptId('mission-gate-2'))
+  })
+
   it('nunca alcanca a arvore principal do repositorio orquestrado', async () => {
     repo = await createTestRepo()
     await providerOf(repo.root).ensureMissionBranch(MISSION)

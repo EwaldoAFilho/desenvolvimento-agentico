@@ -166,6 +166,18 @@ export async function addWorktreeDetached(
   await git(['worktree', 'add', '--detach', path, commit], { cwd, stage })
 }
 
+/**
+ * Remocao que NAO apaga por conta propria: se o git recusar devolver a worktree, o
+ * diretorio fica onde esta e o chamador decide. E o oposto de `removeWorktree`, e existe
+ * para quem prefere recusar a operacao a destruir algo que nao entendeu.
+ */
+export async function removeWorktreeStrict(cwd: string, path: string): Promise<boolean> {
+  const result = await git(['worktree', 'remove', '--force', path], { cwd, allowFailure: true })
+  if (result.exitCode !== 0) return false
+  await git(['worktree', 'prune'], { cwd, allowFailure: true })
+  return true
+}
+
 /** Remocao tolerante: o disco precisa ficar limpo mesmo se o registro do git ja divergiu. */
 export async function removeWorktree(cwd: string, path: string): Promise<void> {
   const result = await git(['worktree', 'remove', '--force', path], { cwd, allowFailure: true })

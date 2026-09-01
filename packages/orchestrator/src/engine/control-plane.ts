@@ -229,6 +229,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const orchestrators = new Map<string, Orchestrator>()
   /** Aberturas em voo, por run: o que impede dois donos nascerem em paralelo (I13). */
   const opening = new Map<string, Promise<Orchestrator>>()
+  let closed = false
 
   const wiringFor = (mission: MissionSpec): RunWiring => {
     const execution = config.project.execution
@@ -334,6 +335,11 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * chamada espera a primeira em vez de comecar outra.
    */
   const open = (runId: RunId): Promise<Orchestrator> => {
+    // Depois de `close` nao ha banco para abrir contra: recusar e melhor que devolver um
+    // dono que so vai falhar no primeiro tick.
+    if (closed) {
+      return Promise.reject(new CommandRefusedError('control plane encerrado: nada a abrir'))
+    }
     const existing = orchestrators.get(runId)
     if (existing !== undefined) return Promise.resolve(existing)
     const pending = opening.get(runId)
@@ -430,6 +436,16 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     open,
     adoptRecoverableRuns,
     close: async () => {
+      // Fechar sem olhar para `opening` deixava a pior sobra possivel: uma abertura
+      // iniciada antes do fechamento terminava depois, povoava o mapa ja limpo e entregava
+      // ao chamador um dono vivo sobre um banco fechado. Barrar novas aberturas e esperar
+      // as em voo custa um `await`; o oposto custa um orquestrador fantasma.
+      closed = true
+      const emVoo = await Promise.allSettled([...opening.values()])
+      for (const aberto of emVoo) {
+        if (aberto.status === 'fulfilled') await aberto.value.abandon().catch(() => undefined)
+      }
+      opening.clear()
       for (const orchestrator of orchestrators.values()) await orchestrator.abandon()
       orchestrators.clear()
       persistence.close()
