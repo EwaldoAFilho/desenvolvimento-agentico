@@ -10,8 +10,13 @@ import { CliError, usageError } from './result.js'
 /**
  * Abre o control plane local a partir do projeto ja validado.
  *
- * Com `lease`, o plane so age enquanto for o dono do projeto (I14) — e o que `mission start`
- * usa quando orquestra em primeiro plano. Sem `lease`, e um plane sem posse: serve para ler.
+ * `baseDir` e o diretorio de ESTADO (`context.runtimeDir`), nao o de configuracao: e ele que
+ * a posse protege, e abrir o banco em outro lugar era abrir um SEGUNDO `state.db` para o
+ * mesmo projeto (I14).
+ *
+ * Com `lease`, o plane pode MUTAR, porque provou ser o dono. Sem `lease`, ele so le: as
+ * operacoes de escrita recusam por conta propria, entao um comando de leitura nao precisa
+ * disputar posse e um comando de mutacao nao consegue esquecer de disputar.
  */
 export function openPlane(
   deps: CommandDeps,
@@ -22,7 +27,7 @@ export function openPlane(
     project: context.project,
     gatesFile: context.gatesFile,
     repoRoot: context.repoRoot,
-    baseDir: context.baseDir,
+    baseDir: context.runtimeDir,
     registry: deps.registry(context.project),
     ...(lease === undefined ? {} : { lease }),
   })
@@ -129,7 +134,7 @@ export async function requireLink(
   port?: number,
 ): Promise<ControlPlaneLink> {
   const resolved = await resolveEndpoint(context, port === undefined ? {} : { port })
-  const link = await deps.connect(resolved.endpoint)
+  const link = await deps.connect(resolved.endpoint, { repoRoot: context.repoRoot })
   if (link === undefined) {
     throw new CliError(
       'NO_CONTROL_PLANE',

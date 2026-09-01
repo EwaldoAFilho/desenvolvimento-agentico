@@ -66,9 +66,9 @@ async function publishApi(
       projectText: context.projectText,
       gatesText: context.gatesText,
       repoRoot: context.repoRoot,
-      // Mesmo diretorio que a CLI consulta para descobrir: o registro tem que cair onde
-      // `agentic mission pause` vai procurar.
-      runtimeDir: context.baseDir,
+      // Mesmo diretorio que a posse protege e que a CLI consulta para descobrir: o registro
+      // tem que cair onde `agentic mission pause` vai procurar.
+      runtimeDir: context.runtimeDir,
       ...(port === undefined ? {} : { port }),
       ...(instanceId === undefined ? {} : { instanceId }),
     })
@@ -140,7 +140,7 @@ export async function missionStartCommand(
     context,
     args.port === undefined ? {} : { port: args.port },
   )
-  const link = await deps.connect(resolved.endpoint)
+  const link = await deps.connect(resolved.endpoint, { repoRoot: context.repoRoot })
   if (link !== undefined) return entregar(link.endpoint, link)
 
   /**
@@ -151,10 +151,11 @@ export async function missionStartCommand(
    * pelo endereco tentado (o caso classico e `--port` divergente). Entao a descoberta e
    * consultada SEM a flag e o START vai para o dono de verdade.
    */
-  const posse = acquireControlPlaneOwnership({ baseDir: context.baseDir })
+  const posse = acquireControlPlaneOwnership({ baseDir: context.runtimeDir })
   if (!posse.ok) {
     const dono = await discoverRuntime(context)
-    const outro = dono === undefined ? undefined : await deps.connect(dono.url)
+    const outro =
+      dono === undefined ? undefined : await deps.connect(dono.url, { repoRoot: context.repoRoot })
     if (outro !== undefined) return entregar(outro.endpoint, outro)
     return failure(
       'mission start',

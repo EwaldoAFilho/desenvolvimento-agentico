@@ -19,10 +19,22 @@ const abertos: RunningServer[] = []
 
 afterEach(async () => {
   for (const server of abertos.splice(0)) await server.close().catch(() => undefined)
-  // O plane do harness nao tem posse (nao e um dono); fechar so devolve o banco.
   await harness?.cleanup()
   harness = undefined
 })
+
+/**
+ * Projeto pronto e SEM dono.
+ *
+ * O harness e dono do que cria (um plane sem posse nao muta, I14), mas neste arquivo quem
+ * precisa ser dono e o `startServer` sob teste. Devolver a posse aqui, a vista, e o que
+ * deixa a medicao ser sobre o boot do servidor e nao sobre o fixture.
+ */
+async function projetoSemDono(): Promise<ServerHarness> {
+  const criado = await createServerHarness()
+  criado.lease.release()
+  return criado
+}
 
 async function subir(extra: { readonly port?: number } = {}): Promise<RunningServer> {
   if (harness === undefined) throw new Error('harness ausente')
@@ -56,7 +68,7 @@ function portaOcupada(): Promise<{ readonly port: number; close: () => Promise<v
 
 describe('posse do projeto no boot do control plane', () => {
   it('o segundo control plane e recusado com o endereco do dono no motivo', async () => {
-    harness = await createServerHarness()
+    harness = await projetoSemDono()
     const dono = await subir()
 
     const recusa = await subir().then(
@@ -71,7 +83,7 @@ describe('posse do projeto no boot do control plane', () => {
   })
 
   it('a posse e adquirida ANTES de abrir o banco: o perdedor nao chega a criar plane', async () => {
-    harness = await createServerHarness()
+    harness = await projetoSemDono()
     await subir()
 
     // Se o perdedor tivesse aberto banco, o erro seria outro (ou nenhum) e sobraria uma
@@ -80,7 +92,7 @@ describe('posse do projeto no boot do control plane', () => {
   })
 
   it('a descoberta publicada carrega o instanceId do dono', async () => {
-    harness = await createServerHarness()
+    harness = await projetoSemDono()
     const dono = await subir()
 
     const registro = await readControlPlaneFile(`${harness.root}/.agentic`)
@@ -90,7 +102,7 @@ describe('posse do projeto no boot do control plane', () => {
   })
 
   it('encerrar devolve a posse: o proximo control plane sobe', async () => {
-    harness = await createServerHarness()
+    harness = await projetoSemDono()
     const primeiro = await subir()
     expect(primeiro.lease?.held).toBe(true)
     await primeiro.close()
@@ -104,7 +116,7 @@ describe('posse do projeto no boot do control plane', () => {
   })
 
   it('boot que falha DEPOIS da posse a devolve, em vez de trancar o projeto', async () => {
-    harness = await createServerHarness()
+    harness = await projetoSemDono()
     const ocupada = await portaOcupada()
     try {
       // A porta ja esta tomada: a posse e adquirida e o `listen` quebra logo depois. Um

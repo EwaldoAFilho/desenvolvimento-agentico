@@ -13,6 +13,7 @@ export {
   CONTROL_PLANE_LOCK_FILE,
   type ControlPlaneLease,
   canonicalDir,
+  canonicalIfPresent,
   controlPlaneLockPath,
   DEFAULT_LOCK_BUSY_TIMEOUT_MS,
   newInstanceId,

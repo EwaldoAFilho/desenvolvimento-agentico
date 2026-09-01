@@ -15,6 +15,7 @@ import type {
   TaskRun,
 } from '@agentic/domain'
 import { taskId as toTaskId } from '@agentic/domain'
+import { acquireControlPlaneOwnership, type ControlPlaneLease } from '@agentic/persistence'
 import type { ProviderFactory } from '@agentic/providers'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseMissionFile, parseProjectFile, toMissionSpec } from '@agentic/schemas'
@@ -63,6 +64,12 @@ export interface HarnessOptions {
 export interface Harness {
   readonly root: string
   readonly plane: ControlPlane
+  /**
+   * A posse do projeto que este harness detem (I14). Um plane sem posse nao cria run, nao
+   * aprova, nao inicia e nao abre orquestrador — entao o harness disputa a posse de verdade,
+   * como `startServer` faz, em vez de a producao ser afrouxada para o teste caber.
+   */
+  readonly lease: ControlPlaneLease
   readonly runId: RunId
   readonly orchestrator: Orchestrator
   readonly mission: MissionSpec
@@ -149,12 +156,19 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   }
   const mission = toMissionSpec(missionParsed.value)
 
+  // Mesma disputa da producao, sobre o `.agentic` deste projeto descartavel. O mesmo lease
+  // atravessa `reopen`: reabrir e o mesmo processo continuando dono.
+  const posse = acquireControlPlaneOwnership({ baseDir: join(root, '.agentic') })
+  if (!posse.ok) throw new Error(`harness: nao consegui a posse do fixture (${posse.detail})`)
+  const lease: ControlPlaneLease = posse.lease
+
   const build = (activeStep: StepFn): ControlPlane =>
     createControlPlane({
       project: projectParsed.value,
       gatesFile: gatesParsed.value,
       repoRoot: root,
       baseDir: join(root, '.agentic'),
+      lease,
       providerFactories: factoriesOf(
         projectParsed.value,
         activeStep,
@@ -184,6 +198,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   const make = (activePlane: ControlPlane, activeOrchestrator: Orchestrator): Harness => ({
     root,
     plane: activePlane,
+    lease,
     runId: created.id,
     orchestrator: activeOrchestrator,
     mission,
@@ -224,6 +239,8 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     },
     cleanup: async (): Promise<void> => {
       await activePlane.close().catch(() => undefined)
+      // A posse sai por ultimo: enquanto houver plane aberto, o projeto tem dono.
+      lease.release()
       await rm(root, { recursive: true, force: true })
     },
   })

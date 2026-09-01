@@ -14,9 +14,9 @@ import {
   processAlive,
   readControlPlaneFile,
   removeControlPlaneFile,
-  runtimeDirOf,
   writeControlPlaneFile,
 } from './control-plane-file.js'
+import { runtimeDirOf } from './project-identity.js'
 
 const exec = promisify(execFile)
 

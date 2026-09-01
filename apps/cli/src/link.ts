@@ -1,3 +1,4 @@
+import { canonicalIfPresent } from '@agentic/persistence'
 import type { ProjectFile } from '@agentic/schemas'
 
 /**
@@ -43,26 +44,61 @@ const PROBE_TIMEOUT_MS = 750
 /** Identidade que o nosso `/api/health` devolve. Porta ocupada nao e control plane. */
 export const CONTROL_PLANE_SERVICE = '@agentic/server'
 
+export interface ConnectExpectation {
+  /** `repoRoot` canonico do projeto do chamador. O endereco tem de responder por ELE. */
+  readonly repoRoot: string
+}
+
 /**
  * Sonda o endereco descoberto (ou o declarado em `project.yaml`). `undefined` significa
- * "nao ha control plane no ar" — nao significa "pode escrever".
+ * "nao ha control plane no ar PARA ESTE PROJETO" — nunca significa "pode escrever".
  *
- * A sonda pergunta QUEM atende, nao apenas SE atende: qualquer processo pode estar na porta
- * declarada e responder 404. Tratar um estranho como control plane troca a mensagem que diz
- * o caminho de volta por um `HTTP 404` que nao explica nada.
+ * A sonda faz DUAS perguntas, e a segunda e a que 003B acrescentou:
+ *
+ * 1. **Quem atende?** Qualquer processo pode estar na porta declarada e responder 404.
+ *    Tratar um estranho como control plane troca a mensagem que diz o caminho de volta por
+ *    um `HTTP 404` que nao explica nada.
+ * 2. **Por qual projeto ele responde?** Um registro de descoberta velho, um `.agentic`
+ *    copiado junto com o diretorio ou uma porta reaproveitada colocam do outro lado um
+ *    control plane REAL — de outro repositorio. Sem esta conferencia, `mission approve`,
+ *    `pause` e `stop` iriam mutar o run errado, no projeto errado. E o cliente que prova a
+ *    identidade do endereco; nao ha autenticacao aqui, e nem e disso que se trata.
+ *
+ * O caminho recebido e canonicalizado antes da comparacao: control plane e cliente vivem na
+ * mesma maquina (o bind e loopback por desenho), e `/repo` e `/atalho-para-repo` sao o mesmo
+ * projeto.
  */
-export async function connectHttp(endpoint: string): Promise<ControlPlaneLink | undefined> {
+export async function connectHttp(
+  endpoint: string,
+  expected?: ConnectExpectation,
+): Promise<ControlPlaneLink | undefined> {
   try {
     const response = await fetch(`${endpoint}/api/health`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
     if (!response.ok) return undefined
-    const body = (await response.json()) as { readonly service?: unknown }
+    const body = (await response.json()) as {
+      readonly service?: unknown
+      readonly repoRoot?: unknown
+    }
     if (body.service !== CONTROL_PLANE_SERVICE) return undefined
+    if (expected !== undefined && !respondePor(body.repoRoot, expected.repoRoot)) return undefined
   } catch {
     return undefined
   }
   return httpLink(endpoint)
+}
+
+/**
+ * Um control plane que nao diz por qual projeto responde nao serve para mutacao.
+ *
+ * A ausencia poderia ser lida como "versao antiga, deixa passar" — e seria o mesmo erro de
+ * tratar `undefined` como permissao que 003B veio corrigir na posse. `repoRoot` esta no
+ * `/api/health` desde que o endpoint existe; ausencia aqui significa outro programa.
+ */
+function respondePor(recebido: unknown, esperado: string): boolean {
+  if (typeof recebido !== 'string' || recebido.length === 0) return false
+  return canonicalIfPresent(recebido) === canonicalIfPresent(esperado)
 }
 
 export function httpLink(endpoint: string): ControlPlaneLink {

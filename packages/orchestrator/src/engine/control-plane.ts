@@ -129,9 +129,12 @@ export interface ControlPlaneConfig {
   readonly agentLog?: AgentLogConfig
   readonly safetyIntervalMs?: number
   /**
-   * Posse do projeto. Presente = este plane so age enquanto for o dono (I14). Ausente =
-   * plane sem posse: serve para ler e para teste, e NAO deve abrir orquestrador em producao.
-   * Quem sobe control plane de verdade (`startServer`, `mission start`) sempre passa uma.
+   * Posse do projeto (I14). Presente = este plane pode MUTAR, enquanto for o dono.
+   *
+   * Ausente = plane de LEITURA. Ele abre o banco e responde consultas, mas `createRun`,
+   * `approveMission`, `startRun`, `open` e `adoptRecoverableRuns` recusam — a ausencia e
+   * recusa, nunca permissao. Quem precisa mutar (`startServer`, `mission start`,
+   * `mission approve`) disputa a posse ANTES e passa o lease aqui.
    */
   readonly lease?: OwnershipLease
 }
@@ -247,34 +250,47 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const lease = config.lease
 
   /**
-   * I14 na pratica: um plane que declarou posse nao age depois de perde-la.
+   * I14 na pratica: MUTAR exige posse DECLARADA e ainda VIVA.
    *
-   * O perdedor da disputa nem chega aqui — `startServer` recusa antes de abrir banco. Esta
-   * guarda cobre o outro caso, mais silencioso: a posse foi solta (encerramento em curso,
-   * ordem de `close` trocada) e alguma rota ainda tenta abrir um dono. Agir sem posse e
-   * exatamente o defeito que D4 descreve, entao aqui ele vira recusa com motivo.
+   * A guarda anterior so cobrava a posse quando ela existia (`lease !== undefined && !held`),
+   * e por isso lia a ausencia como permissao. Era o segundo bypass medido em 003B: um plane
+   * construido sem lease — `mission approve` pelo caminho local, uma composicao esquecida,
+   * um harness — criava run, aprovava missao e iniciava run no `state.db` de um projeto que
+   * pertence a OUTRO processo. Nao ha meio-termo aqui: sem prova de posse, recusa.
+   *
+   * Sao duas perguntas diferentes, e as duas precisam de resposta:
+   *
+   * 1. **Este plane e dono?** Sem `lease`, ele nunca disputou nada. Quem so le nao precisa
+   *    disputar, e por isso o plane sem posse continua existindo — ele apenas nao muta.
+   * 2. **Ainda e?** A posse pode ter sido solta (encerramento em curso, ordem de `close`
+   *    trocada) enquanto uma rota ainda tenta agir. Depois de `release`, este plane nao
+   *    manda mais neste projeto, mesmo que o processo continue vivo.
    */
   const exigirPosse = (acao: string): void => {
-    if (lease !== undefined && !lease.held) {
-      throw new CommandRefusedError(`control plane sem posse do projeto: ${acao} recusado (I14)`)
-    }
-  }
-
-  /**
-   * Para ADOTAR, nao basta "nao ter perdido a posse": e preciso TE-LA.
-   *
-   * A diferenca importa porque adocao e o unico efeito que o control plane produz sozinho, no
-   * boot, sem ninguem pedir — foi o que transformou D4 de risco em dano. Um plane construido
-   * sem posse (comando de leitura, teste) nao pode cair nesse caminho por esquecimento de
-   * quem o construiu: aqui a ausencia de lease e recusa, nao permissao.
-   */
-  const exigirPosseDeclarada = (acao: string): void => {
     if (lease === undefined) {
       throw new CommandRefusedError(
         `control plane aberto sem posse do projeto: ${acao} recusado (I14)`,
       )
     }
-    exigirPosse(acao)
+    if (!lease.held) {
+      throw new CommandRefusedError(`control plane sem posse do projeto: ${acao} recusado (I14)`)
+    }
+  }
+
+  /**
+   * A mesma cobranca, em forma de promessa recusada.
+   *
+   * `createRun`, `approveMission` e `startRun` sao declarados `Promise`, e um `throw`
+   * sincrono deles escapa por fora do `.catch()` de quem chama — o erro certo, no lugar
+   * errado. Recusar assincronamente mantem o contrato do tipo.
+   */
+  const recusarSemPosse = <T>(acao: string): Promise<T> | undefined => {
+    try {
+      exigirPosse(acao)
+      return undefined
+    } catch (error) {
+      return Promise.reject(error)
+    }
   }
 
   const orchestrators = new Map<string, Orchestrator>()
@@ -391,11 +407,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     if (closed) {
       return Promise.reject(new CommandRefusedError('control plane encerrado: nada a abrir'))
     }
-    try {
-      exigirPosse(`abrir orquestrador do run ${runId}`)
-    } catch (error) {
-      return Promise.reject(error)
-    }
+    const semPosse = recusarSemPosse<Orchestrator>(`abrir orquestrador do run ${runId}`)
+    if (semPosse !== undefined) return semPosse
     const existing = orchestrators.get(runId)
     if (existing !== undefined) return Promise.resolve(existing)
     const pending = opening.get(runId)
@@ -433,7 +446,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const adoptRecoverableRuns = async (): Promise<AdoptionResult> => {
     // Somente o dono adota. Dois processos adotando o mesmo run foi o dano medido em D4:
     // duas worktrees no mesmo caminho e tentativas descartadas por transicao invalida.
-    exigirPosseDeclarada('adotar runs recuperaveis')
+    exigirPosse('adotar runs recuperaveis')
     const adopted: RunAdoption[] = []
     const refused: RunAdoptionRefusal[] = []
     const rows = persistence.queries.listRuns({ status: [...RECOVERABLE_ACTIVE_RUN_STATUSES] })
@@ -481,20 +494,15 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     validateMission,
     compileMission,
     // Estas tres escrevem estado sem passar por `open`, entao cobram a guarda por conta
-    // propria. Num plane sem posse declarada elas seguem como antes — quem muda isso e a
-    // fatia que tirar os comandos de leitura do modo `readwrite` (D9).
-    createRun: (input) => {
-      exigirPosse('criar run')
-      return createRun(deps, { ...input, project: input.project ?? config.project })
-    },
-    approveMission: (input) => {
-      exigirPosse('aprovar missao')
-      return approveMission(deps, input)
-    },
-    startRun: (input) => {
-      exigirPosse('iniciar run')
-      return startRun(deps, input)
-    },
+    // propria — e cobram a MESMA guarda: num plane sem posse declarada elas recusam, como
+    // `open` e `adoptRecoverableRuns`. Foi por aqui que `mission approve` mutava o projeto
+    // de outro processo (003B).
+    createRun: (input) =>
+      recusarSemPosse<Run>('criar run') ??
+      createRun(deps, { ...input, project: input.project ?? config.project }),
+    approveMission: (input) =>
+      recusarSemPosse<Run>('aprovar missao') ?? approveMission(deps, input),
+    startRun: (input) => recusarSemPosse<Run>('iniciar run') ?? startRun(deps, input),
     pauseRun: async (runId, command) => pauseRun(await open(runId), command),
     resumeRun: async (runId, command) => resumeRun(await open(runId), command),
     stopRun: async (runId, command) => stopRun(await open(runId), command),

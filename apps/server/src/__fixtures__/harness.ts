@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import type { ProviderRegistry, RunId } from '@agentic/domain'
 import type { ControlPlane, Orchestrator } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership, type ControlPlaneLease } from '@agentic/persistence'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseProjectFile } from '@agentic/schemas'
 import type { FastifyInstance } from 'fastify'
@@ -65,6 +66,12 @@ export interface ServerHarness {
   readonly root: string
   readonly app: FastifyInstance
   readonly plane: ControlPlane
+  /**
+   * A posse do projeto que este harness detem (I14). Exposta porque um teste cujo dono e
+   * OUTRO processo (`startServer`) precisa devolver o projeto antes — e precisa que isso
+   * apareca no teste, nao aconteca em silencio.
+   */
+  readonly lease: ControlPlaneLease
   readonly deps: ServerDeps
   readonly project: ProjectFile
   readonly gatesFile: GatesFile
@@ -123,11 +130,18 @@ export async function createServerHarness(
   const gates = parseGatesFile(gatesText)
   if (!gates.ok) throw new Error(`gates.yaml invalido: ${JSON.stringify(gates.issues)}`)
 
+  // O harness e DONO do projeto, como `startServer` (I14): sem posse declarada o plane
+  // recusa criar run, aprovar missao, iniciar run e abrir orquestrador.
+  const posse = acquireControlPlaneOwnership({ baseDir: join(root, '.agentic') })
+  if (!posse.ok) throw new Error(`harness: nao consegui a posse do fixture (${posse.detail})`)
+  const lease = posse.lease
+
   const plane = createControlPlane({
     project: project.value,
     gatesFile: gates.value,
     repoRoot: root,
     baseDir: join(root, '.agentic'),
+    lease,
     safetyIntervalMs: 0,
     scripts: mockScripts([...taskIds]),
     ...(options.registry === undefined ? {} : { registry: options.registry }),
@@ -156,6 +170,7 @@ export async function createServerHarness(
     root,
     app,
     plane,
+    lease,
     deps,
     project: project.value,
     gatesFile: gates.value,
@@ -169,6 +184,9 @@ export async function createServerHarness(
     cleanup: async (): Promise<void> => {
       await app.close().catch(() => undefined)
       await plane.close().catch(() => undefined)
+      // Idempotente: um teste que ja devolveu o projeto ao `startServer` passa por aqui sem
+      // efeito, e um que nao devolveu solta a posse no fim.
+      lease.release()
       await rm(root, { recursive: true, force: true })
     },
   }

@@ -3,11 +3,7 @@ import {
   type ControlPlaneLease,
   newInstanceId,
 } from '@agentic/persistence'
-import {
-  type ControlPlaneRuntime,
-  readControlPlaneFile,
-  runtimeDirOf,
-} from './control-plane-file.js'
+import { type ControlPlaneRuntime, readControlPlaneFile } from './control-plane-file.js'
 
 /**
  * O passo de posse do boot (I14).
@@ -42,7 +38,15 @@ export class ControlPlaneBusyError extends Error {
 }
 
 export interface OwnershipStepInput {
-  readonly repoRoot: string
+  /**
+   * O diretorio de ESTADO do projeto — `<repoRoot>/.agentic`, ja pela conta unica de
+   * `projectIdentityOf`. E ele, e so ele, que a posse protege.
+   *
+   * Receber o diretorio pronto em vez de deriva-lo aqui e a correcao de 003B: quando cada
+   * chamador derivava o seu, `serve` e `mission start` chegavam a chaves diferentes sobre o
+   * mesmo projeto e viravam dois donos.
+   */
+  readonly runtimeDir: string
   /** Injetavel para o teste; por padrao um identificador novo por processo. */
   readonly instanceId?: string
   readonly busyTimeoutMs?: number
@@ -51,12 +55,12 @@ export interface OwnershipStepInput {
 /**
  * Posse do projeto ou recusa com o dono vivo no motivo.
  *
- * A chave e `<repoRoot>/.agentic` — o diretorio que guarda o `state.db`, canonicalizado. Nao
- * e a porta: `--port` nao compra posse, e dois enderecos diferentes sobre o mesmo projeto
- * continuam sendo dois donos do mesmo banco (D4).
+ * A chave e o `<repoRoot>/.agentic` canonicalizado — o diretorio que guarda o `state.db`.
+ * Nao e a porta: `--port` nao compra posse, e dois enderecos diferentes sobre o mesmo
+ * projeto continuam sendo dois donos do mesmo banco (D4).
  */
 export async function claimControlPlane(input: OwnershipStepInput): Promise<ControlPlaneLease> {
-  const runtimeDir = runtimeDirOf(input.repoRoot)
+  const runtimeDir = input.runtimeDir
   const outcome = acquireControlPlaneOwnership({
     baseDir: runtimeDir,
     instanceId: input.instanceId ?? newInstanceId(),

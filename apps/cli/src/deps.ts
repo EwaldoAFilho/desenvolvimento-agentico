@@ -9,7 +9,7 @@ import { createProviderRegistryFromProject } from '@agentic/providers'
 import type { ProjectFile } from '@agentic/schemas'
 import { attachServer, type ServerConfig } from '@agentic/server'
 import { git, isGitRepo } from '@agentic/workspace'
-import { type ControlPlaneLink, connectHttp } from './link.js'
+import { type ConnectExpectation, type ControlPlaneLink, connectHttp } from './link.js'
 import type { ExitCode } from './result.js'
 
 export interface GitProbe {
@@ -34,8 +34,13 @@ export interface CommandDeps {
   /** Composition root aprovado: a CLI nao monta pecas por conta propria. */
   controlPlane(config: ControlPlaneConfig): ControlPlane
   registry(project: ProjectFile): ProviderRegistry
-  /** `undefined` = nenhum control plane no ar naquele endereco. */
-  connect(endpoint: string): Promise<ControlPlaneLink | undefined>
+  /**
+   * `undefined` = nenhum control plane DESTE PROJETO no ar naquele endereco.
+   *
+   * `expected` e o que impede um comando de mutacao chegar ao control plane de outro
+   * repositorio quando a descoberta esta velha ou a porta foi reaproveitada.
+   */
+  connect(endpoint: string, expected?: ConnectExpectation): Promise<ControlPlaneLink | undefined>
   probeGit(cwd: string): Promise<GitProbe>
   /** Espera o encerramento do processo em primeiro plano (`serve`, `mission start`). */
   waitForShutdown(): Promise<void>
@@ -127,7 +132,7 @@ export function defaultDeps(): CommandDeps {
     nodeVersion: nodeProcess.versions.node,
     controlPlane: (config) => createControlPlane(config),
     registry: (project) => createProviderRegistryFromProject(project),
-    connect: (endpoint) => connectHttp(endpoint),
+    connect: (endpoint, expected) => connectHttp(endpoint, expected),
     probeGit: (cwd) => defaultGitProbe(cwd),
     waitForShutdown: defaultShutdown,
     servePlane: (input) => attachServer(input),

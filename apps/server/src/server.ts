@@ -7,12 +7,12 @@ import {
   type ControlPlaneRuntime,
   controlPlaneFilePath,
   removeControlPlaneFile,
-  runtimeDirOf,
   writeControlPlaneFile,
 } from './control-plane-file.js'
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
 import { claimControlPlane, shutdownControlPlane } from './ownership.js'
+import { runtimeDirOf } from './project-identity.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
 import { registerReadRoutes } from './routes/read.js'
@@ -161,9 +161,18 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
   const sources = await loadProjectSources(config)
   // Recusa de bind acontece ANTES de abrir banco: nada e criado por um endereco proibido.
   resolveBind(config, sources.project)
+  /**
+   * UM diretorio de estado, daqui para baixo.
+   *
+   * Posse, `state.db` e `control-plane.json` moram no MESMO lugar, e esse lugar sai de
+   * `projectIdentityOf` — a unica conta do produto (I14). Antes, a posse ia para
+   * `<repoRoot>/.agentic` e o registro de descoberta para onde o chamador quisesse: bastava
+   * `project.repoRoot` apontar para fora para o banco de um entrypoint nao ser o do outro.
+   */
+  const runtimeDir = config.runtimeDir ?? sources.runtimeDir
   // Aqui, e so aqui, se decide quem manda neste projeto. `--port` nao participa.
   const lease = await claimControlPlane({
-    repoRoot: sources.repoRoot,
+    runtimeDir,
     ...(config.instanceId === undefined ? {} : { instanceId: config.instanceId }),
   })
   /**
@@ -183,6 +192,8 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
       project: sources.project,
       gatesFile: sources.gatesFile,
       repoRoot: sources.repoRoot,
+      // O banco mora onde a posse foi disputada: o lock protege ESTE `state.db`, nao outro.
+      baseDir: lease.ownedDir,
       lease,
       ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
     })
@@ -209,7 +220,9 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
         ? {}
         : { exposeExternally: config.exposeExternally }),
       ...(config.logger === undefined ? {} : { logger: config.logger }),
-      ...(config.runtimeDir === undefined ? {} : { runtimeDir: config.runtimeDir }),
+      // O MESMO diretorio da posse: a descoberta publica o endereco de quem possui aquele
+      // `state.db`, e nao um endereco solto num diretorio que ninguem disputa.
+      runtimeDir: lease.ownedDir,
       ...(config.publishRuntimeFile === undefined
         ? {}
         : { publishRuntimeFile: config.publishRuntimeFile }),

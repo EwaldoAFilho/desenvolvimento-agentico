@@ -52,7 +52,7 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
   )
   const endpoint = resolved.endpoint
 
-  const existing = await deps.connect(endpoint)
+  const existing = await deps.connect(endpoint, { repoRoot: context.repoRoot })
   if (existing !== undefined) {
     out.line(`control plane ja no ar em ${describeEndpoint(resolved)}`)
     out.line('nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.')
@@ -64,7 +64,9 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     const running = await boot({
       repoRoot: context.repoRoot,
       projectFile: context.projectPath,
-      runtimeDir: context.baseDir,
+      // O diretorio de ESTADO, nao o de configuracao: posse, `state.db` e descoberta caem
+      // todos aqui, e e o mesmo caminho que `mission start` e `mission approve` disputam.
+      runtimeDir: context.runtimeDir,
       ...(args.port === undefined ? {} : { port: args.port }),
     })
     out.line(`control plane no ar em ${running.url}`)

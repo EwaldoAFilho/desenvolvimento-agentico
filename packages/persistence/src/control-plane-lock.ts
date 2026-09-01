@@ -130,6 +130,34 @@ export function canonicalDir(path: string): string {
   }
 }
 
+/**
+ * Caminho canonico quando o diretorio ja existe; o caminho resolvido quando ele ainda nao
+ * existe.
+ *
+ * `canonicalDir` recusa o que nao consegue resolver, e essa recusa e certa NA HORA DE
+ * POSSUIR: ali o diretorio ja foi criado, e falhar significa ambiente quebrado. Mas a
+ * IDENTIDADE do projeto e calculada antes disso — no boot, na CLI, num comando de leitura —
+ * e nesse momento `<repoRoot>/.agentic` pode legitimamente ainda nao existir (projeto novo,
+ * primeiro comando). Derrubar o comando por isso seria trocar diagnostico por acidente.
+ *
+ * A diferenca entre os dois nao enfraquece I14: o que unifica aliases e a canonicalizacao
+ * feita por `acquireControlPlaneOwnership` sobre o diretorio JA criado. Esta funcao serve
+ * para que todos os entrypoints CHEGUEM ao mesmo caminho logico antes disso.
+ */
+export function canonicalIfPresent(path: string): string {
+  const absolute = resolve(path)
+  try {
+    return realpathSync.native(absolute)
+  } catch {
+    /* pode nao existir ainda: segue para a tentativa portavel */
+  }
+  try {
+    return realpathSync(absolute)
+  } catch {
+    return absolute
+  }
+}
+
 export function controlPlaneLockPath(baseDir: string): string {
   return join(resolve(baseDir), CONTROL_PLANE_LOCK_FILE)
 }

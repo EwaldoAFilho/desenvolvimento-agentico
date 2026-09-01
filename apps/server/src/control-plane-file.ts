@@ -23,9 +23,6 @@ import nodeProcess from 'node:process'
  */
 export const CONTROL_PLANE_FILE = 'control-plane.json'
 
-/** Diretorio local do projeto; o mesmo que guarda `state.db` e `runs/`. */
-export const RUNTIME_DIR_NAME = '.agentic'
-
 export interface ControlPlaneRuntime {
   readonly host: string
   readonly port: number
@@ -37,10 +34,6 @@ export interface ControlPlaneRuntime {
   readonly instanceId?: string
   /** Projeto que este control plane possui, canonico. Ausente em registro antigo. */
   readonly repoRoot?: string
-}
-
-export function runtimeDirOf(repoRoot: string): string {
-  return resolve(repoRoot, RUNTIME_DIR_NAME)
 }
 
 export function controlPlaneFilePath(runtimeDir: string): string {

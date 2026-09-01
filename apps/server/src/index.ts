@@ -26,10 +26,8 @@ export {
   discoverControlPlane,
   parseControlPlaneRuntime,
   processAlive,
-  RUNTIME_DIR_NAME,
   readControlPlaneFile,
   removeControlPlaneFile,
-  runtimeDirOf,
   writeControlPlaneFile,
 } from './control-plane-file.js'
 export type { RunLauncher, ServerDeps, ServerDepsInput } from './deps.js'
@@ -51,6 +49,14 @@ export {
 } from './missions.js'
 export type { OwnershipStepInput, ShutdownSteps } from './ownership.js'
 export { ControlPlaneBusyError, claimControlPlane, shutdownControlPlane } from './ownership.js'
+export type { ProjectIdentity, ProjectIdentityInput } from './project-identity.js'
+export {
+  configPathOf,
+  projectDirOf,
+  projectIdentityOf,
+  RUNTIME_DIR_NAME,
+  runtimeDirOf,
+} from './project-identity.js'
 export { optionalInt } from './query.js'
 export type { CommandResult, StartRunResult } from './routes/commands.js'
 export { DEFAULT_ACTOR, registerCommandRoutes } from './routes/commands.js'
