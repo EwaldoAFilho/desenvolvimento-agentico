@@ -5,6 +5,12 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { makeProjectHome } from '../__fixtures__/home.js'
 import {
+  makePlanResult,
+  REAL_PLANNER,
+  SECOND_PLANNER,
+  SIMULATED_PLANNER,
+} from '../__fixtures__/planning.js'
+import {
   makeCompileReport,
   makeSnapshot,
   PROVIDERS_WITH_ENVIRONMENT,
@@ -13,6 +19,7 @@ import { TASK_STATUSES, taskStatusStyle } from '../lib/status.js'
 import { installReactFlowEnv } from '../test/react-flow-env.js'
 import { DagCanvas } from './DagCanvas.js'
 import { ErrorScreen } from './ErrorScreen.js'
+import { NewMission, type NewMissionDeps } from './NewMission.js'
 import { ProjectHome } from './ProjectHome.js'
 import { ProvidersPanel } from './ProvidersPanel.js'
 import { StartMission } from './StartMission.js'
@@ -20,6 +27,16 @@ import { StartMission } from './StartMission.js'
 installReactFlowEnv()
 
 const noop = (): void => {}
+
+/** Planejamento de mentira: acessibilidade se prova sem gastar assinatura de ninguem. */
+function renderNewMission(planners = [REAL_PLANNER, SECOND_PLANNER, SIMULATED_PLANNER]) {
+  const deps: Partial<NewMissionDeps> = {
+    loadPlanners: async () => planners,
+    plan: async () => ({ kind: 'planned' as const, result: makePlanResult() }),
+    loadSnapshot: async () => makeSnapshot(),
+  }
+  return render(<NewMission deps={deps} onCancel={noop} onOpenMission={noop} />)
+}
 
 /**
  * O jsdom do teste nao carrega `styles.css`, entao `element.style.outline` nunca diz nada
@@ -143,6 +160,7 @@ describe('rotulos acessiveis dos controles', () => {
         home={makeProjectHome()}
         onOpenRun={noop}
         onOpenMission={noop}
+        onNewMission={noop}
         onReload={noop}
       />,
     )
@@ -166,6 +184,7 @@ describe('rotulos acessiveis dos controles', () => {
         home={makeProjectHome()}
         onOpenRun={noop}
         onOpenMission={noop}
+        onNewMission={noop}
         onReload={noop}
       />,
     )
@@ -183,6 +202,54 @@ describe('rotulos acessiveis dos controles', () => {
     const retry = screen.getByRole('button', { name: 'tentar novamente' })
     retry.focus()
     expect(document.activeElement).toBe(retry)
+  })
+
+  it('todo controle da tela de nova missao tem rotulo e recebe foco pelo teclado', async () => {
+    renderNewMission()
+    await screen.findByTestId('plan-mission')
+    fireEvent.change(screen.getByLabelText(/o que você quer que seja feito/i), {
+      target: { value: 'quero um relatório de estoque' },
+    })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    fireEvent.click(screen.getByLabelText(/consome a minha assinatura/i))
+
+    const controls = [
+      ...screen.getAllByRole('button'),
+      ...screen.getAllByRole('textbox'),
+      ...screen.getAllByRole('combobox'),
+      ...screen.getAllByRole('checkbox'),
+    ].filter((control) => !control.hasAttribute('disabled'))
+    expect(controls.length).toBeGreaterThanOrEqual(5)
+    for (const control of controls) {
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    for (const button of screen.getAllByRole('button')) {
+      const name = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('o aviso de consumo e legivel sem cor: icone escondido, frase a vista', async () => {
+    renderNewMission()
+    const notice = await screen.findByTestId('subscription-notice')
+    // `data-consumes` serve ao CSS; quem le a tela recebe a frase inteira.
+    expect(notice.getAttribute('data-consumes')).toBe('true')
+    expect(notice.textContent).toContain('consome a sua assinatura')
+    expect(notice.querySelector('[aria-hidden="true"]')).not.toBeNull()
+  })
+
+  it('o estado do planejador chega como texto, nao como cor', async () => {
+    renderNewMission()
+    const state = await screen.findByTestId('planner-state')
+    expect(state.textContent).toContain('observado pronto')
+  })
+
+  it('a espera e a razao de nao poder partir sao anunciadas por role=status', async () => {
+    renderNewMission()
+    const phase = await screen.findByTestId('plan-phase')
+    expect(phase.getAttribute('role')).toBe('status')
+    expect(phase.textContent).toContain('descreva o que você quer')
   })
 
   it('o campo de actor continua associado ao seu rotulo', () => {

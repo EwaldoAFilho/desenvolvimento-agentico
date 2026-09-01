@@ -5,6 +5,14 @@ import {
   CompileReportDtoSchema,
   type EventDto,
   EventDtoSchema,
+  type PlanMissionCommand,
+  PlanMissionCommandSchema,
+  type PlanMissionResultDto,
+  PlanMissionResultDtoSchema,
+  type PlannerDto,
+  PlannerDtoSchema,
+  type PlanningFailureDto,
+  PlanningFailureDtoSchema,
   type ProjectHomeDto,
   ProjectHomeDtoSchema,
   type ProviderHealthDto,
@@ -146,6 +154,55 @@ export async function getProviders(): Promise<readonly ProviderHealthDto[]> {
   const raw = await request('/providers')
   const list = Array.isArray(raw) ? raw : ((raw as { providers?: unknown })?.providers ?? [])
   return ProviderHealthDtoSchema.array().parse(list)
+}
+
+/**
+ * Quem pode planejar. Nao sai de `GET /api/project`: planejar e outra porta (ADR-0013) e a
+ * lista dela tem endereco proprio — duas leituras da mesma coisa divergem, e a divergencia
+ * apareceria como um planejador oferecido de um lado e ausente do outro.
+ */
+export async function getPlanners(): Promise<readonly PlannerDto[]> {
+  const raw = await request('/planners')
+  const list = Array.isArray(raw) ? raw : ((raw as { planners?: unknown })?.planners ?? [])
+  return PlannerDtoSchema.array().parse(list)
+}
+
+/**
+ * Planejamento que nao deu certo e DIAGNOSTICO, nao erro de protocolo: o control plane
+ * responde 422/503/504 com o proprio `PlanningFailureDto` no corpo. Recusa de outra natureza
+ * (comando invalido, control plane sem planejamento) tem outro corpo e nao casa aqui — o
+ * schema e `strict`, entao `{ error: … }` nao passa por diagnostico de plano.
+ */
+export function planningFailureOf(cause: unknown): PlanningFailureDto | undefined {
+  if (!(cause instanceof ApiError)) return undefined
+  try {
+    const parsed = PlanningFailureDtoSchema.safeParse(JSON.parse(cause.detail))
+    return parsed.success ? parsed.data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Duas saidas, as duas terminais: o rascunho nasceu, ou ha um motivo legivel para nao ter. */
+export type PlanOutcome =
+  | { readonly kind: 'planned'; readonly result: PlanMissionResultDto }
+  | { readonly kind: 'refused'; readonly failure: PlanningFailureDto }
+
+/**
+ * Texto livre vira missao gravada, compilada e um run `DRAFT`. Nada aqui aprova nem executa:
+ * o proximo passo continua sendo humano (P15). `acceptsSubscriptionUse` viaja explicito
+ * porque acionar fornecedor real gasta a assinatura do usuario (P17).
+ */
+export async function planMission(command: PlanMissionCommand): Promise<PlanOutcome> {
+  const body = PlanMissionCommandSchema.parse(command)
+  try {
+    const raw = await post('/missions/plan', body)
+    return { kind: 'planned', result: PlanMissionResultDtoSchema.parse(raw) }
+  } catch (cause) {
+    const failure = planningFailureOf(cause)
+    if (failure === undefined) throw cause
+    return { kind: 'refused', failure }
+  }
 }
 
 /** Aprovar e ato humano registrado com `actor` (DASHBOARD 7). */

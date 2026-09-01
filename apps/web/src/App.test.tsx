@@ -2,9 +2,11 @@ import type { CompileReportDto, ProjectHomeDto, RunHeaderDto } from '@agentic/sc
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeEmptyProjectHome, makeIdleProjectHome, makeProjectHome } from './__fixtures__/home.js'
+import { makePlanResult, REAL_PLANNER } from './__fixtures__/planning.js'
 import { makeCompileReport, makeSnapshot, PROVIDERS } from './__fixtures__/snapshot.js'
 import { App, type AppDeps } from './App.js'
-import { ApiError } from './api.js'
+import { ApiError, type PlanOutcome } from './api.js'
+import type { NewMissionDeps } from './components/NewMission.js'
 import type { EventSourceLike, RunStreamDeps } from './hooks/useRunStream.js'
 import { installReactFlowEnv } from './test/react-flow-env.js'
 
@@ -34,6 +36,17 @@ function goTo(search: string): void {
 
 function renderApp(deps: Partial<AppDeps> = {}) {
   return render(<App deps={deps} runStream={RUN_STREAM} />)
+}
+
+/** Planejamento de mentira: nenhum teste desta suite aciona agente nem gasta assinatura. */
+const PLAN_DEPS: Partial<NewMissionDeps> = {
+  loadPlanners: async () => [REAL_PLANNER],
+  plan: async (): Promise<PlanOutcome> => ({ kind: 'planned', result: makePlanResult() }),
+  loadSnapshot: async () => makeSnapshot(),
+}
+
+function renderAppWithPlanning(deps: Partial<AppDeps> = {}) {
+  return render(<App deps={deps} runStream={RUN_STREAM} newMission={PLAN_DEPS} />)
 }
 
 afterEach(() => {
@@ -181,6 +194,71 @@ describe('a guarda de run continua ganhando', () => {
 
     expect(await screen.findByRole('region', { name: 'Canvas do DAG' })).toBeTruthy()
     expect(loadCompileReport).not.toHaveBeenCalled()
+  })
+})
+
+describe('nova missao por linguagem natural', () => {
+  it('a Home leva a tela de nova missao e o endereco fica na URL', async () => {
+    goTo('')
+    renderAppWithPlanning({ loadProjectHome: async () => makeIdleProjectHome() })
+
+    await screen.findByRole('main', { name: 'Projeto' })
+    fireEvent.click(screen.getByTestId('new-mission'))
+
+    expect(await screen.findByRole('main', { name: 'Nova missão' })).toBeTruthy()
+    expect(window.location.search).toContain('new=')
+  })
+
+  it('com ?new na URL a tela abre direto, sem passar pela Home', async () => {
+    goTo('?new=1')
+    const loadProjectHome = vi.fn(async () => makeIdleProjectHome())
+    renderAppWithPlanning({ loadProjectHome })
+
+    expect(await screen.findByRole('main', { name: 'Nova missão' })).toBeTruthy()
+    expect(loadProjectHome).not.toHaveBeenCalled()
+  })
+
+  it('execucao ativa nao sequestra quem esta escrevendo o pedido', async () => {
+    goTo('?new=1')
+    // `makeProjectHome` tem um run RUNNING: sem a guarda, o dashboard tomaria a tela.
+    renderAppWithPlanning({ loadProjectHome: async () => makeProjectHome() })
+
+    expect(await screen.findByRole('main', { name: 'Nova missão' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Canvas do DAG' })).toBeNull()
+  })
+
+  it('do texto livre ao DAG desenhado, e dali para a revisao da missao', async () => {
+    goTo('?new=1')
+    renderAppWithPlanning({
+      loadCompileReport: async () => makeCompileReport('warning'),
+      loadProviders: async () => PROVIDERS,
+      loadRuns: async () => [],
+    })
+
+    await screen.findByRole('main', { name: 'Nova missão' })
+    fireEvent.change(screen.getByLabelText(/o que você quer que seja feito/i), {
+      target: { value: 'quero um relatório de estoque por depósito' },
+    })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    fireEvent.click(screen.getByLabelText(/consome a minha assinatura/i))
+    fireEvent.click(screen.getByTestId('plan-mission'))
+
+    expect(await screen.findByRole('main', { name: 'Rascunho da missão' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('draft-review'))
+
+    expect(await screen.findByRole('main', { name: 'Missão compilada' })).toBeTruthy()
+    await waitFor(() => expect(window.location.search).toContain('mission='))
+  })
+
+  it('voltar ao projeto sai da tela e recarrega a Home', async () => {
+    goTo('?new=1')
+    renderAppWithPlanning({ loadProjectHome: async () => makeIdleProjectHome() })
+
+    await screen.findByRole('main', { name: 'Nova missão' })
+    fireEvent.click(screen.getByTestId('plan-cancel'))
+
+    expect(await screen.findByRole('main', { name: 'Projeto' })).toBeTruthy()
+    expect(window.location.search).not.toContain('new=')
   })
 })
 

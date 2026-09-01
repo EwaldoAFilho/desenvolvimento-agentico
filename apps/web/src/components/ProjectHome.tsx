@@ -9,6 +9,8 @@ export interface ProjectHomeProps {
   readonly home: ProjectHomeDto
   readonly onOpenRun: (runId: string) => void
   readonly onOpenMission: (missionId: string) => void
+  /** Entrada da jornada por linguagem natural: descrever em texto livre e ver o DAG. */
+  readonly onNewMission: () => void
   readonly onReload: () => void
   readonly reloading?: boolean
 }
@@ -124,6 +126,7 @@ export function ProjectHome({
   home,
   onOpenRun,
   onOpenMission,
+  onNewMission,
   onReload,
   reloading = false,
 }: ProjectHomeProps): JSX.Element {
@@ -145,16 +148,27 @@ export function ProjectHome({
           )}
           {project.gates.length === 0 ? null : ` · gates: ${project.gates.join(', ')}`}
         </p>
-        <button
-          type="button"
-          className="btn btn--ghost home__reload"
-          data-testid="reload-home"
-          aria-busy={reloading}
-          disabled={reloading}
-          onClick={onReload}
-        >
-          {reloading ? 'atualizando…' : 'atualizar'}
-        </button>
+        <div className="home__head-actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            data-testid="new-mission"
+            aria-label="nova missão a partir de texto livre"
+            onClick={onNewMission}
+          >
+            nova missão
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost home__reload"
+            data-testid="reload-home"
+            aria-busy={reloading}
+            disabled={reloading}
+            onClick={onReload}
+          >
+            {reloading ? 'atualizando…' : 'atualizar'}
+          </button>
+        </div>
       </header>
 
       {project.configured ? null : (
@@ -196,9 +210,10 @@ export function ProjectHome({
           <p className="home__empty" data-testid="missions-empty">
             {'nenhuma missão em '}
             <code>{project.missionsDir}</code>
-            {'. Um projeto novo começa assim: crie um arquivo '}
+            {'. Um projeto novo começa assim: descreva o que você quer em “nova missão” e o '}
+            {'control plane grava o arquivo, ou crie um '}
             <code>*.mission.yaml</code>
-            {' nesse diretório e ele aparece aqui compilado.'}
+            {' nesse diretório à mão — nos dois casos ele aparece aqui compilado.'}
           </p>
         ) : (
           <ul className="home__list">

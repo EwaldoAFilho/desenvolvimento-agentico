@@ -843,10 +843,13 @@ body {
   color: var(--fg-muted);
 }
 
-.home__reload {
+.home__head-actions {
   grid-column: 2;
   grid-row: 1;
   justify-self: end;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .home__block {
@@ -1163,4 +1166,237 @@ body {
 .start__phase {
   margin: 0;
   color: var(--fg-muted);
+}
+
+/* ---------- nova missao: de texto livre a rascunho desenhado ---------- */
+
+.plan {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+/* Com o DAG desenhado a tela deixa de ser formulario e passa a precisar de largura. */
+.plan--drawn {
+  max-width: 1240px;
+}
+
+.plan__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+
+.plan__title {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.plan__state {
+  color: var(--fg-muted);
+  letter-spacing: 0.08em;
+}
+
+.plan__lead,
+.plan__stats,
+.plan__origin {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__field {
+  display: grid;
+  gap: 6px;
+}
+
+.plan__label {
+  color: var(--fg);
+}
+
+.plan__form {
+  display: grid;
+  gap: 16px;
+}
+
+.plan__prompt {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.plan__select {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 4px 7px;
+  font: inherit;
+  justify-self: start;
+  min-width: 260px;
+}
+
+.plan__hint,
+.plan__only,
+.plan__empty {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__only {
+  color: var(--fg);
+}
+
+.plan__empty-state {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__empty-state h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+/*
+ * O aviso de consumo nao e decoracao: ele aparece ANTES da acao e o icone vem acompanhado de
+ * frase, para que a diferenca entre "gasta assinatura" e "simulado" nao dependa de cor.
+ */
+.plan__notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__notice[data-consumes="true"] {
+  border-left-color: var(--st-amber);
+}
+
+.plan__notice p {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__notice-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.plan__accept {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.plan__accept label {
+  color: var(--fg);
+}
+
+.plan__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.plan__phase {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__failure {
+  border: 1px solid color-mix(in srgb, var(--st-red) 45%, transparent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__failure-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.plan__failure-origin {
+  margin: 0;
+  color: var(--fg-dim);
+}
+
+.plan__failure-message {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.plan__problems {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.plan__problems li {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.plan__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.plan__simulated {
+  margin: 0;
+  color: var(--st-amber);
+}
+
+.plan__rationale {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.plan__rationale h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.plan__rationale p {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+/*
+ * O canvas precisa de altura propria aqui: a tela do rascunho e uma coluna que rola, e um
+ * grafo sem altura minima colapsaria para nada — que e o mesmo que nao desenhar o DAG.
+ */
+.plan--drawn .dag {
+  min-height: 460px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
 }

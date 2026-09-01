@@ -16,6 +16,7 @@ function renderHome(overrides: Partial<Parameters<typeof ProjectHome>[0]> = {}) 
     home: makeProjectHome(),
     onOpenRun: noop,
     onOpenMission: noop,
+    onNewMission: noop,
     onReload: noop,
     ...overrides,
   }
@@ -105,7 +106,10 @@ describe('execucoes', () => {
 describe('estado vazio honesto', () => {
   it('projeto novo diz que nao ha missao e onde criar a primeira', () => {
     renderHome({ home: makeEmptyProjectHome() })
-    expect(screen.getByTestId('missions-empty').textContent).toContain('.agentic/missions')
+    const empty = screen.getByTestId('missions-empty')
+    expect(empty.textContent).toContain('.agentic/missions')
+    // Os dois caminhos ficam ditos: descrever em texto livre e escrever o YAML a mao.
+    expect(empty.textContent).toContain('nova missão')
     expect(screen.getByTestId('runs-empty').textContent).toContain('nenhuma execução ainda')
   })
 
@@ -138,6 +142,13 @@ describe('acessibilidade da Home', () => {
     const row = screen.getByTestId('mission-DA-BPM-021')
     expect(row.textContent).toContain('EM EXECUÇÃO')
     expect(screen.getByTestId(`run-${RUNNING_RUN.id}`).textContent).toContain('RUNNING')
+  })
+
+  it('a Home oferece a entrada por texto livre, com nome que diz o que ela faz', () => {
+    const onNewMission = vi.fn()
+    renderHome({ onNewMission })
+    fireEvent.click(screen.getByRole('button', { name: 'nova missão a partir de texto livre' }))
+    expect(onNewMission).toHaveBeenCalledTimes(1)
   })
 
   it('atualizar anuncia que esta em curso e nao aceita segundo clique', () => {

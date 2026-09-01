@@ -17,6 +17,7 @@ import {
   startRun,
 } from './api.js'
 import { ErrorScreen } from './components/ErrorScreen.js'
+import { NewMission, type NewMissionDeps } from './components/NewMission.js'
 import { ProjectHome } from './components/ProjectHome.js'
 import { RunDashboard } from './components/RunDashboard.js'
 import { StartMission, type StartPhase } from './components/StartMission.js'
@@ -46,10 +47,15 @@ const DEFAULT_DEPS: AppDeps = {
   start: startRun,
 }
 
-/** `?run=` e `?mission=` sao os dois enderecos que a tela entende. Nada mais e inventado. */
+/**
+ * `?run=`, `?mission=` e `?new=` sao os tres enderecos que a tela entende. Nada mais e
+ * inventado. `new` tem endereco proprio para que a tela de nova missao sobreviva a um F5 e
+ * para que uma execucao ativa nao a sequestre no meio do pedido.
+ */
 export interface Route {
   readonly run?: string
   readonly mission?: string
+  readonly new?: true
 }
 
 function paramOf(params: URLSearchParams, name: string): string | undefined {
@@ -61,18 +67,24 @@ export function routeOf(search: string): Route {
   const params = new URLSearchParams(search)
   const run = paramOf(params, 'run')
   const mission = paramOf(params, 'mission')
-  return { ...(run === undefined ? {} : { run }), ...(mission === undefined ? {} : { mission }) }
+  const fresh = paramOf(params, 'new')
+  return {
+    ...(run === undefined ? {} : { run }),
+    ...(mission === undefined ? {} : { mission }),
+    ...(fresh === undefined ? {} : { new: true as const }),
+  }
 }
 
 function currentRoute(): Route {
   return typeof window === 'undefined' ? {} : routeOf(window.location.search)
 }
 
-/** `run` tem precedencia na URL tambem: os dois juntos nunca sao escritos por nos. */
+/** `run` tem precedencia na URL tambem: dois deles juntos nunca sao escritos por nos. */
 function searchOf(route: Route): string {
   const params = new URLSearchParams()
   if (route.run !== undefined) params.set('run', route.run)
   else if (route.mission !== undefined) params.set('mission', route.mission)
+  else if (route.new === true) params.set('new', '1')
   const query = params.toString()
   return query.length === 0 ? '' : `?${query}`
 }
@@ -105,6 +117,12 @@ export interface AppProps {
   readonly deps?: Partial<AppDeps>
   /** Repassado ao dashboard de execucao; existe para o teste dispensar SSE de verdade. */
   readonly runStream?: RunStreamDeps
+  /**
+   * Repassado a tela de nova missao. Existe para que a jornada seja testavel sem servidor e,
+   * sobretudo, sem acionar planejador de verdade: teste nunca consome assinatura (P17).
+   * Precisa ser estavel entre renders — a tela recarrega os planejadores quando ele muda.
+   */
+  readonly newMission?: Partial<NewMissionDeps>
   readonly bootTimeoutMs?: number
 }
 
@@ -115,6 +133,7 @@ export interface AppProps {
 export function App({
   deps,
   runStream,
+  newMission,
   bootTimeoutMs = BOOT_TIMEOUT_MS,
 }: AppProps = {}): JSX.Element {
   const api = useMemo<AppDeps>(() => ({ ...DEFAULT_DEPS, ...deps }), [deps])
@@ -152,7 +171,10 @@ export function App({
 
   useEffect(() => {
     const previous = booted.current
-    const sameRoute = previous?.run === route.run && previous?.mission === route.mission
+    const sameRoute =
+      previous?.run === route.run &&
+      previous?.mission === route.mission &&
+      previous?.new === route.new
     booted.current = route
     // `attempt` so muda quando alguem pede "tentar novamente"; a contagem e por TELA para
     // que a mensagem de uma rota nao carregue o numero de tentativas de outra.
@@ -164,6 +186,11 @@ export function App({
     // A guarda de run ganha de tudo: com run na URL nao ha nada a carregar aqui e o
     // dashboard de execucao assume a tela sem passar por estado intermediario nenhum.
     if (route.run !== undefined) return
+
+    // Nova missao tambem nao carrega nada aqui — e, sobretudo, nao passa pelo desvio
+    // automatico da Home: uma execucao ativa nao pode sequestrar quem esta escrevendo o
+    // pedido. A tela de nova missao busca o que precisa por conta.
+    if (route.new === true) return
 
     let cancelled = false
     // Recarregar a MESMA tela nao apaga o que ja esta nela: quem pediu "atualizar" quer o
@@ -233,6 +260,11 @@ export function App({
 
   const retry = useCallback((): void => setAttempt((count) => count + 1), [])
   const goHome = useCallback((): void => navigate({}), [navigate])
+  const goNewMission = useCallback((): void => navigate({ new: true }), [navigate])
+  const openMission = useCallback(
+    (missionId: string): void => navigate({ mission: missionId }),
+    [navigate],
+  )
 
   const onApprove = useCallback(
     (actor: string, note: string) => {
@@ -276,6 +308,20 @@ export function App({
     return <RunDashboard runId={route.run} streamDeps={runStream} onHome={goHome} />
   }
 
+  if (route.new === true) {
+    // `defaultProvider` so viaja quando a Home ja foi lida: num link direto nao ha padrao do
+    // projeto a oferecer, e inventar um seria pior do que deixar a tela escolher pela regra.
+    const suggested = boot.kind === 'home' ? boot.home.project.defaultProvider : undefined
+    return (
+      <NewMission
+        {...(newMission === undefined ? {} : { deps: newMission })}
+        {...(suggested === undefined ? {} : { defaultPlannerId: suggested })}
+        onCancel={goHome}
+        onOpenMission={openMission}
+      />
+    )
+  }
+
   if (boot.kind === 'error') {
     return (
       <ErrorScreen
@@ -294,7 +340,8 @@ export function App({
       <ProjectHome
         home={boot.home}
         onOpenRun={(runId) => navigate({ run: runId })}
-        onOpenMission={(missionId) => navigate({ mission: missionId })}
+        onOpenMission={openMission}
+        onNewMission={goNewMission}
         onReload={retry}
         reloading={refreshing}
       />
