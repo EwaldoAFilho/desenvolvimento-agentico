@@ -1,7 +1,8 @@
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Attempt, Run, RunId, TaskRun } from '@agentic/domain'
-import { openPersistence } from '@agentic/persistence'
+import type { ControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership, openPersistence } from '@agentic/persistence'
 import { attachServer, startServer } from '@agentic/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { StepFn } from './support/agents.js'
@@ -90,6 +91,34 @@ function boot(root: string): ReturnType<typeof startServer> {
   return startServer({ repoRoot: root, port: 0, publishRuntimeFile: false, webDist: root })
 }
 
+/**
+ * Control plane DONO do projeto, montado a mao — o que `startServer` faz por dentro.
+ *
+ * Adotar exige posse declarada (I14), entao um plane de teste que adota precisa te-la de
+ * verdade. Montar a mao existe so para observar a adocao por dentro, sem porta.
+ */
+async function planeComPosse(h: MissionHarness): Promise<{
+  readonly plane: ControlPlane
+  close(): Promise<void>
+}> {
+  const { createControlPlane } = await import('@agentic/orchestrator')
+  const posse = acquireControlPlaneOwnership({ baseDir: join(h.root, '.agentic') })
+  if (!posse.ok) throw new Error(`teste: nao consegui a posse do fixture (${posse.detail})`)
+  const plane = createControlPlane({
+    project: h.project,
+    gatesFile: h.gatesFile,
+    repoRoot: h.root,
+    lease: posse.lease,
+  })
+  return {
+    plane,
+    close: async (): Promise<void> => {
+      await plane.close().catch(() => undefined)
+      posse.lease.release()
+    },
+  }
+}
+
 // =====================================================================================
 // A — RUNNING
 // =====================================================================================
@@ -123,6 +152,7 @@ beforeAll(async () => {
 
   // Queda do control plane. Banco, event log e artefatos ficam onde estao.
   await running.plane.close()
+  running.lease.release()
 
   // Base de comparacao lida do DISCO, em conexao readonly: o encerramento do processo 1
   // ainda grava, e cobrar isso do boot mediria a coisa errada.
@@ -254,6 +284,7 @@ describe('B — PAUSED: ganha dono e reconcilia, mas nao volta a despachar', () 
       const anteriores = await h.events()
       const ultimoSeqAntes = anteriores[anteriores.length - 1]?.seq ?? 0
       await h.plane.close()
+      h.lease.release()
 
       const servidor = await boot(h.root)
       try {
@@ -321,6 +352,7 @@ describe('C — BLOCKED: ganha dono, e o unblock posterior encontra um loop vivo
       const alvo = bloqueadas[0]?.taskId as string
       const tentativasAntes = (await h.attempts()).length
       await h.plane.close()
+      h.lease.release()
 
       const servidor = await boot(h.root)
       try {
@@ -406,6 +438,8 @@ describe('D — VERIFYING: worktree stale do gate da missao nao trava o run', ()
       // cenario existe para reproduzir. Um processo que morre nao roda `finally` nenhum.
       h.orchestrator.stop()
       h.plane.persistence.close()
+      // O processo teria morrido aqui, e com ele a posse — o SO solta o lock sozinho.
+      h.lease.release()
 
       // O crash deixou a worktree; ela precisa MESMO estar la para o cenario valer.
       expect(await existe(missionWorktree)).toBe(true)
@@ -473,13 +507,10 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         (await h.tasks()).some((task) => task.status === 'RUNNING'),
       )
       await h.plane.close()
+      h.lease.release()
 
-      const { createControlPlane } = await import('@agentic/orchestrator')
-      const plane = createControlPlane({
-        project: h.project,
-        gatesFile: h.gatesFile,
-        repoRoot: h.root,
-      })
+      const dono = await planeComPosse(h)
+      const plane = dono.plane
       try {
         const primeira = await plane.adoptRecoverableRuns()
         const segunda = await plane.adoptRecoverableRuns()
@@ -490,7 +521,7 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         expect(segunda.adopted.map((entry) => entry.alreadyOwned)).toEqual([true])
         expect(await plane.open(h.runId)).toBe(await plane.open(h.runId))
       } finally {
-        await plane.close()
+        await dono.close()
       }
     } finally {
       await h.cleanup().catch(() => undefined)
@@ -506,13 +537,10 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         (await h.tasks()).some((task) => task.status === 'RUNNING'),
       )
       await h.plane.close()
+      h.lease.release()
 
-      const { createControlPlane } = await import('@agentic/orchestrator')
-      const plane = createControlPlane({
-        project: h.project,
-        gatesFile: h.gatesFile,
-        repoRoot: h.root,
-      })
+      const dono = await planeComPosse(h)
+      const plane = dono.plane
       try {
         // `open` atravessa varios `await` antes de povoar o mapa. Disparar a adocao e uma
         // abertura em paralelo — o que a API faz quando atende antes de a adocao terminar —
@@ -527,7 +555,7 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         expect(new Set(aberturas).size).toBe(1)
         expect(await plane.open(h.runId)).toBe(aberturas[0])
       } finally {
-        await plane.close()
+        await dono.close()
       }
     } finally {
       await h.cleanup().catch(() => undefined)
@@ -543,6 +571,7 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         (await h.tasks()).some((task) => task.status === 'RUNNING'),
       )
       await h.plane.close()
+      h.lease.release()
 
       const { createControlPlane } = await import('@agentic/orchestrator')
       const plane = createControlPlane({
@@ -580,13 +609,10 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         (await h.tasks()).some((task) => task.status === 'RUNNING'),
       )
       await h.plane.close()
+      h.lease.release()
 
-      const { createControlPlane } = await import('@agentic/orchestrator')
-      const plane = createControlPlane({
-        project: h.project,
-        gatesFile: h.gatesFile,
-        repoRoot: h.root,
-      })
+      const dono = await planeComPosse(h)
+      const plane = dono.plane
       try {
         // A linha da consulta e um retrato. Cancelar entre a consulta e o `start` e
         // exatamente o que um `stop` pela API faria enquanto o boot ainda adota.
@@ -603,7 +629,7 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
         await sleep(1_500)
         expect((await plane.persistence.events.list(h.runId)).length).toBe(antes)
       } finally {
-        await plane.close()
+        await dono.close()
       }
     } finally {
       await h.cleanup().catch(() => undefined)
@@ -632,6 +658,7 @@ describe('E/F/G — idempotencia intra-processo e limites da adocao', () => {
       expect((await h.plane.persistence.runs.loadRun(rascunho.id))?.status).toBe('DRAFT')
       expect((await h.plane.persistence.runs.loadRun(aprovado.id))?.status).toBe('APPROVED')
       await h.plane.close()
+      h.lease.release()
 
       const servidor = await boot(h.root)
       try {

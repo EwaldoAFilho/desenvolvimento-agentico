@@ -10,6 +10,7 @@ import {
   controlPlaneLockPath,
   newInstanceId,
   OWNERSHIP_ALREADY_HELD,
+  OwnershipPathError,
 } from './control-plane-lock.js'
 
 const descartar: string[] = []
@@ -115,5 +116,28 @@ describe('posse do projeto', () => {
     const dono = possuir(baseDir)
     // Nenhuma tabela, nenhuma linha, nenhuma migracao — so o lock de arquivo importa.
     expect(statSync(dono.lockPath).size).toBe(0)
+  })
+
+  it('caminho que nao pode ser canonicalizado RECUSA em vez de inventar uma chave', () => {
+    // Cair para o caminho textual manteria o boot de pe e permitiria que dois aliases do
+    // mesmo projeto virassem dois donos — trocar a invariante por disponibilidade e
+    // exatamente o que esta funcao nao pode fazer.
+    const inexistente = join(projeto(), 'nao-existe', 'nem-o-pai')
+    expect(() => canonicalDir(inexistente)).toThrow(OwnershipPathError)
+  })
+
+  it('release que nao conseguiu fechar pode ser tentado de novo', () => {
+    const baseDir = projeto()
+    const dono = possuir(baseDir)
+    dono.release()
+    expect(dono.held).toBe(false)
+
+    // Segunda chamada sobre conexao ja fechada nao explode e nao reabre nada.
+    expect(() => {
+      dono.release()
+    }).not.toThrow()
+    // E o projeto esta mesmo livre: quem chega depois assume.
+    const proximo = possuir(baseDir)
+    expect(proximo.held).toBe(true)
   })
 })

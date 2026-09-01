@@ -89,13 +89,33 @@ export function newInstanceId(): string {
   return randomUUID()
 }
 
+/** O caminho nao pode ser canonicalizado — e sem isso nao ha como garantir I14. */
+export class OwnershipPathError extends Error {
+  readonly path: string
+
+  constructor(path: string, cause: unknown) {
+    super(
+      `nao foi possivel resolver o caminho real de ${path}: sem isso, dois caminhos para o ` +
+        'mesmo projeto poderiam virar dois donos (I14)',
+    )
+    this.name = 'OwnershipPathError'
+    this.path = path
+    this.cause = cause
+  }
+}
+
 /**
  * Caminho REAL do diretorio, resolvendo links simbolicos.
  *
  * `/repo` e `/atalho-para-repo` sao o mesmo projeto e precisam disputar a mesma posse —
  * comparar texto de caminho daria dois donos para um projeto so. `realpathSync.native`
- * tambem normaliza a letra do drive no Windows. Se o caminho nao existir (ou o SO recusar),
- * cai para `resolve`: melhor uma chave menos canonica do que recusar o boot.
+ * tambem normaliza a letra do drive no Windows.
+ *
+ * Falhar aqui LANCA, e essa escolha e o oposto da obvia. Cair para `resolve` manteria o boot
+ * de pe ao custo de uma chave que nao unifica aliases — ou seja, trocaria a invariante por
+ * disponibilidade, exatamente na funcao que existe para sustentar a invariante. Como o
+ * diretorio ja foi criado antes desta chamada, o unico jeito de chegar aqui e um problema
+ * real de ambiente (permissao, ciclo de links), e para esse caso recusar e a resposta certa.
  */
 export function canonicalDir(path: string): string {
   const absolute = resolve(path)
@@ -104,8 +124,8 @@ export function canonicalDir(path: string): string {
   } catch {
     try {
       return realpathSync(absolute)
-    } catch {
-      return absolute
+    } catch (cause) {
+      throw new OwnershipPathError(absolute, cause)
     }
   }
 }
@@ -134,6 +154,9 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
   const ownedDir = canonicalDir(requested)
   const lockPath = controlPlaneLockPath(ownedDir)
   const timeout = options.busyTimeoutMs ?? DEFAULT_LOCK_BUSY_TIMEOUT_MS
+  // Gerado ANTES de tomar o lock: nada que possa lancar pode ficar entre adquirir a posse e
+  // devolver o lease, ou o processo sairia segurando um lock que ninguem sabe soltar.
+  const instanceId = options.instanceId ?? newInstanceId()
 
   const Driver = sqliteDriver()
   let db: SqliteDatabase
@@ -156,7 +179,13 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
     // exatamente no instante em que dois processos comecam juntos.
     db.prepare('BEGIN EXCLUSIVE').run()
   } catch (error) {
-    db.close()
+    // Fechar nao pode roubar o motivo: uma falha ao devolver a conexao viraria um erro
+    // sem relacao nenhuma com "o projeto ja tem dono", que e o que o chamador precisa ler.
+    try {
+      db.close()
+    } catch {
+      /* a conexao morre com o processo; o motivo abaixo e que importa */
+    }
     if (!isBusy(error)) throw error
     return {
       ok: false,
@@ -168,7 +197,6 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
   }
 
   let held = true
-  const instanceId = options.instanceId ?? newInstanceId()
   return {
     ok: true,
     lease: {
@@ -178,9 +206,17 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
       get held(): boolean {
         return held
       },
+      /**
+       * `held` e `db.open` sao coisas diferentes, e confundi-las custa caro.
+       *
+       * `held` vira `false` na primeira chamada e nunca mais volta: dali em diante este
+       * control plane nao pode agir, tenha o arquivo sido solto ou nao. Ja a CONEXAO so
+       * para de ser tentada quando fecha de verdade — se `close` falhar, a proxima chamada
+       * tenta outra vez em vez de virar no-op sobre um lock ainda segurado.
+       */
       release: (): void => {
-        if (!held) return
         held = false
+        if (!db.open) return
         // Fechar ja desfaz a transacao; o ROLLBACK explicito so torna a intencao legivel.
         try {
           db.prepare('ROLLBACK').run()
@@ -190,7 +226,7 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
         try {
           db.close()
         } catch {
-          /* o SO solta o lock no fim do processo de qualquer forma */
+          /* o SO solta o lock no fim do processo; a proxima chamada tenta de novo */
         }
       },
     },

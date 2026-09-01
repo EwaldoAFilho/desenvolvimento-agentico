@@ -115,13 +115,15 @@ describe('descoberta', () => {
     expect(await readControlPlaneFile(base)).toBeDefined()
   })
 
-  it('processo MORTO: nao ha control plane, e o registro e limpo', async () => {
+  it('processo MORTO: nao ha control plane — e o registro NAO e apagado', async () => {
     const base = await runtimeDir()
     await writeControlPlaneFile(base, { host: '127.0.0.1', port: 4317, pid: await deadPid() })
 
     expect(await discoverControlPlane(base)).toBeUndefined()
-    // Limpou: a segunda consulta nem precisa sondar o pid de novo.
-    expect(await readControlPlaneFile(base)).toBeUndefined()
+    // Descobrir e leitura. Apagar aqui seria escrever sem posse, e nao ha compare-and-delete
+    // atomico que impeca de levar junto o registro de um dono que publicou nesse instante.
+    // O registro velho fica e o proximo dono o sobrescreve.
+    expect(await readControlPlaneFile(base)).toBeDefined()
   })
 
   it('EPERM conta como vivo: existe e nao e nosso', async () => {
@@ -257,7 +259,7 @@ describe('identidade da instancia no registro de descoberta', () => {
     expect(restos).toEqual([])
   })
 
-  it('a limpeza de registro morto so remove o registro que foi lido', async () => {
+  it('descobrir nunca escreve: um dono que publica durante a consulta nao e atropelado', async () => {
     const base = await runtimeDir()
     await writeControlPlaneFile(base, {
       host: '127.0.0.1',
@@ -266,9 +268,9 @@ describe('identidade da instancia no registro de descoberta', () => {
       instanceId: 'inst-morta',
     })
 
-    // A sonda diz que o pid morreu; e EXATAMENTE nesse intervalo — entre ler o registro e
-    // limpa-lo — um control plane NOVO publica o dele. A escrita e sincrona para que a
-    // ordem seja a do teste, e nao a do agendador.
+    // A sonda diz que o pid morreu; e EXATAMENTE nesse intervalo um control plane NOVO
+    // publica o dele. A escrita e sincrona para que a ordem seja a do teste, nao a do
+    // agendador. Enquanto a descoberta apagava, este era o registro que se perdia.
     const encontrado = await discoverControlPlane(base, {
       alive: () => {
         writeFileSync(
@@ -287,7 +289,6 @@ describe('identidade da instancia no registro de descoberta', () => {
     })
 
     expect(encontrado).toBeUndefined()
-    // O registro vivo sobrevive: apagar sem condicao deixaria o dono novo invisivel.
     expect(await readControlPlaneFile(base)).toMatchObject({ instanceId: 'inst-viva' })
   })
 })

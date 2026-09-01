@@ -56,8 +56,10 @@ async function projetoComRunRecuperavel(): Promise<MissionHarness> {
   await harness.plane.pauseRun(harness.runId, { actor: 'diagnostico@D4' })
   const run = await harness.run()
   if (run.status !== 'PAUSED') throw new Error(`fixture: esperava PAUSED, veio ${run.status}`)
-  // O processo do teste solta o banco: o que sobra e um run parado esperando um dono.
+  // O processo do teste solta o banco E a posse: o que sobra e um projeto sem dono, com um
+  // run parado. Entregar a posse aqui e o ponto — os donos deste teste sao outros processos.
   await harness.plane.close()
+  harness.lease.release()
   return harness
 }
 

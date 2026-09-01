@@ -74,3 +74,36 @@ export async function claimControlPlane(input: OwnershipStepInput): Promise<Cont
     detail: outcome.detail,
   })
 }
+
+export interface ShutdownSteps {
+  /** Para de aceitar comando novo e retira o endereco do mapa. */
+  stopServing(): Promise<void>
+  /** Abandona orquestradores e fecha o banco: e aqui que os EFEITOS param. */
+  stopEffects(): Promise<void>
+  /** Devolve o projeto. Depois disto, outro processo pode assumir. */
+  releaseOwnership(): void
+}
+
+/**
+ * A ordem do encerramento, isolada porque ela E a garantia — e porque so da para provar uma
+ * ordem que tem nome.
+ *
+ * Tres regras, cada uma com um modo de falha atras:
+ *
+ * 1. Parar de atender vem primeiro, mas NAO pode bloquear o resto: um socket que se recusa a
+ *    fechar nao e razao para deixar loop despachando agente. A falha e guardada e relancada
+ *    no fim, para nao virar silencio.
+ * 2. Se os EFEITOS nao pararem, a posse NAO e devolvida. Entregar o projeto com loop andando
+ *    e o dano de D4 voltando por um caminho de falha; um projeto que continua possuido por um
+ *    processo defeituoso e o mal menor, porque a posse morre junto com o processo.
+ * 3. Soltar a posse e o ultimo ato.
+ */
+export async function shutdownControlPlane(steps: ShutdownSteps): Promise<void> {
+  const falhaAoParar = await steps.stopServing().then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+  await steps.stopEffects()
+  steps.releaseOwnership()
+  if (falhaAoParar !== undefined) throw falhaAoParar
+}

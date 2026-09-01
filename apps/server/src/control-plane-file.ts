@@ -194,14 +194,18 @@ export interface DiscoverOptions {
 
 /**
  * Onde esta o control plane, se e que ha um. Registro apontando para processo morto NAO e
- * control plane: e lixo de um encerramento abrupto — some do disco e a resposta e "nao ha".
+ * control plane: e lixo de um encerramento abrupto, e a resposta e "nao ha".
  *
- * A limpeza remove SO o registro que acabou de ser lido. Apagar sem essa condicao era uma
- * corrida real: entre ler um registro morto e apaga-lo, um control plane novo pode ter
- * publicado o dele — e a limpeza deixaria o dono vivo invisivel.
+ * Descobrir NAO apaga nada, e isso e deliberado.
  *
- * Nada disso decide posse. Um registro morto some do mapa; quem pode agir continua sendo
- * decidido pelo lock do projeto (I14).
+ * Apagar aqui parecia limpeza e era uma corrida: entre ler um registro morto e remove-lo, um
+ * control plane novo pode ter publicado o dele, e nao existe "compare-and-delete" atomico em
+ * sistema de arquivos para impedir que o registro do vivo fosse o apagado. Quem chama isto e
+ * CLIENTE — nao tem a posse do projeto e portanto nao tem como provar que ninguem publicou
+ * naquele instante.
+ *
+ * O registro velho tambem nao precisa sumir: ele ja e ignorado aqui, e o proximo dono o
+ * sobrescreve ao publicar. Escrita em `control-plane.json` fica sendo do DONO, so.
  */
 export async function discoverControlPlane(
   runtimeDir: string,
@@ -210,12 +214,5 @@ export async function discoverControlPlane(
   const runtime = await readControlPlaneFile(runtimeDir)
   if (runtime === undefined) return undefined
   const alive = options.alive ?? processAlive
-  if (alive(runtime.pid)) return runtime
-  await removeControlPlaneFile(
-    runtimeDir,
-    runtime.instanceId === undefined
-      ? { pid: runtime.pid, port: runtime.port }
-      : { instanceId: runtime.instanceId },
-  )
-  return undefined
+  return alive(runtime.pid) ? runtime : undefined
 }

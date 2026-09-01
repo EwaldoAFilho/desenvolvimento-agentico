@@ -85,6 +85,16 @@ A identidade mora onde já havia lugar para ela: `control-plane.json` ganhou `in
 posse — o perdedor recebe `SQLITE_BUSY` de qualquer forma, e a descoberta só decide a
 qualidade da mensagem.
 
+### Canonicalização não pode falhar aberta
+
+`realpath` é o que faz `/repo` e `/atalho-para-repo` disputarem a mesma posse. Se ele falhar,
+a alternativa natural — usar o caminho textual — manteria o boot de pé ao custo de uma chave
+que não unifica aliases: trocaria a invariante por disponibilidade, exatamente na função que
+existe para sustentar a invariante. Então falhar ali **recusa o boot**
+(`OwnershipPathError`). O diretório já foi criado antes da chamada, então o único jeito de
+chegar lá é problema real de ambiente — permissão, ciclo de links — e para esse caso recusar
+é a resposta certa.
+
 ### Espera antes de recusar
 
 A aquisição usa `busy_timeout = 250ms`, não zero. Não é para esperar o dono sair — o dono não
@@ -92,6 +102,40 @@ sai. É para atravessar o instante em que dois processos **criam** o arquivo ao 
 Com zero, essa disputa de criação virava recusa: medido em oito processos por doze rodadas,
 uma rodada terminou com **zero vencedores** — ninguém subiria, e o projeto pareceria possuído
 por um dono que não existe. Com 250ms, doze de doze com exatamente um vencedor.
+
+### Adotar exige posse DECLARADA
+
+Para as demais operacoes a guarda e "nao perdeu a posse"; para `adoptRecoverableRuns()` ela é
+"tem a posse". A diferença importa porque a adoção é o único efeito que o control plane
+produz sozinho, no boot, sem ninguém pedir — foi o que transformou D4 de risco em dano. Um
+plane construído sem lease (comando de leitura, teste) não pode cair nesse caminho por
+esquecimento de quem o construiu: ali a ausência de lease é recusa, não permissão.
+
+### Encerrar não devolve o projeto com efeito vivo
+
+A ordem do encerramento é garantia tanto quanto a do boot, e ela vive numa função com nome
+(`shutdownControlPlane`), com um teste por regra:
+
+1. Parar de atender vem primeiro, mas **não pode bloquear o resto**: um socket que se recusa
+   a fechar não é razão para deixar loop despachando agente. A falha é guardada e relançada
+   no fim, para não virar silêncio.
+2. Se os **efeitos** não pararem, a posse **não** é devolvida. Entregar o projeto com loop
+   andando é o dano de D4 voltando por um caminho de falha; um projeto que continua possuído
+   por um processo defeituoso é o mal menor, porque a posse morre junto com o processo.
+3. Soltar a posse é o último ato.
+
+### Descobrir não escreve
+
+`discoverControlPlane` deixou de apagar o registro de um processo morto. Parecia limpeza e era
+uma corrida: entre ler o registro morto e removê-lo, um control plane novo pode ter publicado
+o dele, e não existe *compare-and-delete* atômico em sistema de arquivos que impeça o registro
+do vivo de ser o apagado. Quem chama a descoberta é **cliente** — não tem a posse e portanto
+não tem como provar que ninguém publicou naquele instante.
+
+O registro velho também não precisa sumir: ele já é ignorado (o pid está morto) e o próximo
+dono o sobrescreve ao publicar. Escrever em `control-plane.json` passou a ser exclusividade do
+dono, e é isso que torna segura a remoção no encerramento — ali o lock ainda está na mão, e
+nenhum outro processo consegue publicar antes de ele ser solto.
 
 ## Alternativas
 

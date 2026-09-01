@@ -18,6 +18,7 @@ export {
   newInstanceId,
   OWNERSHIP_ALREADY_HELD,
   type OwnershipOutcome,
+  OwnershipPathError,
   type OwnershipRefused,
 } from './control-plane-lock.js'
 export {

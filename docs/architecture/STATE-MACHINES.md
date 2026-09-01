@@ -243,6 +243,15 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   `control-plane.json` continua sendo **descoberta, não posse**. Ele diz onde falar com o
   dono; ausente, velho ou apagado, não cria um segundo. Os dois se ligam pelo `instanceId`, e
   é por ele que um processo em encerramento não apaga o registro de uma instância nova.
+  Descobrir é leitura pura: quem pergunta onde está o control plane é cliente, não tem a posse
+  e não pode provar que o registro não acabou de ser reescrito — então não apaga nada. Escrever
+  ali é do dono.
+
+  Adotar exige posse **declarada**, não apenas "não perdida": a adoção é o único efeito que o
+  control plane produz sozinho no boot, e um plane construído sem posse (leitura, teste) não
+  pode cair nesse caminho por esquecimento. E o encerramento só devolve o projeto depois que os
+  efeitos pararam — se os orquestradores não abandonarem, a posse fica onde está, porque
+  entregar o projeto com loop andando é o dano de D4 voltando por um caminho de falha.
 - `COMPLETED`: `∀ task: status ∈ {DONE, SKIPPED}` ∧ mission gate `PASS` ∧ branch da missão
   consolidada. Uma task `CANCELLED` impede `COMPLETED` — o run termina `FAILED` com razão
   explícita. Concluir uma entrega com pedaço cancelado seria mentir no relatório.

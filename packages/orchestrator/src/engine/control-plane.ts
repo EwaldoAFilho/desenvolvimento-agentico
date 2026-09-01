@@ -260,6 +260,23 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     }
   }
 
+  /**
+   * Para ADOTAR, nao basta "nao ter perdido a posse": e preciso TE-LA.
+   *
+   * A diferenca importa porque adocao e o unico efeito que o control plane produz sozinho, no
+   * boot, sem ninguem pedir — foi o que transformou D4 de risco em dano. Um plane construido
+   * sem posse (comando de leitura, teste) nao pode cair nesse caminho por esquecimento de
+   * quem o construiu: aqui a ausencia de lease e recusa, nao permissao.
+   */
+  const exigirPosseDeclarada = (acao: string): void => {
+    if (lease === undefined) {
+      throw new CommandRefusedError(
+        `control plane aberto sem posse do projeto: ${acao} recusado (I14)`,
+      )
+    }
+    exigirPosse(acao)
+  }
+
   const orchestrators = new Map<string, Orchestrator>()
   /** Aberturas em voo, por run: o que impede dois donos nascerem em paralelo (I13). */
   const opening = new Map<string, Promise<Orchestrator>>()
@@ -416,7 +433,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const adoptRecoverableRuns = async (): Promise<AdoptionResult> => {
     // Somente o dono adota. Dois processos adotando o mesmo run foi o dano medido em D4:
     // duas worktrees no mesmo caminho e tentativas descartadas por transicao invalida.
-    exigirPosse('adotar runs recuperaveis')
+    exigirPosseDeclarada('adotar runs recuperaveis')
     const adopted: RunAdoption[] = []
     const refused: RunAdoptionRefusal[] = []
     const rows = persistence.queries.listRuns({ status: [...RECOVERABLE_ACTIVE_RUN_STATUSES] })
@@ -463,9 +480,21 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     deps,
     validateMission,
     compileMission,
-    createRun: (input) => createRun(deps, { ...input, project: input.project ?? config.project }),
-    approveMission: (input) => approveMission(deps, input),
-    startRun: (input) => startRun(deps, input),
+    // Estas tres escrevem estado sem passar por `open`, entao cobram a guarda por conta
+    // propria. Num plane sem posse declarada elas seguem como antes — quem muda isso e a
+    // fatia que tirar os comandos de leitura do modo `readwrite` (D9).
+    createRun: (input) => {
+      exigirPosse('criar run')
+      return createRun(deps, { ...input, project: input.project ?? config.project })
+    },
+    approveMission: (input) => {
+      exigirPosse('aprovar missao')
+      return approveMission(deps, input)
+    },
+    startRun: (input) => {
+      exigirPosse('iniciar run')
+      return startRun(deps, input)
+    },
     pauseRun: async (runId, command) => pauseRun(await open(runId), command),
     resumeRun: async (runId, command) => resumeRun(await open(runId), command),
     stopRun: async (runId, command) => stopRun(await open(runId), command),

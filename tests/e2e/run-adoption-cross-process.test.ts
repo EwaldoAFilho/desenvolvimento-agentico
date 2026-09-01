@@ -43,8 +43,10 @@ describe('I14 — a adocao tem dono unico tambem entre control planes', () => {
     try {
       await h.start()
       await h.plane.pauseRun(h.runId, { actor: 'humano@estoque-cli' })
-      // O processo do teste solta o banco: sobra um run recuperavel esperando um dono.
+      // O processo do teste solta o banco E a posse: sobra um projeto sem dono, com um run
+      // recuperavel. Sao os control planes abaixo que vao disputa-lo.
       await h.plane.close()
+      h.lease.release()
 
       const a = await startServer({
         repoRoot: h.root,

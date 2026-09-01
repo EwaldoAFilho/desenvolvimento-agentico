@@ -12,7 +12,7 @@ import {
 } from './control-plane-file.js'
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
-import { claimControlPlane } from './ownership.js'
+import { claimControlPlane, shutdownControlPlane } from './ownership.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
 import { registerReadRoutes } from './routes/read.js'
@@ -166,43 +166,69 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
     repoRoot: sources.repoRoot,
     ...(config.instanceId === undefined ? {} : { instanceId: config.instanceId }),
   })
-  const plane = createControlPlane({
-    project: sources.project,
-    gatesFile: sources.gatesFile,
-    repoRoot: sources.repoRoot,
-    lease,
-    ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
-  })
-  const running = await attachServer({
-    plane,
-    instanceId: lease.instanceId,
-    project: sources.project,
-    projectText: sources.projectText,
-    gatesText: sources.gatesText,
-    repoRoot: sources.repoRoot,
-    ...(config.missionsDir === undefined ? {} : { missionsDir: config.missionsDir }),
-    ...(config.webDist === undefined ? {} : { webDist: config.webDist }),
-    ...(config.heartbeatMs === undefined ? {} : { heartbeatMs: config.heartbeatMs }),
-    ...(config.host === undefined ? {} : { host: config.host }),
-    ...(config.port === undefined ? {} : { port: config.port }),
-    ...(config.exposeExternally === undefined ? {} : { exposeExternally: config.exposeExternally }),
-    ...(config.logger === undefined ? {} : { logger: config.logger }),
-    ...(config.runtimeDir === undefined ? {} : { runtimeDir: config.runtimeDir }),
-    ...(config.publishRuntimeFile === undefined
-      ? {}
-      : { publishRuntimeFile: config.publishRuntimeFile }),
-  })
-  // Ordem do encerramento, e ela tambem e garantia: para de atender, tira o endereco do
-  // mapa (so o NOSSO), abandona os orquestradores e SO ENTAO solta a posse. Soltar antes
-  // deixaria uma janela em que outro processo assume um projeto que ainda tem loop andando.
-  const close = async (): Promise<void> => {
-    try {
-      await running.close()
-      await plane.close()
-    } finally {
-      lease.release()
-    }
+  /**
+   * Do `claim` ate aqui, qualquer falha tem de devolver a posse.
+   *
+   * Um boot que quebra no meio — porta ocupada, banco corrompido, disco cheio — nao pode
+   * deixar o projeto marcado como possuido por um processo que nao vai servir nada. E como
+   * a posse morre com o processo, o caso perigoso e justamente o processo que SOBREVIVE a
+   * falha: uma suite de testes, um supervisor que tenta de novo, a extensao do editor.
+   *
+   * A conexao do banco tambem: um plane aberto e abandonado segura o `state.db` sem ninguem
+   * do outro lado.
+   */
+  let plane: ControlPlane
+  try {
+    plane = createControlPlane({
+      project: sources.project,
+      gatesFile: sources.gatesFile,
+      repoRoot: sources.repoRoot,
+      lease,
+      ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
+    })
+  } catch (error) {
+    lease.release()
+    throw error
   }
+
+  let running: RunningServer
+  try {
+    running = await attachServer({
+      plane,
+      instanceId: lease.instanceId,
+      project: sources.project,
+      projectText: sources.projectText,
+      gatesText: sources.gatesText,
+      repoRoot: sources.repoRoot,
+      ...(config.missionsDir === undefined ? {} : { missionsDir: config.missionsDir }),
+      ...(config.webDist === undefined ? {} : { webDist: config.webDist }),
+      ...(config.heartbeatMs === undefined ? {} : { heartbeatMs: config.heartbeatMs }),
+      ...(config.host === undefined ? {} : { host: config.host }),
+      ...(config.port === undefined ? {} : { port: config.port }),
+      ...(config.exposeExternally === undefined
+        ? {}
+        : { exposeExternally: config.exposeExternally }),
+      ...(config.logger === undefined ? {} : { logger: config.logger }),
+      ...(config.runtimeDir === undefined ? {} : { runtimeDir: config.runtimeDir }),
+      ...(config.publishRuntimeFile === undefined
+        ? {}
+        : { publishRuntimeFile: config.publishRuntimeFile }),
+    })
+  } catch (error) {
+    await plane.close().catch(() => undefined)
+    lease.release()
+    throw error
+  }
+  // A ordem do encerramento e garantia tanto quanto a do boot; ela vive em
+  // `shutdownControlPlane`, com o porque de cada passo e um teste por regra.
+  const close = (): Promise<void> =>
+    shutdownControlPlane({
+      stopServing: () => running.close(),
+      stopEffects: () => plane.close(),
+      releaseOwnership: () => {
+        lease.release()
+      },
+    })
 
   // READY e depois disto, nao antes: um run recuperavel sem dono e um run que o banco diz
   // estar andando e que ninguem faz andar (I13). A adocao vem DEPOIS do `listen` de
