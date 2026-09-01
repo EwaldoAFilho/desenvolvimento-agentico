@@ -168,6 +168,58 @@ export interface ControlPlane {
   close(): Promise<void>
 }
 
+/**
+ * Os quatro caminhos de ESCRITA da persistencia, por store.
+ *
+ * Recusar so na fachada (`plane.createRun`) nao bastava: `plane.persistence` e publico, e
+ * `plane.persistence.runs.createRun(...)` chegava ao banco sem passar por guarda nenhuma.
+ * Nenhum handler de producao fazia isso hoje — e "hoje" e exatamente a palavra que a
+ * invariante nao pode depender. Um plane sem posse precisa ser somente-leitura de fato, nao
+ * por convencao de quem o usa.
+ */
+const ESCRITAS_DA_PERSISTENCIA = {
+  runs: ['createRun', 'withTransaction'],
+  events: ['append'],
+  artifacts: ['write'],
+} as const satisfies Readonly<Record<string, readonly string[]>>
+
+/**
+ * Espelho somente-leitura de um store: tudo passa, menos o que escreve.
+ *
+ * `Proxy` em vez de copia porque os stores sao classes com campo privado (`#handle`): um
+ * objeto derivado por `Object.create` perderia o `this` e quebraria na primeira leitura. O
+ * `bind` no alvo mantem os metodos legitimos funcionando exatamente como antes.
+ *
+ * Isto NAO e a fatia do modo `readonly` da conexao (D9, ainda em aberto): a conexao continua
+ * `readwrite`. O que muda e a CAPACIDADE exposta — sem posse, nao ha por onde escrever.
+ */
+function semEscrita<T extends object>(store: T, bloqueados: readonly string[]): T {
+  return new Proxy(store, {
+    get(target, prop, _receiver): unknown {
+      if (typeof prop === 'string' && bloqueados.includes(prop)) {
+        return (): Promise<never> =>
+          Promise.reject(
+            new CommandRefusedError(
+              `control plane aberto sem posse do projeto: ${prop} recusado (I14)`,
+            ),
+          )
+      }
+      const value: unknown = Reflect.get(target, prop, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/** A persistencia como um plane SEM posse pode expo-la: le tudo, nao escreve nada. */
+function persistenciaDeLeitura(persistence: Persistence): Persistence {
+  return {
+    ...persistence,
+    runs: semEscrita(persistence.runs, ESCRITAS_DA_PERSISTENCIA.runs),
+    events: semEscrita(persistence.events, ESCRITAS_DA_PERSISTENCIA.events),
+    artifacts: semEscrita(persistence.artifacts, ESCRITAS_DA_PERSISTENCIA.artifacts),
+  }
+}
+
 /** Perfis declarados no projeto; sem declaracao, um por papel suportado pelo provider. */
 export function profilesOf(project: ProjectFile): AgentProfile[] {
   const profiles: AgentProfile[] = []
@@ -221,10 +273,13 @@ interface RunWiring {
  */
 export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   const repoRoot = resolve(config.repoRoot ?? config.project.project.repoRoot)
-  const persistence = openPersistence({
+  const aberta = openPersistence({
     baseDir: config.baseDir ?? resolve(repoRoot, '.agentic'),
     ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
   })
+  // Sem posse declarada, a ESCRITA nao e exposta — nem pela fachada, nem pela persistencia
+  // publica. Com posse, e a persistencia inteira: quem provou ser dono escreve.
+  const persistence = config.lease === undefined ? persistenciaDeLeitura(aberta) : aberta
   const clock = config.clock ?? systemClock()
   const ids = config.ids ?? ulidGenerator({ clock })
   const registry =
@@ -528,7 +583,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       opening.clear()
       for (const orchestrator of orchestrators.values()) await orchestrator.abandon()
       orchestrators.clear()
-      persistence.close()
+      // A conexao REAL, nao o espelho: fechar e devolver recurso, nao escrever estado.
+      aberta.close()
     },
   }
 }

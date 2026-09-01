@@ -233,7 +233,6 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
       projectText: sources.projectText,
       gatesText: sources.gatesText,
       repoRoot: sources.repoRoot,
-      runtimeDir: lease.ownedDir,
       webDist: WEB_DIST,
       heartbeatMs: 5_000,
       host: '127.0.0.1',

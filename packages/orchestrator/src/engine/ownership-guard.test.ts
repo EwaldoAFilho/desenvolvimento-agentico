@@ -118,6 +118,33 @@ describe('plane sem posse declarada nao muta (I14)', () => {
     await expect(plane.adoptRecoverableRuns()).rejects.toThrow(/sem posse do projeto/i)
   })
 
+  it('a persistencia publica tambem nao escreve: nao ha atalho por fora da fachada', async () => {
+    const { plane } = await cenario({ comPosse: false })
+    const { spec, compiled } = missaoCompilada()
+
+    // `plane.createRun` recusar nao basta se `plane.persistence.runs.createRun` escrever: o
+    // objeto e publico, e a invariante nao pode depender de ninguem lembrar de nao usa-lo.
+    await expect(
+      plane.persistence.runs.createRun({ id: RUN_INEXISTENTE } as never, []),
+    ).rejects.toThrow(/sem posse do projeto/i)
+    await expect(plane.persistence.runs.withTransaction(async () => undefined)).rejects.toThrow(
+      /sem posse do projeto/i,
+    )
+    await expect(
+      plane.persistence.events.append({ runId: RUN_INEXISTENTE } as never),
+    ).rejects.toThrow(/sem posse do projeto/i)
+    await expect(
+      plane.persistence.artifacts.write({ runId: RUN_INEXISTENTE } as never),
+    ).rejects.toThrow(/sem posse do projeto/i)
+
+    // E a LEITURA continua inteira: e ela que sustenta status, report e inspect.
+    expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
+    expect(await plane.persistence.runs.loadRun(RUN_INEXISTENTE)).toBeUndefined()
+    expect(await plane.persistence.events.list(RUN_INEXISTENTE)).toEqual([])
+    void spec
+    void compiled
+  })
+
   it('a recusa acontece ANTES de escrever: nenhum run entra no banco', async () => {
     const { plane } = await cenario({ comPosse: false })
     const { spec, compiled } = missaoCompilada()
@@ -127,6 +154,22 @@ describe('plane sem posse declarada nao muta (I14)', () => {
 })
 
 describe('plane COM posse continua funcionando', () => {
+  it('a persistencia volta a escrever quando ha posse', async () => {
+    const { plane } = await cenario({ comPosse: true })
+    const { spec, compiled } = missaoCompilada()
+    const run = await plane.createRun({ mission: spec, compiled, missionText: MISSION })
+    // Pela persistencia publica, com posse, a escrita passa: o espelho some junto com a
+    // duvida sobre quem manda no projeto.
+    await plane.persistence.events.append({
+      runId: run.id,
+      ts: new Date('2026-01-01T00:00:00.000Z'),
+      type: 'run.created',
+      actor: { kind: 'human', id: 'teste' },
+      payload: {},
+    } as never)
+    expect((await plane.persistence.events.list(run.id)).length).toBeGreaterThan(0)
+  })
+
   it('createRun e approveMission operam normalmente', async () => {
     const { plane } = await cenario({ comPosse: true })
     const { spec, compiled } = missaoCompilada()

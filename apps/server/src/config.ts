@@ -69,11 +69,14 @@ export interface ServerConfig {
   readonly logger?: boolean
   readonly databasePath?: string
   /**
-   * Diretorio de ESTADO do projeto: posse, `state.db` e `control-plane.json`. Default: o
-   * `<repoRoot>/.agentic` derivado do `project.yaml`. Passar outro valor troca o projeto
-   * inteiro de lugar, nao so o registro de descoberta.
+   * NAO existe opcao de diretorio de estado.
+   *
+   * Ela existiu enquanto `runtimeDir` era so o lugar do `control-plane.json`. Depois que ele
+   * passou a ser tambem a CHAVE DE POSSE, aceitar um valor do chamador era abrir de volta o
+   * bypass que 003B veio fechar: duas chamadas de `startServer` para o mesmo `repoRoot`, com
+   * diretorios diferentes, disputariam locks diferentes e venceriam as duas (I14). O estado
+   * mora onde `projectIdentityOf` diz, e ponto.
    */
-  readonly runtimeDir?: string
   /** `false` desliga a publicacao do registro de descoberta. */
   readonly publishRuntimeFile?: boolean
   /** Identidade deste control plane. Injetavel para o teste; por padrao, uma nova por boot. */

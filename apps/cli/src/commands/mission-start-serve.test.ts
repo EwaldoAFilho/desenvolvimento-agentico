@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { ControlPlane } from '@agentic/orchestrator'
+import { runtimeDirOf } from '@agentic/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   captureDeps,
@@ -134,7 +135,7 @@ describe('mission start publica a API por padrao', () => {
     expect((result.data as { readonly servedAt?: string }).servedAt).toBe('http://127.0.0.1:4317')
   })
 
-  it('publica o registro no `.agentic` que a CLI consulta para descobrir', async () => {
+  it('entrega o repoRoot: o registro cai no `.agentic` que a CLI consulta', async () => {
     workspace = await createWorkspace()
     const specHash = await approvedRun(workspace.dir, workspace.missionPath)
     const spy = servePlaneSpy()
@@ -146,7 +147,11 @@ describe('mission start publica a API por padrao', () => {
 
     await missionStartCommand({ file: workspace.missionPath, acceptWarnings: true }, captured.deps)
 
-    expect(spy.published.inputs[0]?.runtimeDir).toBe(join(workspace.dir, '.agentic'))
+    // O diretorio do registro NAO e escolhido pela CLI: ele e derivado do `repoRoot` pela
+    // mesma conta que a posse usa (I14). O que a CLI entrega — e o que este teste fixa — e o
+    // repositorio; deixar o caminho do estado configuravel era o bypass fechado em 003B.
+    expect(spy.published.inputs[0]?.repoRoot).toBe(workspace.dir)
+    expect(runtimeDirOf(workspace.dir)).toBe(join(workspace.dir, '.agentic'))
   })
 
   it('encerra quando o run termina: nao fica esperando Ctrl+C', async () => {

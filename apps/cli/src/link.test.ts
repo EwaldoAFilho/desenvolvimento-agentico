@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { PROJECT_HEADER } from '@agentic/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CONTROL_PLANE_SERVICE, connectHttp, httpLink } from './link.js'
 
@@ -17,6 +18,24 @@ async function listen(
 ): Promise<string> {
   const active = createServer((request, response) => {
     const { status, body } = handler(request.url ?? '/')
+    response.writeHead(status, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(body))
+  })
+  server = active
+  await new Promise<void>((done) => active.listen(0, '127.0.0.1', () => done()))
+  const address = active.address() as AddressInfo
+  return `http://127.0.0.1:${address.port}`
+}
+
+/** Igual ao acima, com os cabecalhos da requisicao a vista. */
+async function listenComCabecalho(
+  handler: (
+    path: string,
+    headers: Record<string, string | string[] | undefined>,
+  ) => { status: number; body: unknown },
+): Promise<string> {
+  const active = createServer((request, response) => {
+    const { status, body } = handler(request.url ?? '/', request.headers)
     response.writeHead(status, { 'content-type': 'application/json' })
     response.end(JSON.stringify(body))
   })
@@ -85,6 +104,36 @@ describe('sonda do control plane', () => {
     await new Promise<void>((done) => active?.close(() => done()))
 
     expect(await connectHttp(endpoint)).toBeUndefined()
+  })
+})
+
+describe('o comando declara o projeto na propria requisicao', () => {
+  it('cada requisicao carrega o repoRoot esperado', async () => {
+    const recebidos: (string | undefined)[] = []
+    const endpoint = await listenComCabecalho((path, headers) => {
+      recebidos.push(headers[PROJECT_HEADER] as string | undefined)
+      return path === '/api/health'
+        ? { status: 200, body: { status: 'ok', service: CONTROL_PLANE_SERVICE, repoRoot: '/p' } }
+        : { status: 202, body: { accepted: true } }
+    })
+
+    const link = await connectHttp(endpoint, { repoRoot: '/p' })
+    await link?.send({ method: 'POST', path: '/api/runs', body: {} })
+
+    // A sonda pergunta a identidade; o COMANDO ja a declara. Sem isso, entre uma coisa e
+    // outra a porta pode trocar de dono e o comando muta o projeto errado.
+    expect(recebidos).toEqual([undefined, '/p'])
+  })
+
+  it('sem expectativa declarada, nada e enviado: a leitura nao precisa provar nada', async () => {
+    const recebidos: (string | undefined)[] = []
+    const endpoint = await listenComCabecalho((_path, headers) => {
+      recebidos.push(headers[PROJECT_HEADER] as string | undefined)
+      return { status: 200, body: { status: 'ok', service: CONTROL_PLANE_SERVICE } }
+    })
+
+    await httpLink(endpoint).send({ method: 'GET', path: '/api/health' })
+    expect(recebidos).toEqual([undefined])
   })
 })
 

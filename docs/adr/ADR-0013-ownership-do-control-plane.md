@@ -233,6 +233,31 @@ junto com o diretório ou porta reaproveitada colocam do outro lado um control p
 o run errado. Não é autenticação, e não pretende ser: é o mínimo que impede um comando de
 mutação atravessar de projeto.
 
+### O que a primeira revisão independente cobrou
+
+Três achados, todos legítimos, todos fechados na mesma fatia:
+
+- **A chave não pode ser escolhida pelo chamador.** `startServer` ainda aceitava um
+  `runtimeDir`, e depois que esse diretório virou a chave de posse, duas chamadas para o
+  mesmo `repoRoot` com diretórios diferentes venciam **duas** posses. A opção foi
+  **removida**: o diretório de estado sai de `projectIdentityOf` e de mais lugar nenhum.
+  `databasePath` continua sendo a única saída declarada da chave (e continua não
+  acontecendo no uso normal).
+- **A prova de identidade tem de viajar com o comando.** Sondar o `/api/health` antes e
+  mandar o POST depois deixa uma janela: o dono encerra, outro control plane — de outro
+  repositório — reaproveita a porta, e o comando muta o run errado. Agora cada requisição da
+  CLI declara o projeto no cabeçalho `x-agentic-repo-root`, e **o servidor** confere contra o
+  projeto que possui, respondendo `409 PROJECT_MISMATCH`. Ausência do cabeçalho passa, e isso
+  não é o `undefined` permissivo de antes: quem não declara é o dashboard, servido por este
+  mesmo control plane, na mesma origem — quem pode errar de endereço é a CLI, e ela declara
+  sempre.
+- **Um plane sem posse precisa ser somente-leitura de fato.** `plane.createRun` recusava, mas
+  `plane.persistence.runs.createRun` chegava ao banco. Sem lease, os quatro caminhos de
+  escrita da persistência (`runs.createRun`, `runs.withTransaction`, `events.append`,
+  `artifacts.write`) passam a recusar; a leitura fica inteira. Isso **não** é a fatia do modo
+  `readonly` da conexão (D9, ainda em aberto): a conexão continua `readwrite`, o que muda é a
+  capacidade exposta.
+
 ### Limite que continua declarado
 
 `release()` marca a posse como perdida **antes** de tentar fechar a conexão. Se o `close`

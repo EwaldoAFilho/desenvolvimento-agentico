@@ -1,5 +1,6 @@
 import { canonicalIfPresent } from '@agentic/persistence'
 import type { ProjectFile } from '@agentic/schemas'
+import { PROJECT_HEADER } from '@agentic/server'
 
 /**
  * Ligacao com o control plane NO AR (ARCHITECTURE 4). Comando de mutacao sobre um run vai
@@ -86,7 +87,7 @@ export async function connectHttp(
   } catch {
     return undefined
   }
-  return httpLink(endpoint)
+  return httpLink(endpoint, expected)
 }
 
 /**
@@ -101,13 +102,27 @@ function respondePor(recebido: unknown, esperado: string): boolean {
   return canonicalIfPresent(recebido) === canonicalIfPresent(esperado)
 }
 
-export function httpLink(endpoint: string): ControlPlaneLink {
+/**
+ * A ligacao carrega, em CADA requisicao, o projeto a que ela se destina.
+ *
+ * A sonda do `/api/health` recusa um control plane de outro repositorio, mas nao cobre a
+ * janela entre sondar e mandar: o dono encerra, outro control plane reaproveita a porta, e o
+ * comando chega a um servidor legitimo que muta o run errado. Declarar o projeto na propria
+ * requisicao passa a decisao para quem sabe respondê-la — o servidor, sobre o projeto que
+ * ele possui — e fecha a janela.
+ */
+export function httpLink(endpoint: string, expected?: ConnectExpectation): ControlPlaneLink {
+  const identidade: Record<string, string> =
+    expected === undefined ? {} : { [PROJECT_HEADER]: expected.repoRoot }
   return {
     endpoint,
     send: async (request: LinkRequest): Promise<LinkResponse> => {
       const response = await fetch(`${endpoint}${request.path}`, {
         method: request.method,
-        headers: request.body === undefined ? {} : { 'content-type': 'application/json' },
+        headers: {
+          ...identidade,
+          ...(request.body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
         ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
       })
       const text = await response.text()

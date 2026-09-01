@@ -31,6 +31,23 @@ import { canonicalIfPresent } from '@agentic/persistence'
 /** Diretorio local do projeto; o mesmo que guarda `state.db`, `runs/` e a descoberta. */
 export const RUNTIME_DIR_NAME = '.agentic'
 
+/**
+ * Cabecalho em que o CLIENTE declara por qual projeto ele acha que esta falando.
+ *
+ * Sondar o `/api/health` antes e depois mandar o comando deixa uma janela: entre a sonda e
+ * o POST, o dono pode encerrar e outro control plane — de OUTRO repositorio — reaproveitar a
+ * porta. O comando chegaria a um servidor legitimo e mutaria o run errado. Com a declaracao
+ * viajando NA MESMA requisicao, quem confere e o servidor, sobre o projeto que ele possui,
+ * sem janela nenhuma.
+ *
+ * Nao e autenticacao e nao pretende ser (o bind e loopback por desenho, ADR-0003): e a
+ * amarracao minima entre o comando e o projeto a que ele se destina.
+ */
+export const PROJECT_HEADER = 'x-agentic-repo-root'
+
+/** Codigo devolvido quando o cabecalho aponta para um projeto que este servidor nao possui. */
+export const PROJECT_MISMATCH = 'PROJECT_MISMATCH'
+
 export interface ProjectIdentity {
   /** Diretorio que contem `.agentic/project.yaml`. Ancora da CONFIGURACAO. */
   readonly projectDir: string

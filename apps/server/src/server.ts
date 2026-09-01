@@ -1,6 +1,6 @@
 import type { AdoptionResult, ControlPlane } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
-import type { ControlPlaneLease } from '@agentic/persistence'
+import { type ControlPlaneLease, canonicalIfPresent } from '@agentic/persistence'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { type BindAddress, loadProjectSources, resolveBind, type ServerConfig } from './config.js'
 import {
@@ -12,7 +12,7 @@ import {
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
 import { claimControlPlane, shutdownControlPlane } from './ownership.js'
-import { runtimeDirOf } from './project-identity.js'
+import { PROJECT_HEADER, PROJECT_MISMATCH, runtimeDirOf } from './project-identity.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
 import { registerReadRoutes } from './routes/read.js'
@@ -32,12 +32,47 @@ export function createServer(input: CreateServerInput): FastifyInstance {
   const deps = toServerDeps(input)
   const app = Fastify({ logger: input.logger ?? false })
   registerErrorHandler(app)
+  registerProjectGuard(app, deps)
   registerReadRoutes(app, deps)
   registerStreamRoutes(app, deps)
   registerMissionRoutes(app, deps)
   registerCommandRoutes(app, deps)
   registerStatic(app, deps)
   return app
+}
+
+/**
+ * O servidor confere, na PROPRIA requisicao, que ela era para este projeto.
+ *
+ * O cliente sonda o `/api/health` antes de mandar o comando, e essa sonda ja recusa um
+ * control plane de outro repositorio. O que ela nao cobre e a janela entre sondar e mandar:
+ * o dono encerra, outro control plane — de OUTRO projeto — reaproveita a porta, e o comando
+ * chega a um servidor legitimo que muta o run errado. Com a declaracao viajando junto, quem
+ * decide e o servidor, sobre o projeto que ele POSSUI, e a janela deixa de existir.
+ *
+ * Ausencia do cabecalho passa, e isso NAO e o "undefined vira permissao" que 003B corrigiu
+ * na posse: quem nao declara e o dashboard, servido por ESTE control plane, na mesma origem
+ * — ele nao tem como estar falando com outro projeto. Quem PODE errar de endereco e a CLI, e
+ * a CLI declara sempre.
+ */
+export function registerProjectGuard(app: FastifyInstance, deps: ServerDeps): void {
+  const nosso = canonicalIfPresent(deps.repoRoot)
+  app.addHook('onRequest', async (request, reply) => {
+    const bruto = request.headers[PROJECT_HEADER]
+    const declarado = Array.isArray(bruto) ? bruto[0] : bruto
+    if (declarado === undefined || declarado.length === 0) return undefined
+    if (canonicalIfPresent(declarado) === nosso) return undefined
+    // Devolver a `reply` e o que ENCERRA o ciclo: sem isso o handler ainda rodaria, e a
+    // recusa viraria uma mensagem depois do estrago.
+    return reply.status(409).send({
+      error: {
+        code: PROJECT_MISMATCH,
+        message:
+          `este control plane possui ${deps.repoRoot}, e o comando foi endereçado a ` +
+          `${declarado}: recusado para nao mutar o projeto errado (I14)`,
+      },
+    })
+  })
 }
 
 export interface RunningServer {
@@ -67,8 +102,6 @@ export interface AttachServerInput extends ServerDepsInput {
   readonly port?: number
   readonly exposeExternally?: boolean
   readonly logger?: FastifyServerOptions['logger']
-  /** Onde gravar o `control-plane.json`. Default: `<repoRoot>/.agentic`. */
-  readonly runtimeDir?: string
   /** `false` desliga a publicacao do registro de descoberta. */
   readonly publishRuntimeFile?: boolean
   /** Identidade do dono, para a descoberta apontar para a MESMA instancia que tem a posse. */
@@ -106,7 +139,10 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
   await app.listen({ host: address.host, port: address.port })
   const port = boundPortOf(app, address.port)
   const bound: BindAddress = { ...address, port }
-  const runtimeDir = input.runtimeDir ?? runtimeDirOf(deps.repoRoot)
+  // Derivado, nunca recebido: o registro de descoberta cai no MESMO diretorio que a posse
+  // protege. Aceitar um caminho do chamador aqui separaria "onde o dono esta publicado" de
+  // "o que o dono possui" — que e como a descoberta apontava para o vazio antes de 003B.
+  const runtimeDir = runtimeDirOf(deps.repoRoot)
 
   // Publicar o registro e conveniencia de descoberta, nao o produto: se o disco recusar,
   // a API continua no ar e a CLI cai no endereco declarado em `project.yaml`.
@@ -162,14 +198,16 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
   // Recusa de bind acontece ANTES de abrir banco: nada e criado por um endereco proibido.
   resolveBind(config, sources.project)
   /**
-   * UM diretorio de estado, daqui para baixo.
+   * UM diretorio de estado, daqui para baixo — e ele NAO e configuravel.
    *
    * Posse, `state.db` e `control-plane.json` moram no MESMO lugar, e esse lugar sai de
-   * `projectIdentityOf` — a unica conta do produto (I14). Antes, a posse ia para
-   * `<repoRoot>/.agentic` e o registro de descoberta para onde o chamador quisesse: bastava
-   * `project.repoRoot` apontar para fora para o banco de um entrypoint nao ser o do outro.
+   * `projectIdentityOf` (I14). Antes, a posse ia para `<repoRoot>/.agentic` e o registro de
+   * descoberta para onde o chamador quisesse: bastava `project.repoRoot` apontar para fora
+   * para o banco de um entrypoint nao ser o do outro. E enquanto o chamador pudesse escolher
+   * este caminho, duas chamadas de `startServer` sobre o mesmo `repoRoot` continuariam
+   * podendo vencer duas posses.
    */
-  const runtimeDir = config.runtimeDir ?? sources.runtimeDir
+  const runtimeDir = sources.runtimeDir
   // Aqui, e so aqui, se decide quem manda neste projeto. `--port` nao participa.
   const lease = await claimControlPlane({
     runtimeDir,
@@ -220,9 +258,6 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
         ? {}
         : { exposeExternally: config.exposeExternally }),
       ...(config.logger === undefined ? {} : { logger: config.logger }),
-      // O MESMO diretorio da posse: a descoberta publica o endereco de quem possui aquele
-      // `state.db`, e nao um endereco solto num diretorio que ninguem disputa.
-      runtimeDir: lease.ownedDir,
       ...(config.publishRuntimeFile === undefined
         ? {}
         : { publishRuntimeFile: config.publishRuntimeFile }),

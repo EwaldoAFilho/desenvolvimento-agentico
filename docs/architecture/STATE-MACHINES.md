@@ -244,9 +244,15 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   diferentes rendia dois donos para um projeto só (ADR-0013, correção de 003B).
 
   E **mutar exige posse declarada e viva**: `createRun`, `approveMission`, `startRun`,
-  `open` e `adoptRecoverableRuns` recusam num plane sem lease. Ausência de posse é recusa,
-  nunca permissão. Um plane sem lease continua servindo LEITURA — é o que mantém `status`,
+  `open` e `adoptRecoverableRuns` recusam num plane sem lease, e sem lease a própria
+  persistência exposta pelo plane recusa escrever. Ausência de posse é recusa, nunca
+  permissão. Um plane sem lease continua servindo LEITURA — é o que mantém `status`,
   `report` e `inspect` sem disputa.
+
+  Do lado HTTP, o **comando declara a que projeto se destina** (cabeçalho
+  `x-agentic-repo-root`) e o servidor confere contra o projeto que possui, respondendo
+  `409 PROJECT_MISMATCH`. Sondar a identidade antes e mandar o comando depois deixaria a
+  janela em que o dono encerra e outro control plane reaproveita a porta.
 
   A posse morre com o processo, inclusive sob `SIGKILL` — não há lock stale para interpretar,
   não há sonda de vivacidade e um `release()` que falhe não tranca o projeto. Por isso **o pid

@@ -1,4 +1,7 @@
+import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import { createServer as createTcpServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { acquireControlPlaneOwnership } from '@agentic/persistence'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServerHarness, type ServerHarness } from './__fixtures__/harness.js'
@@ -113,6 +116,35 @@ describe('posse do projeto no boot do control plane', () => {
     const segundo = await subir()
     expect(segundo.lease?.held).toBe(true)
     expect(segundo.lease?.instanceId).not.toBe(primeiro.lease?.instanceId)
+  })
+
+  it('a chave nao e escolhida pelo chamador: caminho alternativo esbarra na mesma parede', async () => {
+    harness = await projetoSemDono()
+    const dono = await subir()
+
+    /**
+     * O mesmo projeto, alcancado por outro TEXTO de caminho — um link simbolico.
+     *
+     * Enquanto `startServer` aceitava um diretorio de estado do chamador, duas chamadas para
+     * o mesmo `repoRoot` podiam disputar locks diferentes e vencer as duas (I14). Agora nao
+     * ha opcao: a chave sai de `projectIdentityOf`, e o segundo boot esbarra no primeiro.
+     */
+    const atalhoDir = await realpath(await mkdtemp(join(tmpdir(), 'agentic-alias-')))
+    try {
+      const atalho = join(atalhoDir, 'projeto')
+      await symlink(harness.root, atalho, 'dir')
+      const recusa = await startServer({ repoRoot: atalho, port: 0, webDist: atalho }).then(
+        (aberto) => {
+          abertos.push(aberto)
+          return undefined
+        },
+        (error: unknown) => error,
+      )
+      expect(recusa).toBeInstanceOf(ControlPlaneBusyError)
+      expect((recusa as ControlPlaneBusyError).owner?.instanceId).toBe(dono.lease?.instanceId)
+    } finally {
+      await rm(atalhoDir, { recursive: true, force: true })
+    }
   })
 
   it('boot que falha DEPOIS da posse a devolve, em vez de trancar o projeto', async () => {

@@ -52,6 +52,8 @@ export { ControlPlaneBusyError, claimControlPlane, shutdownControlPlane } from '
 export type { ProjectIdentity, ProjectIdentityInput } from './project-identity.js'
 export {
   configPathOf,
+  PROJECT_HEADER,
+  PROJECT_MISMATCH,
   projectDirOf,
   projectIdentityOf,
   RUNTIME_DIR_NAME,

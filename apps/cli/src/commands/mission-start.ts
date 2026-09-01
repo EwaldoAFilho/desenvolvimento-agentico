@@ -65,10 +65,9 @@ async function publishApi(
       project: context.project,
       projectText: context.projectText,
       gatesText: context.gatesText,
+      // O `repoRoot` e tudo o que o servidor precisa: o diretorio de estado onde ele
+      // publica a descoberta e DERIVADO dele, pela mesma conta que a posse usa.
       repoRoot: context.repoRoot,
-      // Mesmo diretorio que a posse protege e que a CLI consulta para descobrir: o registro
-      // tem que cair onde `agentic mission pause` vai procurar.
-      runtimeDir: context.runtimeDir,
       ...(port === undefined ? {} : { port }),
       ...(instanceId === undefined ? {} : { instanceId }),
     })

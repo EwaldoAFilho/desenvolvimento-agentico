@@ -62,11 +62,11 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
   const boot = deps.bootServer ?? startServer
   try {
     const running = await boot({
+      // Onde PROCURAR o projeto. O diretorio de estado — posse, `state.db` e descoberta —
+      // o servidor deriva sozinho, pela mesma conta que `mission start` e `mission approve`
+      // usam; nao ha como um chamador aponta-lo para outro lugar (I14).
       repoRoot: context.repoRoot,
       projectFile: context.projectPath,
-      // O diretorio de ESTADO, nao o de configuracao: posse, `state.db` e descoberta caem
-      // todos aqui, e e o mesmo caminho que `mission start` e `mission approve` disputam.
-      runtimeDir: context.runtimeDir,
       ...(args.port === undefined ? {} : { port: args.port }),
     })
     out.line(`control plane no ar em ${running.url}`)
