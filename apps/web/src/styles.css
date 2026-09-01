@@ -786,6 +786,14 @@ body {
   justify-items: start;
 }
 
+/* Os dois caminhos de partida lado a lado: o ato único e a partida de sempre. */
+.start__acts {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .start__confirm {
   display: grid;
   gap: 8px;
@@ -1399,4 +1407,167 @@ body {
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
+}
+
+/* ---------- revisao do plano: numeros, conflitos, no aberto e ajuste ---------- */
+
+/*
+ * Conflito e o PAR de tasks, nao o texto do aviso: o par vem primeiro na linha porque e o que
+ * o olho procura. Sem cor sozinha — o tipo do conflito vem escrito ao lado.
+ */
+.conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.conflicts li {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.conflicts__pair {
+  color: var(--fg);
+  letter-spacing: 0.04em;
+}
+
+.conflicts__kind {
+  color: var(--fg-muted);
+}
+
+.conflicts li[data-severity="ERROR"] .conflicts__pair {
+  color: var(--st-red);
+}
+
+.conflicts li[data-severity="WARNING"] .conflicts__pair {
+  color: var(--st-amber);
+}
+
+.plan-review {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.plan-review__head {
+  display: grid;
+  gap: 4px;
+}
+
+.plan-review__subtitle {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plan-review__hint,
+.plan-review__phase {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan-review__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Grafo e no lado a lado enquanto houver largura; embaixo quando nao houver. O canvas precisa
+ * de altura propria: dentro de uma coluna que rola, um grafo sem minimo colapsa para nada.
+ */
+.plan-review__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .plan-review__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.plan-review__body .dag {
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.plan-node {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.plan-node--empty {
+  align-content: center;
+}
+
+.plan-node__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.plan-node__id {
+  margin: 0;
+  color: var(--fg-dim);
+  letter-spacing: 0.12em;
+}
+
+.plan-node__title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.plan-node__hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan-node__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+/* Risco e texto ao lado do rotulo; a cor apenas reforca o que ja esta escrito. */
+.plan-node [data-risk="high"] {
+  color: var(--st-red);
+}
+
+.plan-node [data-risk="medium"] {
+  color: var(--st-amber);
+}
+
+.plan-review__adjust {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.plan-review__file {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
 }

@@ -418,3 +418,54 @@ describe('serializedByPlan', () => {
     await expect(serializedByPlan('C@1', () => Promise.resolve('ok'))).resolves.toBe('ok')
   })
 })
+
+/**
+ * Aprovar e ato humano SOBRE UM PLANO. O endpoint recompila o arquivo, entao sem declarar
+ * qual plano foi inspecionado a aprovacao ficaria registrada — com o nome de quem aprovou —
+ * sobre um plano que essa pessoa nunca viu.
+ */
+describe('aprovacao declara o plano inspecionado', () => {
+  it('recusa quando o specHash inspecionado nao e mais o do arquivo', async () => {
+    harness = await createServerHarness(ALL)
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/missions/approve',
+      payload: {
+        missionId: 'DA-SRV-001',
+        actor: ACTOR,
+        specHash: 'fnv1a64:plano-que-nao-existe-mais',
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json<{ error: { code: string } }>().error.code).toBe('MISSION_CHANGED')
+  })
+
+  it('aprova quando o specHash bate com o do arquivo', async () => {
+    harness = await createServerHarness(ALL)
+    const compilado = await harness.app.inject({
+      method: 'GET',
+      url: '/api/missions/DA-SRV-001/compile',
+    })
+    const specHash = compilado.json<{ specHash?: string }>().specHash
+
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/missions/approve',
+      payload: { missionId: 'DA-SRV-001', actor: ACTOR, specHash },
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
+
+  it('comando SEM specHash continua aceito: e o caminho da CLI', async () => {
+    harness = await createServerHarness(ALL)
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/missions/approve',
+      payload: { missionId: 'DA-SRV-001', actor: ACTOR },
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
+})

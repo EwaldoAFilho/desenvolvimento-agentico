@@ -1,6 +1,7 @@
 import type {
   ApproveMissionCommand,
   CompileReportDto,
+  MissionSummaryDto,
   ProjectHomeDto,
   ProviderHealthDto,
   RunHeaderDto,
@@ -11,6 +12,7 @@ import {
   approveMission,
   describeFailure,
   getCompileReport,
+  getMissions,
   getProjectHome,
   getProviders,
   listRuns,
@@ -18,6 +20,7 @@ import {
 } from './api.js'
 import { ErrorScreen } from './components/ErrorScreen.js'
 import { NewMission, type NewMissionDeps } from './components/NewMission.js'
+import { PlanReview, type PlanReviewDeps } from './components/PlanReview.js'
 import { ProjectHome } from './components/ProjectHome.js'
 import { RunDashboard } from './components/RunDashboard.js'
 import { StartMission, type StartPhase } from './components/StartMission.js'
@@ -34,6 +37,8 @@ export interface AppDeps {
   readonly loadCompileReport: (missionId: string) => Promise<CompileReportDto>
   readonly loadProviders: () => Promise<readonly ProviderHealthDto[]>
   readonly loadRuns: () => Promise<readonly RunHeaderDto[]>
+  /** De onde sai o caminho do YAML da missao — o ajuste minimo mora nele (DASHBOARD 7). */
+  readonly loadMissions: () => Promise<readonly MissionSummaryDto[]>
   readonly approve: (missionId: string, command: ApproveMissionCommand) => Promise<void>
   readonly start: (command: StartRunCommand) => Promise<string>
 }
@@ -43,6 +48,7 @@ const DEFAULT_DEPS: AppDeps = {
   loadCompileReport: getCompileReport,
   loadProviders: getProviders,
   loadRuns: listRuns,
+  loadMissions: getMissions,
   approve: approveMission,
   start: startRun,
 }
@@ -102,6 +108,8 @@ type Boot =
       readonly report: CompileReportDto
       readonly providers: readonly ProviderHealthDto[]
       readonly approved: boolean
+      /** Caminho do YAML. Ausente quando o control plane nao o informou — nunca inventado. */
+      readonly missionFile?: string
     }
   | { readonly kind: 'error'; readonly message: string }
 
@@ -123,6 +131,11 @@ export interface AppProps {
    * Precisa ser estavel entre renders — a tela recarrega os planejadores quando ele muda.
    */
   readonly newMission?: Partial<NewMissionDeps>
+  /**
+   * Repassado a revisao do plano. Existe pelo mesmo motivo: a jornada de revisar, ajustar e
+   * aprovar precisa ser testavel sem servidor. Precisa ser estavel entre renders.
+   */
+  readonly planReview?: Partial<PlanReviewDeps>
   readonly bootTimeoutMs?: number
 }
 
@@ -134,6 +147,7 @@ export function App({
   deps,
   runStream,
   newMission,
+  planReview,
   bootTimeoutMs = BOOT_TIMEOUT_MS,
 }: AppProps = {}): JSX.Element {
   const api = useMemo<AppDeps>(() => ({ ...DEFAULT_DEPS, ...deps }), [deps])
@@ -209,17 +223,33 @@ export function App({
     }
 
     const bootMission = async (missionId: string): Promise<Boot> => {
-      const [report, providers, runs] = await Promise.all([
+      const [report, providers, runs, missions] = await Promise.all([
         api.loadCompileReport(missionId),
         api.loadProviders(),
         api.loadRuns(),
+        // O caminho do arquivo e conveniencia da revisao, nao condicao para a tela existir:
+        // se a listagem falhar, perde-se o caminho — nunca o plano.
+        api.loadMissions().catch(() => [] as readonly MissionSummaryDto[]),
       ])
-      // `approved` sai de um run DESTA missao. Antes vinha do run mais recente do projeto
-      // inteiro, e uma missao herdava a aprovacao de outra.
+      // `approved` sai de um run desta missao E DESTA VERSAO do plano. So o missionId nao
+      // basta: um run APPROVED antigo faria um YAML novo nascer aprovado, habilitando a
+      // execucao de um plano que ninguem inspecionou. Sem specHash dos dois lados a
+      // comparacao nao e possivel, e a tela prefere pedir aprovacao de novo a presumi-la.
       const approved = runs.some(
-        (run) => run.missionId === report.missionId && run.status === 'APPROVED',
+        (run) =>
+          run.missionId === report.missionId &&
+          run.status === 'APPROVED' &&
+          report.specHash !== undefined &&
+          run.specHash === report.specHash,
       )
-      return { kind: 'mission', report, providers, approved }
+      const file = missions.find((mission) => mission.id === report.missionId)?.file
+      return {
+        kind: 'mission',
+        report,
+        providers,
+        approved,
+        ...(file === undefined ? {} : { missionFile: file }),
+      }
     }
 
     const fail = (detail: string): void => {
@@ -270,9 +300,16 @@ export function App({
     (actor: string, note: string) => {
       if (boot.kind !== 'mission') return
       const missionId = boot.report.missionId
+      // Mesma garantia do ato combinado: aprova-se o plano inspecionado, nao o que estiver
+      // no disco na hora. Sao dois caminhos na tela e a regra vale para os dois.
+      const inspecionado = boot.report.specHash
       setBusy(true)
       api
-        .approve(missionId, note.length > 0 ? { actor, note } : { actor })
+        .approve(missionId, {
+          actor,
+          ...(note.length > 0 ? { note } : {}),
+          ...(inspecionado === undefined ? {} : { specHash: inspecionado }),
+        })
         .then(() =>
           setBoot((prev) => (prev.kind === 'mission' ? { ...prev, approved: true } : prev)),
         )
@@ -280,6 +317,57 @@ export function App({
         .finally(() => setBusy(false))
     },
     [boot, api],
+  )
+
+  /**
+   * Aprovar e executar num ato humano — e DUAS chamadas em ordem: sem a aprovacao confirmada
+   * pelo control plane nao existe partida, e quem aprovou fica registrado antes de qualquer
+   * execucao (P15, DASHBOARD 7). A mesma guarda de `onStart` vale aqui: um clique duplo, ou um
+   * re-render no meio, nao criam dois runs.
+   */
+  const onApproveAndStart = useCallback(
+    (acceptWarnings: boolean, actor: string, note: string) => {
+      if (boot.kind !== 'mission' || starting.current) return
+      starting.current = true
+      setStartPhase('starting')
+      setBusy(true)
+      const missionId = boot.report.missionId
+      const inspecionado = boot.report.specHash
+      // O endpoint de aprovacao RECOMPILA o arquivo. Entre carregar esta tela e clicar,
+      // alguem pode ter editado o YAML — e a aprovacao registraria um plano que este humano
+      // nunca viu, com o nome dele. Antes de aprovar, conferimos que a versao no disco ainda
+      // e a que esta desenhada; se mudou, a tela recusa e pede nova revisao.
+      //
+      // Isto e guarda de cliente e fecha a janela pratica, nao a corrida absoluta: so o
+      // control plane aceitando o specHash inspecionado fecharia de vez, e isso e contrato
+      // novo entre interface e servidor.
+      // O `specHash` inspecionado viaja no comando: quem decide se o plano ainda e o mesmo e
+      // o control plane, na mesma transacao em que aprova. Conferir aqui antes so encolheria
+      // a janela; mandar fecha.
+      api
+        .approve(missionId, {
+          actor,
+          ...(note.length > 0 ? { note } : {}),
+          ...(inspecionado === undefined ? {} : { specHash: inspecionado }),
+        })
+        .then(() => {
+          // A aprovacao ja e fato mesmo que a partida falhe depois: a tela registra isso
+          // antes de tentar iniciar, para nao pedir a mesma aprovacao duas vezes.
+          setBoot((prev) => (prev.kind === 'mission' ? { ...prev, approved: true } : prev))
+          return api.start({ missionId, acceptWarnings, actor })
+        })
+        .then((created) => {
+          setStartPhase('running')
+          navigate({ run: created })
+        })
+        .catch((cause: unknown) => {
+          starting.current = false
+          setStartPhase('idle')
+          setError(describeFailure(cause))
+        })
+        .finally(() => setBusy(false))
+    },
+    [boot, api, navigate],
   )
 
   const onStart = useCallback(
@@ -357,8 +445,18 @@ export function App({
         busy={busy}
         error={error}
         startPhase={startPhase}
+        plan={
+          <PlanReview
+            report={boot.report}
+            {...(boot.missionFile === undefined ? {} : { missionFile: boot.missionFile })}
+            {...(planReview === undefined ? {} : { deps: planReview })}
+            onReload={retry}
+            reloading={refreshing}
+          />
+        }
         onApprove={onApprove}
         onStart={onStart}
+        onApproveAndStart={onApproveAndStart}
       />
     )
   }

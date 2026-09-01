@@ -49,6 +49,9 @@ function approveCommandOf(body: unknown): ApproveMissionCommand {
   const parsed = ApproveMissionCommandSchema.safeParse({
     actor: source.actor,
     ...(source.note === undefined ? {} : { note: source.note }),
+    // O plano inspecionado viaja junto: e o que permite recusar aprovacao de um arquivo que
+    // mudou depois da revisao.
+    ...(source.specHash === undefined ? {} : { specHash: source.specHash }),
   })
   if (!parsed.success) {
     throw badRequest('APPROVAL_REQUIRES_ACTOR', 'aprovacao exige o autor humano em `actor`', {
@@ -161,6 +164,18 @@ async function approve(
     throw badRequest('MISSION_HAS_ERRORS', 'missao nao compilou', {
       diagnostics: compiled.report.diagnostics,
     })
+  }
+
+  // Aprovar e ato humano SOBRE UM PLANO. Quando quem aprova declara qual plano inspecionou,
+  // o control plane recusa se o arquivo mudou entre a revisao e o clique — sem isto a
+  // aprovacao ficaria registrada, com o nome de quem aprovou, sobre um plano que essa pessoa
+  // nunca viu. Comando sem `specHash` continua aceito: e o caminho da CLI, onde quem aprova
+  // acabou de compilar.
+  if (command.specHash !== undefined && command.specHash !== graph.specHash) {
+    throw badRequest(
+      'MISSION_CHANGED',
+      `o arquivo da missao mudou depois do plano inspecionado (${command.specHash} -> ${graph.specHash}); revise de novo antes de aprovar`,
+    )
   }
 
   const lookup = { missionId: String(compiled.report.missionId), specHash: graph.specHash }

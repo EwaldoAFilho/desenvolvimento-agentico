@@ -14,6 +14,7 @@ import {
   planMission,
 } from '../api.js'
 import type { Grouping } from '../lib/dag-layout.js'
+import { withDeadline } from '../lib/deadline.js'
 import { formatDuration } from '../lib/format.js'
 import {
   canPlanWith,
@@ -49,20 +50,6 @@ const DEFAULT_DEPS: NewMissionDeps = {
  * plane — cortar aqui deixaria orfa uma missao que acabou de ser gravada.
  */
 export const READ_TIMEOUT_MS = 15_000
-
-async function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms)
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
 
 /** O rascunho como a tela o recebeu: o que o control plane gravou, mais o grafo dele. */
 interface Draft {

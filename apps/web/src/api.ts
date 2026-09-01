@@ -3,8 +3,14 @@ import {
   ApproveMissionCommandSchema,
   type CompileReportDto,
   CompileReportDtoSchema,
+  type CreateDraftCommand,
+  CreateDraftCommandSchema,
+  type CreateDraftResultDto,
+  CreateDraftResultDtoSchema,
   type EventDto,
   EventDtoSchema,
+  type MissionSummaryDto,
+  MissionSummaryDtoSchema,
   type PlanMissionCommand,
   PlanMissionCommandSchema,
   type PlanMissionResultDto,
@@ -148,6 +154,29 @@ export async function getCompileReport(missionId: string): Promise<CompileReport
 export async function getProjectHome(limit?: number): Promise<ProjectHomeDto> {
   const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`
   return ProjectHomeDtoSchema.parse(await request(`/project${query}`))
+}
+
+/**
+ * As missoes do projeto como arquivo: e daqui que sai o CAMINHO do YAML, o unico ajuste de
+ * plano que a interface oferece (DASHBOARD 7 — editar missao pela UI esta fora do MVP).
+ */
+export async function getMissions(): Promise<readonly MissionSummaryDto[]> {
+  const raw = await request('/missions')
+  const list = Array.isArray(raw) ? raw : ((raw as { missions?: unknown })?.missions ?? [])
+  return MissionSummaryDtoSchema.array().parse(list)
+}
+
+/**
+ * Rascunho: compila, CONGELA o grafo e para — nao aprova e nao parte (P15). E o que da a esta
+ * tela um DAG para revisar antes de decidir. Idempotente por versao do plano: o mesmo
+ * `specHash` devolve o mesmo run, entao pedir duas vezes nao cria dois — e um YAML editado
+ * devolve outro rascunho, que e justamente o que impede a tela de desenhar um plano velho.
+ */
+export async function createMissionDraft(
+  command: CreateDraftCommand,
+): Promise<CreateDraftResultDto> {
+  const body = CreateDraftCommandSchema.parse(command)
+  return CreateDraftResultDtoSchema.parse(await post('/missions/draft', body))
 }
 
 export async function getProviders(): Promise<readonly ProviderHealthDto[]> {
