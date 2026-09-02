@@ -36,9 +36,12 @@ afterAll(async () => {
 
 describe('bundle da extensao', () => {
   it('nao contem o core: nem servidor, nem banco, nem orquestrador', () => {
+    // O NOME `better-sqlite3` aparece de proposito (a sonda da toolchain abre um banco com o
+    // driver do PROJETO, num processo filho); o que nao pode aparecer e o CODIGO do driver.
     for (const marker of [
       'fastify',
-      'better-sqlite3',
+      'SqliteError',
+      'better_sqlite3.node',
       'createControlPlane(',
       'BEGIN EXCLUSIVE',
       'registerReadRoutes',

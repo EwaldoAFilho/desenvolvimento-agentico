@@ -24,3 +24,6 @@ dist/
 # vitest
 .vitest/
 .vscode-test/
+
+# pacote da extensao VS Code gerado localmente (npm run vscode:package)
+*.vsix
