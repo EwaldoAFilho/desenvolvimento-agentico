@@ -139,6 +139,26 @@ Veredito: **FAIL** de novo — dois BLOCKER e três MAJOR, todos reais, todos fe
 | **MAJOR** — o adaptador da worktree do mission gate descartava `signal` | passa `signal` a `acquireMissionWorkspace` | typecheck; caminho coberto por `service-lifecycle` (gate teimoso cancelado) |
 | **MAJOR** — na colheita, uma falha na derivação (ERROR do mission gate → `FAILED`) era engolida pelo `#guard`; a mensagem já tinha saído da caixa | a derivação da colheita propaga falha nova; um `close` repetido deriva de novo mesmo com a caixa vazia (`derivacaoPendente`) | `mission-gate-persisted.test.ts`: `saveRun(COMPLETED)` falha uma vez — `close` rejeita, posse fica, o `close` seguinte conclui o run com a execução |
 
+### Ciclo 3 — **em aberto** (limite de dois ciclos de correção atingido)
+
+Veredito: **FAIL**, quatro BLOCKER e um MINOR. Nenhum foi corrigido: a regra da fatia é
+parar depois de dois ciclos, e a decisão passa a ser humana. Cada um com o tamanho estimado
+do fecho, para essa decisão:
+
+| Achado | Onde | O que faltaria | Tamanho |
+| --- | --- | --- | --- |
+| **BLOCKER** — o SIGKILL ao grupo é enviado, mas o processo assenta sem confirmar que o grupo parou: um descendente no meio de uma syscall de escrita pode concluí-la microssegundos depois de o `close` resolver | `packages/process/src/runtime.ts` `#settle`; `packages/workspace/src/setup.ts` `close` | sondar `kill(-pid, 0)` até `ESRCH` (com teto) antes de assentar; no setup, idem antes de `settle` | pequeno |
+| **BLOCKER** — `mission start` adquire a posse antes de assinar os sinais: entre `acquireControlPlaneOwnership` e o supervisor há `openPlane`, `startRun` e `plane.open()` (que roda `git branch`); um SIGTERM ali cai no tratador padrão | `apps/cli/src/commands/mission-start.ts` | assinar `waitForShutdown()` logo após adquirir a posse e correr o sinal contra essa preparação | pequeno |
+| **BLOCKER** — `defaultShutdown` da CLI usa `once`: consumido o primeiro sinal, um segundo Ctrl+C durante o drain mata o processo pelo padrão do Node (o `agentic-server` não tem o defeito: tratadores permanentes) | `apps/cli/src/deps.ts` | tratador permanente com fila de resolvedores, ou reassinar antes de iniciar o `stop` | pequeno |
+| **BLOCKER** — o caminho excepcional de `mission start` (`orquestrar()` lança) faz `encerrar().catch(() => undefined)` e relança: uma falha de encerramento com posse retida é descartada e o processo sai | `apps/cli/src/commands/mission-start.ts` | o mesmo laço de nova tentativa do caminho normal | pequeno |
+| MINOR — ADR-0014 se contradizia sobre sair com posse retida (consequências ainda diziam que o processo sai) | `docs/adr/ADR-0014` | corrigido neste commit de documentação | — |
+
+O que os três ciclos **confirmaram** como fechado (pela revisão, com evidência): artefato em
+voo, cadeia e jobs do orquestrador, `restart` sem dois donos, `quiesce` antes de parar de
+atender, colheita sem engolir falha, I12 na colheita, readonly/readwrite da 003C, I13 e I14.
+O que segue aberto é I15 **na passagem de posse pelos entrypoints da CLI** e a confirmação
+da morte do grupo de processos.
+
 ## G. Problemas registrados, não corrigidos
 
 | | Descrição |

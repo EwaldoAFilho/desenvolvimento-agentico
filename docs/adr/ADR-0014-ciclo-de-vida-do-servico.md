@@ -156,8 +156,9 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
 - Ticks disparados por evento ou timer registram a própria rejeição em `errors` em vez de
   virar `unhandledRejection` — um `#load` sobre banco fechado derrubava o processo inteiro.
 - `agentic serve`, `agentic-server` e `mission start` encerram pela mesma primitiva. Um
-  encerramento que não devolve a posse termina o comando com `SHUTDOWN_INCOMPLETE`, dizendo
-  isso — o processo sai em seguida e o sistema operacional solta o lock.
+  encerramento que não devolve a posse **não termina o processo**: ele diz o que houve e
+  espera o próximo sinal para tentar de novo (ver Decisão). Sair soltaria o lock pelo sistema
+  operacional com o efeito vivo.
 
 ### Limites declarados
 
