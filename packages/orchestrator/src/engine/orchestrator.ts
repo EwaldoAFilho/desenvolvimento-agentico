@@ -332,6 +332,8 @@ export class Orchestrator {
    * morte, cumprem o cancelamento sem novo comando.
    */
   readonly #cancelIntent = new Map<TaskId, TaskCommandInput>()
+  /** Identidade de um residuo que nao tem pid nem handle: ninguem pode sobrescreve-lo. */
+  #residualSeq = 0
 
   constructor(deps: EngineDeps, runId: RunId) {
     this.#deps = deps
@@ -475,8 +477,17 @@ export class Orchestrator {
    * Um grupo de processos (gate, `workspaceSetup`) sem handle: guarda o pgid e sonda o sistema.
    * Sem pgid nao ha o que sondar — fica registrado como nao provado, e a posse nao sai por ele
    * (fechar aberto e o lado certo de I15).
+   *
+   * A CHAVE e a identidade do residuo, nao o nome de quem o deixou: o pid (um grupo vivo e um
+   * so; o mesmo pid de novo e o mesmo grupo) ou, sem pid, um numero de sequencia. Um mesmo
+   * lugar que deixe dois grupos vivos — o setup do mission gate executado duas vezes — guarda
+   * DOIS residuos; uma chave fixa faria o segundo apagar o primeiro.
    */
-  #rememberGroup(key: string, pid: number | null | undefined, taskId?: TaskId): void {
+  #rememberGroup(what: string, pid: number | null | undefined, taskId?: TaskId): void {
+    const key =
+      pid === undefined || pid === null
+        ? `${what} (sem pid #${++this.#residualSeq})`
+        : `${what} (pgid ${pid})`
     this.#residual.set(key, {
       ...(taskId === undefined ? {} : { taskId }),
       settled:
@@ -486,15 +497,14 @@ export class Orchestrator {
     })
   }
 
-  /** Nome de um residuo de gate: diz o pid quando ha um, e diz quando NAO ha. */
+  /** Um residuo por comando de gate que deixou grupo vivo — com pid ou sem. */
   #rememberGateGroups(
     prefix: string,
     groups: readonly (number | null)[] | undefined,
     taskId?: TaskId,
   ): void {
     groups?.forEach((pid, index) => {
-      const quem = pid === null ? 'sem pid' : `pgid ${pid}`
-      this.#rememberGroup(`${prefix} #${index} (${quem})`, pid, taskId)
+      this.#rememberGroup(`${prefix} #${index}`, pid, taskId)
     })
   }
 
@@ -508,7 +518,11 @@ export class Orchestrator {
     )
     await Promise.all(
       entries.map(async ([key, effect]) => {
-        if (await effect.settled()) this.#residual.delete(key)
+        // So apaga o residuo que SONDOU: se a chave foi ocupada por outro efeito enquanto a
+        // sonda corria, a prova e do antigo, nao do novo.
+        if ((await effect.settled()) && this.#residual.get(key) === effect) {
+          this.#residual.delete(key)
+        }
       }),
     )
     return entries.map(([key]) => key).filter((key) => this.#residual.has(key))
@@ -2521,7 +2535,10 @@ export class Orchestrator {
           })
         } catch (error) {
           if (isResidualProcessError(error)) {
-            this.#rememberGroup('workspaceSetup do mission gate', residualGroupOf(error))
+            this.#rememberGroup(
+              `workspaceSetup do mission gate ${attemptId}`,
+              residualGroupOf(error),
+            )
           }
           if (this.#abort.signal.aborted) return
           // I12: adquirir a worktree da missao pode falhar (branch ja em check-out, disco,
