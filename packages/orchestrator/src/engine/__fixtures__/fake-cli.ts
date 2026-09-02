@@ -2,6 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import nodeProcess from 'node:process'
+import { createLocalAgentRuntime } from '@agentic/agent-runtime'
+import type { RuntimeDeps } from '@agentic/process'
 import type { LocalCliDescriptor, ProviderFactory } from '@agentic/providers'
 import { LocalCliAgentProvider } from '@agentic/providers'
 
@@ -26,6 +28,8 @@ export interface FakeStep {
   readonly grandchildDelayMs?: number
   /** Arquivo criado assim que o processo comeca; prova que ele chegou a rodar. */
   readonly aliveMarker?: string
+  /** Arquivo com o pid do processo: deixa o teste perguntar ao SO se ele ainda vive. */
+  readonly pidFile?: string
   /** Espera antes de agir, em ms. */
   readonly delayMs?: number
 }
@@ -37,6 +41,15 @@ export interface FakeCli {
   readonly factory: ProviderFactory
   readonly scriptPath: string
   cleanup(): Promise<void>
+}
+
+export interface FakeCliOptions {
+  /**
+   * Primitivo de processo do runtime que executa o script: e por aqui que a suite injeta a
+   * sonda do grupo de processos (`probeGroup`) e os tetos — um grupo que sobrevive a SIGKILL
+   * nao se fabrica de forma portavel.
+   */
+  readonly processDeps?: RuntimeDeps
 }
 
 /** O roteiro e embutido no proprio arquivo: nada depende de variavel de ambiente (P17). */
@@ -67,6 +80,7 @@ function noise() {
 
 function act() {
   if (step.aliveMarker) writeFileSync(step.aliveMarker, dir, 'utf8')
+  if (step.pidFile) writeFileSync(step.pidFile, String(process.pid), 'utf8')
   if (step.write ?? (step.kind === 'ok' || step.kind === 'noisy')) writeChange()
   noise()
 
@@ -115,7 +129,10 @@ const CAPABILITIES = {
  * Provider real (`LocalCliAgentProvider`) sobre um executavel falso: exercita spawn,
  * timeout, tree-kill, exit code e devolucao de vaga sem tocar em CLI de agente.
  */
-export async function createFakeCli(script: FakeCliScript): Promise<FakeCli> {
+export async function createFakeCli(
+  script: FakeCliScript,
+  options: FakeCliOptions = {},
+): Promise<FakeCli> {
   const dir = await mkdtemp(join(tmpdir(), 'agentic-fakecli-'))
   const scriptPath = join(dir, 'runner.mjs')
   await writeFile(scriptPath, runnerSource(script), 'utf8')
@@ -127,6 +144,7 @@ export async function createFakeCli(script: FakeCliScript): Promise<FakeCli> {
     versionArgs: ['--version'],
     runArgs: [scriptPath],
   }
+  const processDeps = options.processDeps
 
   return {
     scriptPath,
@@ -135,6 +153,9 @@ export async function createFakeCli(script: FakeCliScript): Promise<FakeCli> {
         id: input.id,
         capacity: input.capacity,
         roles: input.config.roles,
+        ...(processDeps === undefined
+          ? {}
+          : { runtime: createLocalAgentRuntime({ processDeps }) }),
       }),
     cleanup: (): Promise<void> => rm(dir, { recursive: true, force: true }),
   }

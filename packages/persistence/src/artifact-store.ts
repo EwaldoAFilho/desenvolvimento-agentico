@@ -32,16 +32,31 @@ export interface ArtifactRecord {
 export const RUNS_DIRECTORY = 'runs'
 
 /**
+ * Primitivos de sistema de arquivos que o store usa. Injetaveis para o teste segurar uma
+ * escrita num ponto controlado — e so para isso: o default e o `node:fs/promises` real.
+ */
+export interface ArtifactStoreDeps {
+  readonly mkdir?: (path: string, options: { readonly recursive: true }) => Promise<unknown>
+  readonly writeFile?: (path: string, data: Uint8Array) => Promise<void>
+}
+
+/**
  * Unico lugar do pacote que grava conteudo em disco (ADR-0003): blob volumoso fica em
  * arquivo, o banco guarda caminho + digest.
  */
 export class FileArtifactStore {
   readonly #handle: DatabaseHandle
   readonly #baseDir: string
+  readonly #mkdir: NonNullable<ArtifactStoreDeps['mkdir']>
+  readonly #writeFile: NonNullable<ArtifactStoreDeps['writeFile']>
+  /** Escritas que passaram pela guarda e ainda nao terminaram — arquivo E linha. */
+  readonly #pending = new Set<Promise<unknown>>()
 
-  constructor(handle: DatabaseHandle, baseDir: string) {
+  constructor(handle: DatabaseHandle, baseDir: string, deps: ArtifactStoreDeps = {}) {
     this.#handle = handle
     this.#baseDir = resolve(baseDir)
+    this.#mkdir = deps.mkdir ?? mkdir
+    this.#writeFile = deps.writeFile ?? writeFile
   }
 
   get baseDir(): string {
@@ -54,6 +69,20 @@ export class FileArtifactStore {
 
   runDirectory(runId: RunId): string {
     return join(this.#baseDir, RUNS_DIRECTORY, runId)
+  }
+
+  /** Quantas escritas ja comecaram e ainda nao terminaram. Zero e a unica resposta que fecha. */
+  get pending(): number {
+    return this.#pending.size
+  }
+
+  /**
+   * Resolve quando nenhuma escrita iniciada ate aqui esta em voo. Escritas que comecem
+   * DEPOIS da chamada nao entram na conta: quem quer que nada mais comece fecha a conexao
+   * (ou solta a posse) logo em seguida — e ai `writable` recusa no primeiro passo.
+   */
+  async settle(): Promise<void> {
+    while (this.#pending.size > 0) await Promise.allSettled([...this.#pending])
   }
 
   /** Resolve e prova a contencao: nada escapa de `<base>/runs/<runId>/`. */
@@ -69,8 +98,35 @@ export class FileArtifactStore {
     return absolute
   }
 
-  async write(input: ArtifactWrite): Promise<ArtifactRecord> {
-    if (this.#handle.mode === 'readonly') throw new ReadOnlyDatabaseError('artifact.write')
+  write(input: ArtifactWrite): Promise<ArtifactRecord> {
+    /**
+     * A pergunta e `writable`, nao `mode`, e a diferenca custa um arquivo.
+     *
+     * Este e o unico caminho de escrita do pacote que produz efeito FORA do banco: `mkdir` e
+     * `writeFile` acontecem primeiro, e o `INSERT` so depois. Perguntando pelo `mode` — que
+     * nao muda quando a conexao fecha — uma referencia capturada antes de `lease.release()`
+     * criava ou SOBRESCREVIA o arquivo e so entao falhava no banco. Artefato e evidencia:
+     * sobrescrever um arquivo ja referenciado deixa digest e metadados mentindo sobre o
+     * conteudo, que e pior que a escrita recusada.
+     *
+     * A recusa e SINCRONA, antes de registrar a escrita como pendente: uma escrita que nem
+     * comeca nao segura a posse de ninguem.
+     */
+    if (!this.#handle.writable) {
+      return Promise.reject(new ReadOnlyDatabaseError('artifact.write'))
+    }
+    // Registrada como pendente do primeiro `await` ate a linha no banco: e o que `settle()`
+    // espera e o que impede a posse de ser devolvida com o arquivo pela metade (I15).
+    const work = this.#write(input)
+    this.#pending.add(work)
+    void work.then(
+      () => this.#pending.delete(work),
+      () => this.#pending.delete(work),
+    )
+    return work
+  }
+
+  async #write(input: ArtifactWrite): Promise<ArtifactRecord> {
     const absolute = this.resolvePath(input.runId, input.relativePath)
     const bytes =
       typeof input.content === 'string' ? Buffer.from(input.content, 'utf8') : input.content
@@ -78,8 +134,8 @@ export class FileArtifactStore {
     const createdAt = input.createdAt ?? new Date()
     const relative = `${RUNS_DIRECTORY}/${input.runId}/${normalizeSeparators(input.relativePath)}`
 
-    await mkdir(dirname(absolute), { recursive: true })
-    await writeFile(absolute, bytes)
+    await this.#mkdir(dirname(absolute), { recursive: true })
+    await this.#writeFile(absolute, bytes)
 
     const row: ArtifactRow = {
       id: randomUUID(),
@@ -166,6 +222,10 @@ function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-export function createArtifactStore(handle: DatabaseHandle, baseDir: string): FileArtifactStore {
-  return new FileArtifactStore(handle, baseDir)
+export function createArtifactStore(
+  handle: DatabaseHandle,
+  baseDir: string,
+  deps?: ArtifactStoreDeps,
+): FileArtifactStore {
+  return new FileArtifactStore(handle, baseDir, deps)
 }

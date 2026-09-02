@@ -19,7 +19,31 @@ interface RunParams {
  * lacuna e sem duplicata (ARCHITECTURE 6.3, DASHBOARD 6). O servidor nao reordena, nao
  * filtra e nao deduplica: quem garante a ordem e a chave `seq` do event log.
  */
+/**
+ * Streams abertos por instancia, para o encerramento conseguir FECHAR.
+ *
+ * `app.close()` espera as conexoes ativas terminarem, e um stream sequestrado
+ * (`reply.hijack()`) e uma conexao ativa que nunca termina sozinha. Medido: com um so
+ * cliente do dashboard conectado, o servidor nao fechava. Um gancho `onClose` nao resolve —
+ * o Fastify fecha o socket do servidor ANTES dos ganchos registrados na montagem (ordem
+ * LIFO), entao quem encerra chama `closeStreams` explicitamente, antes de `app.close()`. O
+ * cliente reconecta com `since` e nao perde nada (DASHBOARD 6).
+ */
+const STREAMS = new WeakMap<FastifyInstance, Set<() => void>>()
+
+/** Encerra todo stream SSE aberto nesta instancia. Devolve quantos havia. */
+export function closeStreams(app: FastifyInstance): number {
+  const abertos = STREAMS.get(app)
+  if (abertos === undefined) return 0
+  const quantos = abertos.size
+  for (const finish of [...abertos]) finish()
+  return quantos
+}
+
 export function registerStreamRoutes(app: FastifyInstance, deps: ServerDeps): void {
+  const abertos = new Set<() => void>()
+  STREAMS.set(app, abertos)
+
   app.get<{ Params: RunParams }>('/api/runs/:id/stream', async (request, reply) => {
     const id = parseRunId(request.params.id)
     await loadRunOr404(deps, id)
@@ -41,6 +65,7 @@ export function registerStreamRoutes(app: FastifyInstance, deps: ServerDeps): vo
     const finish = (): void => {
       if (finished) return
       finished = true
+      abertos.delete(finish)
       if (heartbeat !== undefined) clearInterval(heartbeat)
       heartbeat = undefined
       // Encerra o iterador do store: cliente que sumiu nao deixa assinatura pendurada.
@@ -48,6 +73,7 @@ export function registerStreamRoutes(app: FastifyInstance, deps: ServerDeps): vo
       channel.close()
     }
 
+    abertos.add(finish)
     request.raw.on('close', finish)
     request.raw.on('aborted', finish)
     request.raw.on('error', finish)

@@ -315,6 +315,8 @@ class MockAgentHandle implements AgentHandle {
       status: effective,
       claims: this.#claims(effective, writeFailure),
       logsRef: logsRefFor(this.#input.providerId, this.#input.assignment),
+      // In-process: nao ha grupo de processos a assentar.
+      groupTerminated: true,
     }
     const usage = this.#input.step.usage
     return usage === undefined ? outcome : { ...outcome, usage }

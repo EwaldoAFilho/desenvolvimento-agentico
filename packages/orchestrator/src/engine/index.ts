@@ -22,15 +22,32 @@ export {
 } from './artifacts.js'
 export type { AssignmentContext, ReviewAssignmentContext } from './assignment.js'
 export { buildExecuteAssignment, buildReviewAssignment } from './assignment.js'
-export type { ControlPlane, ControlPlaneConfig } from './control-plane.js'
-export { createControlPlane, DEFAULT_AGENT_ENV_ALLOW, profilesOf } from './control-plane.js'
+export type {
+  AdoptionResult,
+  CloseOptions,
+  ControlPlane,
+  ControlPlaneAccess,
+  ControlPlaneConfig,
+  ControlPlaneLifecycle,
+  OwnershipLease,
+  RunAdoption,
+  RunAdoptionRefusal,
+} from './control-plane.js'
 export {
+  createControlPlane,
+  DEFAULT_AGENT_ENV_ALLOW,
+  DEFAULT_SHUTDOWN_GRACE_MS,
+  profilesOf,
+} from './control-plane.js'
+export {
+  CancellationUnsettledError,
   CommandRefusedError,
   describeError,
   failureCodeOf,
   failureReasonOf,
   OrchestratorError,
   RunNotFoundError,
+  ShutdownTimeoutError,
   TaskNotFoundError,
 } from './errors.js'
 export type { EventContext } from './events.js'
@@ -47,7 +64,13 @@ export { runGate } from './gate-run.js'
 export { SharedTreeIntegrator } from './integration.js'
 export type { ObserveInput, ObserveOutcome } from './observe.js'
 export { attemptDirectory, observeAttempt } from './observe.js'
-export type { DrainOptions, HumanCommand, TaskCommandInput, UnblockInput } from './orchestrator.js'
+export type {
+  AbandonOptions,
+  DrainOptions,
+  HumanCommand,
+  TaskCommandInput,
+  UnblockInput,
+} from './orchestrator.js'
 export { DEFAULT_SAFETY_INTERVAL_MS, Orchestrator } from './orchestrator.js'
 export type {
   ArtifactWriter,

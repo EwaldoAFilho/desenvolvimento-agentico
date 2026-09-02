@@ -51,6 +51,37 @@ governança.
 | I10 | `cross-provider-required` nunca é rebaixada em silêncio |
 | I11 | Todo processo de agente inicia com `cwd` na worktree da tentativa |
 | I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
+| I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** — ou recusa de adoção com motivo observável |
+| I14 | Para um `repoRoot` canônico existe **no máximo um** Control Plane Owner; qualquer outro processo é cliente ou tem a inicialização recusada |
+| I15 | Antes de um Control Plane Owner devolver a posse, **nenhum efeito** iniciado por ele — banco, artefato, worktree, branch, processo filho — permanece capaz de mutar o projeto; efeito que não para dentro do prazo **segura** a posse |
+
+I13 vale dentro de um processo, e é I14 que faz isso bastar: a posse do projeto é disputada
+antes de abrir o banco, e quem perde não chega às operações mutáveis. O mecanismo é uma
+transação `BEGIN EXCLUSIVE` mantida sobre `.agentic/control-plane.lock.db` — um banco
+dedicado e vazio, cuja única função é o lock de arquivo do sistema operacional (ADR-0013).
+
+Três consequências que o código cobra:
+
+- **A chave é o projeto, nunca a porta.** `agentic serve --port N` no mesmo `repoRoot`
+  esbarra na mesma parede; projetos diferentes têm donos independentes.
+- **O pid não é autoridade.** A posse morre com o processo, inclusive sob `SIGKILL`, então
+  não há lock stale para interpretar nem sonda de vivacidade para acertar. `pid` é
+  diagnóstico; a identidade estável é o `instanceId`.
+- **`control-plane.json` é descoberta, não posse.** Ausente, velho ou apagado, ele nunca cria
+  um segundo dono.
+
+E o encerramento é uma ordem com nome (`shutdownControlPlane`, ADR-0014), a mesma para
+`SIGINT`/`SIGTERM`, `agentic serve`, `mission start` e o `stop()` do serviço: parar de
+aceitar → cancelar e drenar (com prazo) → colher integração e mission gate → fechar o banco →
+devolver a posse. `ControlPlaneService` (`start`/`stop`/`restart`/`status`) é a máquina de
+estados do processo que a CLI usa e a extensão vai usar; não é `RunStatus`.
+
+Sinal enviado não é processo morto: `cancel()` de um processo só resolve com o **grupo**
+confirmado morto e rejeita (`PROCESS_GROUP_ALIVE`) quando o teto vence; `exit()` sempre diz se
+o grupo assentou (`groupTerminated`), inclusive na saída natural. Cancelamento humano sem essa
+prova é **recusado** (`CANCELLATION_UNSETTLED`), nunca gravado como `CANCELLED`; e um resíduo
+que o `stop` não provou morto é sondado de novo no `stop` seguinte, nunca esquecido
+(ADR-0014, adendo 004B).
 
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**

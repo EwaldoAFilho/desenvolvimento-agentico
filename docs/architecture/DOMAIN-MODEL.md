@@ -386,8 +386,12 @@ interface AgentHandle {
 permitido, dependências satisfeitas, caminho do workspace, contrato de validação e — no caso
 de review — diff e resultados de gate. **O provider não recebe acesso ao banco de estado.**
 
-`AgentOutcome = { status, claims, usage?, logsRef }`. O campo se chama `claims`
-deliberadamente: o tipo carrega a semântica de "relato, não fato".
+`AgentOutcome = { status, claims, usage?, logsRef, groupTerminated }`. O campo se chama
+`claims` deliberadamente: o tipo carrega a semântica de "relato, não fato". `groupTerminated`
+é fato medido pelo runtime, não relato: o processo do agente saiu **e** o grupo de processos
+dele assentou. `false` significa que um descendente sobreviveu ao encerramento além do teto —
+o desfecho não está assentado, e o orquestrador não mede a worktree nem o encerramento devolve
+a posse antes da prova de morte (I15, ADR-0014). Agente sem processo declara `true`.
 
 #### ProviderCapabilities
 
@@ -489,10 +493,15 @@ interface LocalAgentProcess {
   readonly startedAt: Date
   stdout: AsyncIterable<string>
   stderr: AsyncIterable<string>
-  exit(): Promise<ExitStatus>         // { code, signal, timedOut, cancelled, durationMs }
-  cancel(reason: string): Promise<void>   // encerra a árvore de processos
+  exit(): Promise<ExitStatus>         // { code, signal, timedOut, cancelled, groupTerminated, durationMs }
+  cancel(reason: string): Promise<void>   // encerra a árvore de processos; resolve só com o grupo provado morto
 }
 ```
+
+`exit()` resolve quando o líder saiu **e** a confirmação do grupo terminou; nunca rejeita.
+`cancel()` resolve somente com o grupo de processos confirmado morto e rejeita
+(`PROCESS_GROUP_ALIVE`) quando o teto vence com o grupo vivo — chamado de novo, sonda outra
+vez. O contrato inteiro está em ADR-0014 (adendo 004B).
 
 **Fronteira deliberada:** este tipo não conhece Mission, Task, Attempt nem estado de run. Ele
 sabe iniciar, observar, cancelar e encerrar um processo local. Quem traduz isso em

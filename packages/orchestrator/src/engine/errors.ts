@@ -34,6 +34,93 @@ export class CommandRefusedError extends OrchestratorError {
   }
 }
 
+/**
+ * O encerramento excedeu o prazo com efeito ainda em voo (I15).
+ *
+ * Quem recebe isto NAO devolve a posse: um projeto que continua possuido por um processo
+ * que ainda esta terminando e o mal menor — a posse morre com o processo de qualquer jeito,
+ * e entregar o projeto com efeito vivo e o dano de D4 voltando por um caminho de falha.
+ */
+export class ShutdownTimeoutError extends OrchestratorError {
+  readonly runId: string
+  readonly graceMs: number
+  readonly pendingJobs: number
+  readonly chainBusy: boolean
+  readonly inflightAttempts: readonly string[]
+  /** Processos cujo grupo NAO foi confirmado morto: sinal enviado nao e processo morto. */
+  readonly residualProcesses: readonly string[]
+
+  constructor(input: {
+    readonly runId: string
+    readonly graceMs: number
+    readonly pendingJobs: number
+    readonly chainBusy: boolean
+    readonly inflightAttempts: readonly string[]
+    readonly residualProcesses?: readonly string[]
+  }) {
+    const residual = input.residualProcesses ?? []
+    const what = [
+      input.chainBusy ? 'tick em execucao' : undefined,
+      input.pendingJobs > 0 ? `${input.pendingJobs} efeito(s) assincrono(s)` : undefined,
+      input.inflightAttempts.length > 0
+        ? `tentativas ${input.inflightAttempts.join(', ')}`
+        : undefined,
+      residual.length > 0
+        ? `grupo(s) de processos ainda vivo(s): ${residual.join(', ')}`
+        : undefined,
+    ]
+      .filter((part) => part !== undefined)
+      .join('; ')
+    super(
+      'SHUTDOWN_TIMEOUT',
+      `run ${input.runId}: encerramento excedeu ${input.graceMs}ms com efeito ainda em voo ` +
+        `(${what}); a posse do projeto NAO e devolvida enquanto isso durar (I15)`,
+    )
+    this.runId = input.runId
+    this.graceMs = input.graceMs
+    this.pendingJobs = input.pendingJobs
+    this.chainBusy = input.chainBusy
+    this.inflightAttempts = input.inflightAttempts
+    this.residualProcesses = residual
+  }
+}
+
+/**
+ * O cancelamento humano foi PEDIDO, mas nao ASSENTOU: o grupo de processos de alguma
+ * tentativa (ou um residuo de gate/setup da mesma task) continuava vivo depois do teto.
+ *
+ * Intencao de cancelar e cancelamento assentado sao coisas diferentes (C2). O estado oficial
+ * nao vira CANCELLED sem a prova de morte: a task e o run ficam como estavam, o residuo fica
+ * guardado para o encerramento (que tambem recusa devolver a posse enquanto ele durar), e o
+ * MESMO comando pode ser repetido — ele sonda de novo.
+ */
+export class CancellationUnsettledError extends OrchestratorError {
+  readonly runId: string
+  readonly taskId: string | undefined
+  /** O que continua nao provado morto, pelo nome que o encerramento tambem usa. */
+  readonly residual: readonly string[]
+
+  constructor(input: {
+    readonly runId: string
+    readonly taskId?: string
+    readonly residual: readonly string[]
+  }) {
+    const alvo =
+      input.taskId === undefined
+        ? `run ${input.runId}`
+        : `task ${input.taskId} do run ${input.runId}`
+    super(
+      'CANCELLATION_UNSETTLED',
+      `${alvo}: cancelamento pedido, mas NAO comprovado — grupo(s) de processos ainda vivo(s): ` +
+        `${input.residual.join(', ')}. Nada virou CANCELLED; repita o comando quando o processo ` +
+        'tiver parado (I15)',
+    )
+    this.runId = input.runId
+    this.taskId = input.taskId
+    this.residual = input.residual
+  }
+}
+
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

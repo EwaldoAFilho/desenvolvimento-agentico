@@ -2,11 +2,27 @@ export const PACKAGE_NAME = '@agentic/persistence'
 
 export {
   type ArtifactRecord,
+  type ArtifactStoreDeps,
   type ArtifactWrite,
   createArtifactStore,
   FileArtifactStore,
   RUNS_DIRECTORY,
 } from './artifact-store.js'
+export {
+  type AcquireOwnershipOptions,
+  acquireControlPlaneOwnership,
+  CONTROL_PLANE_LOCK_FILE,
+  type ControlPlaneLease,
+  canonicalDir,
+  canonicalIfPresent,
+  controlPlaneLockPath,
+  DEFAULT_LOCK_BUSY_TIMEOUT_MS,
+  newInstanceId,
+  OWNERSHIP_ALREADY_HELD,
+  type OwnershipOutcome,
+  OwnershipPathError,
+  type OwnershipRefused,
+} from './control-plane-lock.js'
 export {
   busyTimeout,
   type DatabaseHandle,
@@ -27,12 +43,14 @@ export type {
 export {
   ArtifactNotFoundError,
   ArtifactPathError,
+  DatabaseNotInitializedError,
   MigrationError,
   PersistenceError,
   ReadOnlyDatabaseError,
   RowDecodeError,
   SchemaVersionError,
   StateWithoutEventError,
+  WritesInFlightError,
 } from './errors.js'
 export {
   createEventStore,
@@ -84,6 +102,7 @@ export {
   type RunStoreOptions,
   SqliteRunStore,
 } from './run-store.js'
+export { RUNTIME_DIR_NAME, runtimeDirOf } from './runtime-dir.js'
 export {
   BufferedUnitOfWork,
   type LockWriter,

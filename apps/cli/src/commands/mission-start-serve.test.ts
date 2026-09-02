@@ -1,5 +1,7 @@
 import { join } from 'node:path'
 import type { ControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership } from '@agentic/persistence'
+import { runtimeDirOf } from '@agentic/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   captureDeps,
@@ -28,6 +30,8 @@ class FakeOrchestrator {
   drains = 0
   started = false
   stopped = false
+  /** `drain()` pendurado: um run com agente em voo. */
+  drainForever = false
   onDrain: ((self: FakeOrchestrator) => void) | undefined
 
   start(): void {
@@ -40,6 +44,7 @@ class FakeOrchestrator {
 
   drain(): Promise<void> {
     this.drains += 1
+    if (this.drainForever) return new Promise<void>(() => undefined)
     this.onDrain?.(this)
     return Promise.resolve()
   }
@@ -134,7 +139,7 @@ describe('mission start publica a API por padrao', () => {
     expect((result.data as { readonly servedAt?: string }).servedAt).toBe('http://127.0.0.1:4317')
   })
 
-  it('publica o registro no `.agentic` que a CLI consulta para descobrir', async () => {
+  it('entrega o repoRoot: o registro cai no `.agentic` que a CLI consulta', async () => {
     workspace = await createWorkspace()
     const specHash = await approvedRun(workspace.dir, workspace.missionPath)
     const spy = servePlaneSpy()
@@ -146,7 +151,11 @@ describe('mission start publica a API por padrao', () => {
 
     await missionStartCommand({ file: workspace.missionPath, acceptWarnings: true }, captured.deps)
 
-    expect(spy.published.inputs[0]?.runtimeDir).toBe(join(workspace.dir, '.agentic'))
+    // O diretorio do registro NAO e escolhido pela CLI: ele e derivado do `repoRoot` pela
+    // mesma conta que a posse usa (I14). O que a CLI entrega — e o que este teste fixa — e o
+    // repositorio; deixar o caminho do estado configuravel era o bypass fechado em 003B.
+    expect(spy.published.inputs[0]?.repoRoot).toBe(workspace.dir)
+    expect(runtimeDirOf(workspace.dir)).toBe(join(workspace.dir, '.agentic'))
   })
 
   it('encerra quando o run termina: nao fica esperando Ctrl+C', async () => {
@@ -157,14 +166,16 @@ describe('mission start publica a API por padrao', () => {
       self.status = 'COMPLETED'
     }
     const spy = servePlaneSpy()
-    let waited = false
+    let subscribed = false
     const captured = captureDeps({
       cwd: workspace.dir,
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
+      // O sinal e ASSINADO desde o inicio (Ctrl+C com agente em voo tem de encerrar pelo
+      // caminho gracioso), mas nunca chega: o comando tem de terminar mesmo assim.
       waitForShutdown: () => {
-        waited = true
-        return Promise.resolve()
+        subscribed = true
+        return new Promise<void>(() => undefined)
       },
     })
 
@@ -175,7 +186,7 @@ describe('mission start publica a API por padrao', () => {
 
     expect(result.exitCode).toBe(EXIT_OK)
     expect(orchestrator.drains).toBe(1)
-    expect(waited).toBe(false)
+    expect(subscribed).toBe(true)
     // A porta e desligada junto com o processo: nada de registro apontando para o vazio.
     expect(spy.published.closed()).toBe(1)
   })
@@ -222,6 +233,149 @@ describe('mission start publica a API por padrao', () => {
     // O usuario nao passou `--no-serve`: mandar rodar "sem --no-serve" seria conselho falso.
     expect(captured.stdout()).not.toContain('sem `--no-serve`')
     expect(captured.stdout()).toContain('`--port <n>`')
+  })
+
+  it('B2. o sinal e assinado ANTES de a posse ser adquirida e de qualquer recurso abrir', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.onDrain = (self) => {
+      self.status = 'COMPLETED'
+    }
+    const ordem: string[] = []
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => {
+        ordem.push('plane')
+        return planeOf(specHash, orchestrator)
+      },
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        ordem.push('sinal-assinado')
+        return new Promise<void>(() => undefined)
+      },
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    // O tratador do encerramento existe antes do primeiro recurso cuja devolucao depende dele.
+    expect(ordem[0]).toBe('sinal-assinado')
+    expect(ordem).toContain('plane')
+  })
+
+  it('B2. sinal que chega DURANTE o bootstrap entra no mesmo lifecycle e devolve a posse', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.drainForever = true
+    let chegou: (() => void) | undefined
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => {
+        // A posse ja foi adquirida; o sinal chega aqui, antes de abrir o orquestrador.
+        chegou?.()
+        return planeOf(specHash, orchestrator)
+      },
+      servePlane: spy.serve,
+      waitForShutdown: () =>
+        new Promise<void>((resolve) => {
+          chegou = resolve
+        }),
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    expect(orchestrator.stopped).toBe(true)
+    // A posse nao ficou abandonada: outro dono consegue o projeto depois do comando.
+    const posse = acquireControlPlaneOwnership({ baseDir: join(workspace.dir, '.agentic') })
+    expect(posse.ok).toBe(true)
+    if (posse.ok) posse.lease.release()
+  })
+
+  it('B4. falha DENTRO da orquestracao + encerramento que nao devolve a posse: nada e engolido', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    let closes = 0
+    let sinais = 0
+    const plane = planeOf(specHash, orchestrator)
+    const base = plane.close
+    ;(plane as { close: ControlPlane['close'] }).close = (options) => {
+      closes += 1
+      return closes === 1
+        ? Promise.reject(new Error('run X: encerramento excedeu 30000ms com efeito ainda em voo'))
+        : base(options)
+    }
+    // A orquestracao QUEBRA (banco, tick): o caminho excepcional.
+    ;(plane as { startRun: ControlPlane['startRun'] }).startRun = () =>
+      Promise.reject(new Error('banco indisponivel no meio do start'))
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => plane,
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        sinais += 1
+        return sinais === 1 ? new Promise<void>(() => undefined) : Promise.resolve()
+      },
+    })
+
+    await expect(
+      missionStartCommand({ file: workspace.missionPath, acceptWarnings: true }, captured.deps),
+    ).rejects.toThrow('banco indisponivel')
+    // O encerramento que falhou nao foi descartado: esperou outro sinal e tentou de novo.
+    expect(closes).toBe(2)
+    expect(captured.stdout()).toContain('nao encerrou limpo')
+  })
+
+  it('encerramento que nao devolve a posse NAO sai: espera outro sinal e tenta de novo (I15)', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.onDrain = (self) => {
+      self.status = 'COMPLETED'
+    }
+    let closes = 0
+    let sinais = 0
+    const plane = planeOf(specHash, orchestrator)
+    const base = plane.close
+    // O primeiro `close` encontra efeito vivo dentro do prazo e rejeita; o segundo termina.
+    ;(plane as { close: ControlPlane['close'] }).close = (options) => {
+      closes += 1
+      return closes === 1
+        ? Promise.reject(new Error('run X: encerramento excedeu 30000ms com efeito ainda em voo'))
+        : base(options)
+    }
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => plane,
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        sinais += 1
+        return sinais === 1 ? new Promise<void>(() => undefined) : Promise.resolve()
+      },
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    expect(closes).toBe(2)
+    expect(captured.stdout()).toContain('nao encerrou limpo')
+    expect(captured.stdout()).toContain('continua com este processo')
   })
 
   it('`--serve` mantem o control plane no ar depois que o run termina', async () => {
@@ -306,6 +460,8 @@ describe('run pausado nao derruba o control plane', () => {
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
       pausePollMs: 5,
+      // O Ctrl+C chega DEPOIS de o run pausar: o aviso de pausa precisa ter saido antes.
+      waitForShutdown: () => new Promise<void>((resolve) => setTimeout(resolve, 30)),
     })
 
     const result = await missionStartCommand(
@@ -377,6 +533,8 @@ describe('o default aparece na linha de comando', () => {
       cwd: workspace.dir,
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
+      // `--serve` fica no ar ate o sinal: o teste manda o sinal na hora.
+      waitForShutdown: () => Promise.resolve(),
     })
 
     const code = await main(

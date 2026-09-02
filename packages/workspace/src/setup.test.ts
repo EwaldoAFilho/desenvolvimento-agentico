@@ -2,7 +2,12 @@ import { lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createTestRepo, type TestRepo } from './__fixtures__/repo.js'
-import { isWorkspaceError, WorkspaceError } from './errors.js'
+import {
+  isResidualProcessError,
+  isWorkspaceError,
+  residualGroupOf,
+  WorkspaceError,
+} from './errors.js'
 import { normalizeSetupCommand, runWorkspaceSetup } from './setup.js'
 
 let repo: TestRepo | undefined
@@ -109,6 +114,110 @@ describe('runWorkspaceSetup', () => {
     }).catch((error: unknown) => error)
     expect(isWorkspaceError(erro)).toBe(true)
     expect((erro as WorkspaceError).message).toContain('tempo')
+  })
+
+  it('sinal de abort cancela o comando em voo, mata a arvore e vira WORKSPACE_ERROR', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const controller = new AbortController()
+    const pidFile = join(destino, 'pid')
+    const inicio = Date.now()
+    const pending = runWorkspaceSetup(
+      destino,
+      repo.root,
+      {
+        commands: [
+          `node -e "require('node:fs').writeFileSync('${pidFile}', String(process.pid)); setTimeout(() => {}, 30000)"`,
+          'node -e "process.exit(0)"',
+        ],
+      },
+      controller.signal,
+    )
+    const limite = Date.now() + 10_000
+    while (
+      !(await lstat(pidFile).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      if (Date.now() > limite) throw new Error('o comando de setup nao comecou')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const pid = Number(await readFile(pidFile, 'utf8'))
+    controller.abort('encerrando')
+    const error = await pending.then(
+      () => undefined,
+      (cause: unknown) => cause,
+    )
+    expect(isWorkspaceError(error)).toBe(true)
+    expect((error as WorkspaceError).message).toContain('cancelado')
+    expect(Date.now() - inicio).toBeLessThan(10_000)
+    // O processo do comando morre com a recusa. `kill(pid, 0)` ainda responde para um zumbi
+    // que o kernel nao reaproveitou; a espera curta separa "morto" de "ainda nao colhido".
+    const vivo = (): boolean => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const fim = Date.now() + 3_000
+    while (vivo() && Date.now() < fim) await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(vivo()).toBe(false)
+  })
+
+  it('daemon deixado por um comando de setup morre com o comando (I15)', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const marca = join(destino, 'daemon')
+    // Dois scripts em arquivo, para nao depender de aspas no shell: o pai dispara o daemon e
+    // sai; o daemon escreveria aos 1,5 s se sobrevivesse ao comando de setup.
+    await writeFile(
+      join(destino, 'daemon.cjs'),
+      `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marca)}, 'x'), 1500)\n`,
+      'utf8',
+    )
+    await writeFile(
+      join(destino, 'pai.cjs'),
+      "require('node:child_process').spawn(process.execPath, ['daemon.cjs'], { stdio: 'ignore' }).unref()\n",
+      'utf8',
+    )
+    await runWorkspaceSetup(destino, repo.root, { commands: ['node pai.cjs'] })
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await expect(lstat(marca)).rejects.toThrow()
+  })
+
+  it('grupo do comando vivo alem do teto: WORKSPACE_ERROR com residualProcess e o pgid para sondar de novo (C3)', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const erro = await runWorkspaceSetup(
+      destino,
+      repo.root,
+      { commands: ['node -e "process.exit(0)"'] },
+      undefined,
+      { groupGraceMs: 100, probeGroup: () => true },
+    ).catch((error: unknown) => error)
+    expect(isResidualProcessError(erro)).toBe(true)
+    // Quem encerra precisa do grupo para provar a morte numa tentativa seguinte de stop.
+    expect(typeof residualGroupOf(erro)).toBe('number')
+  })
+
+  it('sinal ja abortado: nenhum comando chega a rodar', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const controller = new AbortController()
+    controller.abort()
+    const marca = join(destino, 'rodou')
+    await expect(
+      runWorkspaceSetup(
+        destino,
+        repo.root,
+        { commands: [`node -e "require('node:fs').writeFileSync(${JSON.stringify(marca)}, 'x')"`] },
+        controller.signal,
+      ),
+    ).rejects.toThrow('cancelado')
+    await expect(lstat(marca)).rejects.toThrow()
   })
 
   it('normaliza comando em string', () => {

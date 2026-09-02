@@ -416,6 +416,90 @@ Depois disso, confirme que o `agentic` que você chama é o dessa instalação
 porta **real** em `.agentic/control-plane.json`, em vez da configurada — então
 `cat .agentic/control-plane.json` é a fonte confiável do endereço.
 
+### `agentic serve` diz que o control plane já está no ar
+
+**Sintoma.** O segundo terminal não sobe nada:
+
+```console
+$ agentic serve
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.
+```
+
+**Isto é o comportamento correto, não uma falha.** Um projeto tem **um** control plane owner
+(I14, ADR-0013). O segundo processo descobre o dono e termina com sucesso — abra o endereço
+informado, ou use `agentic mission start`, que entrega o START ao dono.
+
+A garantia é por projeto, não por porta:
+
+```console
+$ agentic serve --port 4401
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+este projeto ja tem dono: `--port` nao cria um segundo control plane.
+```
+
+Isso é deliberado. Antes, `--port` criava um segundo control plane sobre o **mesmo**
+`state.db`: os dois adotavam o mesmo run, disputavam a mesma worktree e o trabalho de um deles
+era descartado sem aviso.
+
+Projetos diferentes continuam podendo rodar ao mesmo tempo — a chave é o diretório do
+projeto, resolvido com `realpath` (então um link simbólico para o mesmo repositório também
+não cria um segundo dono).
+
+**Se o dono não existe mais.** Não existe lock a limpar: a posse morre com o processo,
+inclusive sob `kill -9` ou queda de energia. Se o `serve` insiste que há dono, existe um
+processo vivo — encontre-o pelo pid que a mensagem informa:
+
+```sh
+cat .agentic/control-plane.json     # endereco e pid do dono
+ps -p "$(node -e "console.log(require('./.agentic/control-plane.json').pid)")"
+```
+
+`.agentic/control-plane.lock.db` é um arquivo de zero byte e **não guarda estado nenhum** —
+apagá-lo não libera nada enquanto o dono vive, e não é o caminho para resolver problema algum.
+
+---
+
+### Ctrl+C demora, ou o control plane diz que não encerrou limpo
+
+**Sintoma.** Depois do Ctrl+C, `agentic serve` leva alguns segundos para sair — ou termina
+com:
+
+```console
+o control plane nao encerrou limpo:
+run 01M1...: encerramento excedeu 30000ms com efeito ainda em voo (2 efeito(s)
+assincrono(s); tentativas T03-a2-...); a posse do projeto NAO e devolvida enquanto isso durar (I15)
+```
+
+**A demora é o encerramento gracioso fazendo o trabalho dele** (ADR-0014). Ele para de
+atender, cancela os processos de agente e de gate (SIGTERM, e SIGKILL dois segundos depois
+se ignorarem — e o que sobrar no grupo de processos deles recebe SIGKILL junto), espera uma
+integração em curso terminar, grava o que já chegou e só então devolve o projeto. Um agente
+que ignora SIGTERM custa esses dois segundos; um `git rebase` em andamento custa o tempo
+dele.
+
+**A mensagem de "não encerrou limpo" é rara e é honesta.** Algum efeito não parou dentro do
+prazo, e o control plane preferiu **segurar a posse** a entregar o projeto com efeito vivo —
+que era o dano medido em D4. O processo sai logo depois, e o sistema operacional solta o lock
+no mesmo instante; o próximo `agentic serve` adota o run e reconcilia a tentativa que ficou
+em voo como `INTERRUPTED`. Nada precisa ser limpo à mão. Se acontecer com frequência, o
+detalhe da mensagem diz qual efeito não parou — é isso que vale relatar.
+
+**A mensagem de "não encerrou limpo" não encerra o processo.** Ele fica no ar, dono do
+projeto, e o próximo Ctrl+C tenta o encerramento outra vez — sair soltaria a posse com o
+efeito vivo, que é o que a regra proíbe. Quando o efeito termina (a integração acaba, o gate
+morre), o Ctrl+C seguinte devolve o projeto e o processo sai.
+
+**Um segundo Ctrl+C durante o encerramento não mata o processo.** Ele é registrado (a CLI
+avisa em stderr) e, se o encerramento em curso falhar, dispara a nova tentativa sozinho. Isso
+é deliberado: o tratador padrão do Node mataria o processo no meio da drenagem e a posse
+sairia com efeito vivo.
+
+**Derrubar à força é `kill -9`.** Nada é drenado, a posse morre com o processo e um comando
+de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar sozinho — sem
+alcançar o banco. Funciona, mas é queda, não encerramento; o próximo `agentic serve` adota
+o run e reconcilia.
+
 ---
 
 ## Missão e execução

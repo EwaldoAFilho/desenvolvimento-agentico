@@ -16,6 +16,7 @@ import nodeProcess from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership } from '@agentic/persistence'
 import { parseProjectFile } from '@agentic/schemas'
 import type { RunningServer } from '@agentic/server'
 import { attachServer, loadProjectSources } from '@agentic/server'
@@ -201,10 +202,24 @@ let current: BrowserEnvironment | undefined
 async function openControlPlane(projectRoot: string): Promise<RunningServer> {
   const sources = await loadProjectSources({ repoRoot: projectRoot })
   const factory = scriptedFactory(browserStep)
+  /**
+   * A posse do projeto vem PRIMEIRO, como em `startServer` (I14).
+   *
+   * Trocar o registry nao dispensa ser dono: um plane sem lease recusa aprovar missao,
+   * iniciar run e abrir orquestrador — que e exatamente o que estas specs fazem pela tela.
+   * O projeto e temporario e descartavel, entao a disputa e sempre ganha; o que importa e
+   * que este ambiente percorra o mesmo caminho do produto em vez de um atalho.
+   */
+  const posse = acquireControlPlaneOwnership({ baseDir: sources.runtimeDir })
+  if (!posse.ok) {
+    throw new Error(`ambiente de navegador: projeto ja possuido (${posse.detail})`)
+  }
+  const lease = posse.lease
   const plane = createControlPlane({
     project: sources.project,
     gatesFile: sources.gatesFile,
     repoRoot: sources.repoRoot,
+    lease,
     providerFactories: Object.fromEntries(
       Object.keys(sources.project.providers.registry).map((id) => [id, factory]),
     ),
@@ -212,6 +227,7 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
   try {
     const running = await attachServer({
       plane,
+      instanceId: lease.instanceId,
       project: sources.project,
       projectText: sources.projectText,
       gatesText: sources.gatesText,
@@ -226,10 +242,13 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
       close: async (): Promise<void> => {
         await running.close()
         await plane.close()
+        // A posse sai por ultimo: enquanto houver plane aberto, o projeto tem dono.
+        lease.release()
       },
     }
   } catch (cause) {
     await plane.close().catch(() => undefined)
+    lease.release()
     throw cause
   }
 }

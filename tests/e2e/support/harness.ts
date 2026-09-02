@@ -5,6 +5,7 @@ import type { Attempt, DomainEvent, MissionSpec, Run, RunId, TaskRun } from '@ag
 import { isTerminalRunStatus, taskId as toTaskId } from '@agentic/domain'
 import type { ControlPlane, Orchestrator } from '@agentic/orchestrator'
 import { createControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership, type ControlPlaneLease } from '@agentic/persistence'
 import type { ProviderFactory } from '@agentic/providers'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseMissionFile, parseProjectFile, toMissionSpec } from '@agentic/schemas'
@@ -20,6 +21,8 @@ export interface HarnessOptions {
   readonly step?: StepFn
   /** Transforma o project.yaml do fixture antes do commit inicial. */
   readonly project?: (text: string) => string
+  /** Transforma o mission.yaml do fixture antes do commit inicial. */
+  readonly mission?: (text: string) => string
   readonly probe?: ConcurrencyProbe
   /** Ausente = so tick por evento (usado quando o teste dirige o loop com `drain`). */
   readonly safetyIntervalMs?: number
@@ -32,6 +35,12 @@ export interface MissionHarness {
   readonly fixture: Fixture
   readonly sources: FixtureSources
   readonly plane: ControlPlane
+  /**
+   * A posse do projeto que este harness detem (I14). Exposta porque um teste que entrega o
+   * projeto a OUTRO control plane precisa soltar a posse antes — e precisa que isso apareca
+   * no teste, nao aconteca em silencio.
+   */
+  readonly lease: ControlPlaneLease
   readonly runId: RunId
   readonly orchestrator: Orchestrator
   readonly mission: MissionSpec
@@ -81,9 +90,10 @@ const sleep = (ms: number): Promise<void> =>
  * rede, sem quota.
  */
 export async function createMissionHarness(options: HarnessOptions = {}): Promise<MissionHarness> {
-  const fixture = await materializeFixture(
-    options.project === undefined ? {} : { project: options.project },
-  )
+  const fixture = await materializeFixture({
+    ...(options.project === undefined ? {} : { project: options.project }),
+    ...(options.mission === undefined ? {} : { mission: options.mission }),
+  })
   const sources = fixture.sources
   const step = options.step ?? missionStep
 
@@ -111,12 +121,27 @@ export async function createMissionHarness(options: HarnessOptions = {}): Promis
   }
   const mission = toMissionSpec(missionParsed.value)
 
+  /**
+   * O harness e DONO do projeto, como um control plane de verdade (I14).
+   *
+   * Nao e cerimonia: `adoptRecoverableRuns()` recusa em plane sem posse declarada, e um
+   * harness sem posse testaria um caminho que nao existe em producao. O mesmo lease
+   * atravessa `reopen`, porque reabrir e o mesmo processo continuando dono — tentar
+   * adquirir de novo bateria no proprio lock.
+   */
+  const posse = acquireControlPlaneOwnership({ baseDir: join(fixture.root, '.agentic') })
+  if (!posse.ok) {
+    await fixture.cleanup()
+    throw new Error(`harness: nao consegui a posse do fixture (${posse.detail})`)
+  }
+  const lease: ControlPlaneLease = posse.lease
+
   const build = (activeStep: StepFn): ControlPlane =>
     createControlPlane({
       project: projectParsed.value,
       gatesFile: gatesParsed.value,
       repoRoot: fixture.root,
-      baseDir: join(fixture.root, '.agentic'),
+      lease,
       providerFactories: factoriesOf(projectParsed.value, activeStep, options.probe),
       ...(options.safetyIntervalMs === undefined
         ? {}
@@ -168,6 +193,7 @@ export async function createMissionHarness(options: HarnessOptions = {}): Promis
       fixture,
       sources,
       plane: activePlane,
+      lease,
       runId: created.id,
       orchestrator: activeOrchestrator,
       mission,
@@ -210,6 +236,8 @@ export async function createMissionHarness(options: HarnessOptions = {}): Promis
       },
       cleanup: async (): Promise<void> => {
         await activePlane.close().catch(() => undefined)
+        // A posse sai por ultimo: enquanto houver plane aberto, o projeto tem dono.
+        lease.release()
         await fixture.cleanup()
       },
     }

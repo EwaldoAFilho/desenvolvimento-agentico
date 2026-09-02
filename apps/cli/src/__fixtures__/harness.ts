@@ -52,7 +52,9 @@ export function captureDeps(overrides: DepsOverrides = {}): Captured {
     registry: () => fakeRegistry([]),
     connect: () => Promise.resolve(undefined),
     probeGit: () => Promise.resolve(OK_GIT),
-    waitForShutdown: () => Promise.resolve(),
+    // Nunca resolve por padrao: um sinal que "chega" sozinho no primeiro `await` encerraria
+    // `mission start` antes de o run andar. Quem testa o encerramento injeta o seu.
+    waitForShutdown: () => new Promise<void>(() => undefined),
     ...overrides,
   }
   return {
@@ -123,6 +125,11 @@ export function fakePlane(partial: Partial<ControlPlane>): ControlPlane {
   }
   return {
     persistence: undefined as never,
+    // Leitura por padrao: um dublê que se declarasse dono esconderia justamente a recusa
+    // que o comando sob teste precisa encontrar.
+    access: 'readonly',
+    lifecycle: 'open',
+    quiesce: () => undefined,
     registry: fakeRegistry([]),
     gates: undefined as never,
     clock: undefined as never,
@@ -144,6 +151,7 @@ export function fakePlane(partial: Partial<ControlPlane>): ControlPlane {
     getTaskDetail: missing('getTaskDetail') as never,
     generateMissionReport: missing('generateMissionReport') as never,
     open: missing('open') as never,
+    adoptRecoverableRuns: missing('adoptRecoverableRuns') as never,
     close: () => Promise.resolve(),
     ...partial,
   }

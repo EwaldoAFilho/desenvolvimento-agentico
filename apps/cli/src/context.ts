@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import type { CompileInput } from '@agentic/orchestrator'
 import type { GatesFile, ProjectFile, SchemaIssue } from '@agentic/schemas'
 import { parseGatesFile, parseProjectFile } from '@agentic/schemas'
+import { configPathOf, projectIdentityOf } from '@agentic/server'
 import type { CommandDeps } from './deps.js'
 import { CliError } from './result.js'
 
@@ -12,10 +13,20 @@ export const GATES_FILE = 'gates.yaml'
 export const MISSIONS_DIR = 'missions'
 
 export interface ProjectContext {
-  /** Diretorio que contem `.agentic/`. */
+  /** Diretorio que contem `.agentic/`, canonicalizado. Ancora da CONFIGURACAO. */
   readonly dir: string
+  /** `<dir>/.agentic`: onde moram `project.yaml`, `gates.yaml` e `missions/`. */
   readonly baseDir: string
+  /** Repositorio alvo, canonico. E ele que da NOME ao projeto (I14). */
   readonly repoRoot: string
+  /**
+   * `<repoRoot>/.agentic`: posse, `state.db`, `control-plane.json`, `runs/` e `worktrees/`.
+   *
+   * Separado de `baseDir` de proposito. Com `project.repoRoot: .` — o caso comum — os dois
+   * sao o mesmo diretorio; com `repoRoot` apontando para fora, confundir um com o outro era
+   * como `mission start` e `serve` viravam dois donos do mesmo projeto (I14).
+   */
+  readonly runtimeDir: string
   readonly projectPath: string
   readonly gatesPath: string
   readonly projectText: string
@@ -90,9 +101,16 @@ export async function loadProjectContext(
       [`${projectPath} invalido:`, ...describeIssues(parsedProject.issues)].join('\n'),
     )
   }
-  const repoRoot = resolve(dir, parsedProject.value.project.repoRoot)
-  const declared = parsedProject.value.gates.file
-  const gatesPath = isAbsolute(declared) ? declared : resolve(dir, declared)
+  /**
+   * A conta da identidade e UMA, e ela nao mora aqui: `projectIdentityOf` e a mesma funcao
+   * que `startServer` usa. Enquanto a CLI derivava a sua versao, `agentic mission start` e
+   * `agentic serve` disputavam posses diferentes sobre o mesmo projeto (I14).
+   */
+  const identity = projectIdentityOf({
+    projectFile: projectPath,
+    declaredRepoRoot: parsedProject.value.project.repoRoot,
+  })
+  const gatesPath = configPathOf(identity.projectDir, parsedProject.value.gates.file)
   const gatesText = await readText(gatesPath, 'GATES_NOT_FOUND')
   const parsedGates = parseGatesFile(gatesText)
   if (!parsedGates.ok) {
@@ -102,9 +120,10 @@ export async function loadProjectContext(
     )
   }
   return {
-    dir,
-    baseDir: join(dir, AGENTIC_DIR),
-    repoRoot,
+    dir: identity.projectDir,
+    baseDir: join(identity.projectDir, AGENTIC_DIR),
+    repoRoot: identity.repoRoot,
+    runtimeDir: identity.runtimeDir,
     projectPath,
     gatesPath,
     projectText,

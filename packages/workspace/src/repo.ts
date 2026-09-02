@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises'
+import { realpath, rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import type { CommitRef } from '@agentic/domain'
 import { WorkspaceError, type WorkspaceStage } from './errors.js'
 import { git, gitText } from './git.js'
@@ -93,6 +94,27 @@ export async function worktreeOnBranch(
   return entries.find((entry) => entry.branch === branch)
 }
 
+/**
+ * A worktree que ESTE repositorio registra naquele caminho, se houver.
+ *
+ * A comparacao passa por `realpath` dos dois lados: o git responde o caminho ja resolvido,
+ * e um `worktreeRoot` sob link simbolico (o `/tmp` da suite, por exemplo) daria uma
+ * diferenca puramente textual. Nao encontrar aqui e a resposta que autoriza NAO remover
+ * nada: diretorio que este repositorio nao reconhece como worktree sua nao e nosso.
+ */
+export async function worktreeAtPath(
+  cwd: string,
+  path: string,
+): Promise<WorktreeEntry | undefined> {
+  const wanted = await realpath(path).catch(() => resolve(path))
+  const entries = await listWorktrees(cwd)
+  for (const entry of entries) {
+    const candidate = await realpath(entry.path).catch(() => resolve(entry.path))
+    if (candidate === wanted) return entry
+  }
+  return undefined
+}
+
 /** Cria a branch da missao se ainda nao existir; idempotente por natureza. */
 export async function ensureBranch(
   cwd: string,
@@ -142,6 +164,18 @@ export async function addWorktreeDetached(
   stage: WorkspaceStage = 'acquire',
 ): Promise<void> {
   await git(['worktree', 'add', '--detach', path, commit], { cwd, stage })
+}
+
+/**
+ * Remocao que NAO apaga por conta propria: se o git recusar devolver a worktree, o
+ * diretorio fica onde esta e o chamador decide. E o oposto de `removeWorktree`, e existe
+ * para quem prefere recusar a operacao a destruir algo que nao entendeu.
+ */
+export async function removeWorktreeStrict(cwd: string, path: string): Promise<boolean> {
+  const result = await git(['worktree', 'remove', '--force', path], { cwd, allowFailure: true })
+  if (result.exitCode !== 0) return false
+  await git(['worktree', 'prune'], { cwd, allowFailure: true })
+  return true
 }
 
 /** Remocao tolerante: o disco precisa ficar limpo mesmo se o registro do git ja divergiu. */

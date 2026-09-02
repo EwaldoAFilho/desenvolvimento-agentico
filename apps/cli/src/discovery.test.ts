@@ -61,15 +61,19 @@ describe('descoberta do control plane pela CLI', () => {
     expect(resolved).toMatchObject({ endpoint: 'http://127.0.0.1:4317', source: 'project' })
   })
 
-  it('registro de processo MORTO e apagado do disco', async () => {
+  it('registro de processo MORTO nao decide nada — e nao e apagado pela consulta', async () => {
     workspace = await createWorkspace()
     await publish(workspace.dir, 4999, await deadPid())
     const runtimeDir = join(workspace.dir, '.agentic')
+
+    const resolved = await resolveEndpoint(await contextOf(workspace.dir))
+
+    // Descoberta e leitura: quem pergunta onde esta o control plane e CLIENTE, nao tem a
+    // posse do projeto e nao pode provar que o registro nao acabou de ser reescrito por um
+    // dono novo. Entao ele ignora o registro morto — e o deixa onde esta, para o proximo
+    // dono sobrescrever ao publicar.
+    expect(resolved).toMatchObject({ source: 'project' })
     expect(await readControlPlaneFile(runtimeDir)).toBeDefined()
-
-    await resolveEndpoint(await contextOf(workspace.dir))
-
-    expect(await readControlPlaneFile(runtimeDir)).toBeUndefined()
   })
 
   it('`--port` explicito vence ate um registro vivo', async () => {

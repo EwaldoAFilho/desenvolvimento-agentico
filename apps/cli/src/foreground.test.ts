@@ -9,6 +9,9 @@ import { superviseForeground } from './foreground.js'
 class FakeOrchestrator {
   status: string | undefined
   drains = 0
+  stops = 0
+  /** Quando definido, `drain()` fica pendurado aqui — um run com agente em voo. */
+  drainForever = false
   readonly #onDrain: (drains: number) => void
 
   constructor(status: string | undefined, onDrain: (drains: number) => void = () => undefined) {
@@ -19,7 +22,12 @@ class FakeOrchestrator {
   drain(): Promise<void> {
     this.drains += 1
     this.#onDrain(this.drains)
+    if (this.drainForever) return new Promise<void>(() => undefined)
     return Promise.resolve()
+  }
+
+  stop(): void {
+    this.stops += 1
   }
 
   get orchestrator(): Orchestrator {
@@ -63,6 +71,23 @@ describe('supervisao do run em primeiro plano', () => {
     expect(outcome).toBe('ended')
     // Drenou de novo DEPOIS do resume: retomar volta a despachar.
     expect(fake.drains).toBe(2)
+  })
+
+  it('Ctrl+C com trabalho em voo encerra pelo caminho gracioso, sem esperar o run', async () => {
+    // Antes, o sinal so era assinado quando o run pausava: com agente, gate ou integracao em
+    // voo nao havia tratador, o Node matava o processo e o agente ficava orfao com a posse
+    // ja solta pelo SO (I15).
+    const fake = new FakeOrchestrator('RUNNING')
+    fake.drainForever = true
+    const inicio = Date.now()
+
+    const outcome = await superviseForeground(fake.orchestrator, {
+      waitForShutdown: () => new Promise((resolve) => setTimeout(resolve, 20)),
+    })
+
+    expect(outcome).toBe('shutdown')
+    expect(fake.stops).toBe(1)
+    expect(Date.now() - inicio).toBeLessThan(5_000)
   })
 
   it('pausado, Ctrl+C encerra o processo — e so ele', async () => {

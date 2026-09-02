@@ -185,7 +185,12 @@ usuário; não injetamos credencial nenhuma.
 Abaixo dele, `Process Runtime` concentra a parte perigosa e específica de sistema
 operacional (spawn, sinais, tree-kill, allowlist de ambiente, buffers) em um único lugar
 testado. `Gate Runner` usa o mesmo primitivo para comandos curtos e capturados; `Local Agent
-Runtime` usa para processos longos e transmitidos.
+Runtime` usa para processos longos e transmitidos. A unidade de um processo filho é o
+**grupo**: `exit()` relata a saída do líder e se o grupo assentou (`groupTerminated`), e
+`cancel()` só resolve com o grupo provado morto (ADR-0014, adendo 004B). O orquestrador chama
+uma função deste pacote — a sonda do grupo — para provar de novo, num `stop` repetido, que um
+resíduo sem handle (gate, `workspaceSetup`) morreu; é a única dependência de orquestração
+sobre `process`, e ela não reimplementa nada de SO.
 
 ### 3.7 Persistence
 
@@ -251,6 +256,40 @@ O usuário clica **uma vez**. A descoberta do que pode rodar agora é do orquest
 exatamente o produto. O dashboard **não** vira editor de missão: o YAML continua sendo o
 contrato versionado, e aprovar/iniciar não altera uma linha dele.
 
+### 4.2 Ciclo de vida do serviço
+
+O processo que possui o projeto tem uma máquina de estados própria — **não** é `RunStatus`;
+o run vive no banco e sobrevive ao processo (ADR-0014):
+
+```text
+STOPPED ──start()──▶ STARTING ──ok──▶ RUNNING ──stop()──▶ STOPPING ──ok──▶ STOPPED
+                        │ falha                              │ falha
+                        ▼                                    ▼
+                     STOPPED (nada ficou de pé)           FAILED (efeito vivo, posse retida)
+```
+
+`createControlPlaneService` (`@agentic/server`) expõe `start`, `stop`, `restart` e `status`.
+`start` é idempotente e nunca cria um segundo dono (I14); `stop` é idempotente e só devolve
+a posse quando nenhum efeito deste processo pode mais mutar o projeto (I15); `restart` é
+`stop` seguido de `start`, serializados, com adoção dos runs recuperáveis (I13). `SIGINT` e
+`SIGTERM` em `agentic serve` e em `agentic-server` chamam o mesmo `stop`.
+
+A ordem do encerramento é a garantia:
+
+```text
+parar de aceitar ──▶ cancelar/drenar (prazo) ──▶ colher ──▶ fechar banco ──▶ devolver posse
+     plane recusa       handles de agente         integração    settle das      release() ==
+     trabalho novo;     cancelados; gate e        e mission     escritas de     false segura
+     SSE encerrado;     setup abortados por       gate gravados artefato        o lock
+     porta fechada;     sinal; cadeia do tick
+     descoberta sai     e jobs esperados
+```
+
+Efeito que não para dentro do prazo faz o `stop` **falhar** (`FAILED`) com a posse retida —
+nunca a devolve em silêncio. `SIGKILL` não drena: o próximo dono adota e reconcilia
+(STATE-MACHINES 1.4), e um comando de gate ou setup do processo morto fica órfão até
+terminar sozinho, sem alcançar o banco.
+
 ## 5. Isolamento de trabalho
 
 ### 5.1 Por que worktree não é opcional para paralelismo real
@@ -299,6 +338,23 @@ git recusa uma segunda worktree na mesma branch, e a aquisição passa a usar `-
 o mesmo SHA: a mesma árvore, sem disputar o ref nem mexer em quem já o segura. Com a branch
 livre, nada muda. Falhar em adquirir essa worktree é `WORKSPACE_ERROR` e **encerra o run**
 com razão observável (I12) — nunca deixa o run parado em `VERIFYING`.
+
+Uma worktree de gate deixada por um processo que morreu é devolvida na aquisição seguinte —
+e **só ela**. Sem essa devolução, adotar um run em `VERIFYING` depois de uma queda o levaria
+a `FAILED` por causa de um diretório, e não de uma reprovação.
+
+Devolver é **remover**, então a barra é prova de posse, não indício. Caminho, branch, SHA e
+ancestralidade dizem de onde uma árvore veio; nenhum deles diz quem a criou, e todos podem
+ser reproduzidos por quem quiser — basta um `git worktree add --detach` no lugar certo. Por
+isso a aquisição escreve `.agentic-owner.json` na raiz da worktree no instante em que a cria
+(`kind`, `version`, `runId`, `repoRoot`; nada de segredo), e a devolução exige, além das
+verificações de caminho e de registro no git deste repositório, que esse marcador exista,
+seja válido e declare **este** run e **este** repositório. Faltando qualquer prova, nada é
+removido: a aquisição é recusada com o motivo, para que um humano decida.
+
+A consequência é deliberada: uma worktree que ocupe o caminho reservado sem ter sido criada
+por nós — inclusive uma criada à mão sobre o commit da própria missão — bloqueia o gate em
+vez de ser destruída. Perder trabalho alheio é pior que exigir uma intervenção.
 
 Ao final do run, a branch da missão fica pronta para PR. O control plane **não** faz push
 nem abre PR no MVP: operação externa é decisão humana (P15).
