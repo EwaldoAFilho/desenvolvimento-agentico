@@ -1,7 +1,7 @@
 import { access, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { openPersistence } from '@agentic/persistence'
-import { describe, expect, it } from 'vitest'
+import { openPersistence, type Persistence } from '@agentic/persistence'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type LiveCli, runCli, spawnCli } from './support/cross-process.js'
 import { type Fixture, materializeFixture } from './support/fixture.js'
 
@@ -21,6 +21,12 @@ import { type Fixture, materializeFixture } from './support/fixture.js'
  *
  * Nada aqui e assumido: cada afirmacao e medida contra um control plane de verdade, em outro
  * processo, escrevendo de verdade.
+ *
+ * UM dono para o arquivo inteiro, e isso e deliberado. Os arquivos de E2E rodam em paralelo,
+ * e cada `serve` extra e carga concorrente que faz os testes SENSIVEIS A TEMPO dos outros
+ * arquivos — o probe de paralelismo de `mission-chain` e o caso medido — medirem a maquina
+ * em vez do produto. Compartilhar o dono nao custa cobertura nenhuma: as perguntas abaixo
+ * sao todas sobre o MESMO control plane vivo.
  */
 
 const PRONTO = /control plane no ar em (http:\/\/\S+)/
@@ -32,14 +38,9 @@ async function existe(path: string): Promise<boolean> {
   )
 }
 
-async function encerrar(vivos: readonly LiveCli[]): Promise<void> {
-  for (const vivo of vivos) await vivo.stop().catch(() => undefined)
-}
-
-function urlDe(vivo: LiveCli): string {
-  const url = PRONTO.exec(vivo.ready)?.[1]
-  if (url === undefined) throw new Error(`nao achei o endereco em: ${vivo.ready}`)
-  return url
+/** Tudo que o `.agentic` do projeto contem — a prova fisica de "nenhum banco a mais". */
+async function conteudoDoRuntime(repoRoot: string): Promise<string[]> {
+  return (await readdir(join(repoRoot, '.agentic'))).sort()
 }
 
 /**
@@ -55,126 +56,81 @@ function reusoDoDono(saida: { json(): { readonly data?: unknown } }): string {
   return data.endpoint ?? ''
 }
 
-/** Tudo que o `.agentic` do projeto contem — a prova fisica de "nenhum banco a mais". */
-async function conteudoDoRuntime(repoRoot: string): Promise<string[]> {
-  return (await readdir(join(repoRoot, '.agentic'))).sort()
-}
+describe('leitor readonly e dono coexistem (Fases 11, 12 e 16.12)', () => {
+  let fixture: Fixture
+  let dono: LiveCli
+  let runtime: string
+  let db: string
+  let endereco: string
 
-describe('leitor readonly e dono coexistem (Fases 11 e 12)', () => {
-  it('o leitor le o WAL do dono VIVO, sem posse, sem virar escritor', async () => {
-    const fixture: Fixture = await materializeFixture()
-    const vivos: LiveCli[] = []
+  beforeAll(async () => {
+    fixture = await materializeFixture()
+    runtime = join(fixture.root, '.agentic')
+    db = join(runtime, 'state.db')
+    dono = await spawnCli(fixture.root, ['serve', '--port', '0'], PRONTO)
+    const url = PRONTO.exec(dono.ready)?.[1]
+    if (url === undefined) throw new Error(`nao achei o endereco em: ${dono.ready}`)
+    endereco = url
+  })
+
+  afterAll(async () => {
+    await dono?.stop().catch(() => undefined)
+    await fixture?.cleanup().catch(() => undefined)
+  })
+
+  it('le o WAL do dono VIVO, sem posse, e o driver recusa escrever', async () => {
+    // Com o dono vivo, `-wal` e `-shm` existem — e o leitor precisa alcancar o `-shm` para
+    // achar o snapshot, que e justamente o passo que uma conexao readonly nao sabe criar.
+    expect(await existe(db)).toBe(true)
+    expect(await existe(`${db}-wal`), 'dono vivo mantem o -wal').toBe(true)
+    expect(await existe(`${db}-shm`), 'dono vivo mantem o -shm').toBe(true)
+
+    const leitor = openPersistence({ baseDir: runtime, mode: 'readonly' })
     try {
-      const dono = await spawnCli(fixture.root, ['serve', '--port', '0'], PRONTO)
-      vivos.push(dono)
+      expect(leitor.mode).toBe('readonly')
+      expect(leitor.database.db.readonly).toBe(true)
+      expect(leitor.database.writable, 'conexao readonly nunca e writable').toBe(false)
+      // A leitura ATRAVESSA: se o `-shm` fosse inalcancavel, isto levantaria
+      // SQLITE_READONLY_CANTINIT em vez de devolver linhas.
+      expect(Array.isArray(leitor.queries.listRuns({ limit: 10 }))).toBe(true)
+      expect(typeof leitor.events.latestSeq()).toBe('number')
 
-      /**
-       * Os DOIS estados de um banco WAL, porque so um deles seria meia prova.
-       *
-       * Com o dono vivo, `-wal` e `-shm` existem e o leitor precisa alcancar o `-shm` para
-       * achar o snapshot — e o `-shm` so nasce de uma conexao que escreve. Com o dono
-       * encerrado, o SQLite checkpointa e APAGA os dois, e o leitor tem de continuar
-       * funcionando sobre o `state.db` sozinho. Medido aqui em vez de assumido: sao dois
-       * caminhos diferentes do SQLite, e a Fase 11 pedia exatamente isso.
-       */
-      const runtime = join(fixture.root, '.agentic')
-      const db = join(runtime, 'state.db')
-      expect(await existe(db)).toBe(true)
-      expect(await existe(`${db}-wal`), 'dono vivo mantem o -wal').toBe(true)
-      expect(await existe(`${db}-shm`), 'dono vivo mantem o -shm').toBe(true)
-
-      // Um leitor independente, no processo do teste: nenhuma posse disputada.
-      const leitor = openPersistence({ baseDir: runtime, mode: 'readonly' })
-      try {
-        expect(leitor.mode).toBe('readonly')
-        expect(leitor.database.db.readonly).toBe(true)
-        // A leitura ATRAVESSA: se o `-shm` fosse inalcancavel, isto levantaria
-        // SQLITE_READONLY_CANTINIT em vez de devolver linhas.
-        expect(Array.isArray(leitor.queries.listRuns({ limit: 10 }))).toBe(true)
-        expect(typeof leitor.events.latestSeq()).toBe('number')
-
-        // E o driver recusa escrever, que e a metade que interessa.
-        expect(() => leitor.database.db.exec('CREATE TABLE invasor (x INTEGER)')).toThrow()
-        expect(() => leitor.database.db.exec("UPDATE runs SET status = 'DONE'")).toThrow()
-      } finally {
-        leitor.close()
-      }
-
-      // O dono continua dono: o leitor nao tomou nem devolveu posse nenhuma. A prova e que
-      // um `serve` novo REUSA o endereco publicado em vez de subir — se o leitor tivesse
-      // mexido na posse, este segundo processo teria virado um segundo dono.
-      expect(reusoDoDono(await runCli(fixture.root, ['serve', '--port', '0', '--json']))).toBe(
-        urlDe(dono),
-      )
-
-      /**
-       * Segundo estado: dono ENCERRADO. O leitor tem de continuar lendo.
-       *
-       * O que o teste NAO afirma e se o `-wal` sobrou. Medido: um `close()` limpo no mesmo
-       * processo checkpointa e apaga os sidecars; um dono encerrado por SIGTERM costuma
-       * deixa-los no disco. As duas coisas sao o SQLite decidindo quando checkpointar, e
-       * amarrar a suite a essa escolha seria testar a biblioteca em vez do produto. O que e
-       * nosso — e o que quebraria o `status` do usuario — e a leitura funcionar dos dois
-       * jeitos.
-       */
-      await encerrar(vivos)
-      vivos.length = 0
-      const frio = openPersistence({ baseDir: runtime, mode: 'readonly' })
-      try {
-        expect(Array.isArray(frio.queries.listRuns({ limit: 10 }))).toBe(true)
-      } finally {
-        frio.close()
-      }
+      // E o driver recusa escrever, que e a metade que interessa.
+      expect(() => leitor.database.db.exec('CREATE TABLE invasor (x INTEGER)')).toThrow()
+      expect(() => leitor.database.db.exec("UPDATE runs SET status = 'DONE'")).toThrow()
     } finally {
-      await encerrar(vivos)
-      await fixture.cleanup().catch(() => undefined)
+      leitor.close()
     }
   })
 
-  it('D9: status, report, providers e doctor respondem com o dono no ar', async () => {
-    const fixture: Fixture = await materializeFixture()
-    const vivos: LiveCli[] = []
-    try {
-      const dono = await spawnCli(fixture.root, ['serve', '--port', '0'], PRONTO)
-      vivos.push(dono)
-      const antes = await conteudoDoRuntime(fixture.root)
+  it('D9: providers, doctor e status respondem pela CLI real, sem deixar rastro', async () => {
+    const antes = await conteudoDoRuntime(fixture.root)
 
-      // Processo B, CLI real, sem posse. Nenhum destes pode exigir ownership.
-      for (const argv of [
-        ['providers', '--json'],
-        ['doctor', '--json'],
-      ]) {
-        const saida = await runCli(fixture.root, argv)
-        expect(saida.code, `${argv[0]} deveria ler sem posse:\n${saida.stderr}`).toBe(0)
-        expect(saida.json().ok, `${argv[0]} deveria reportar ok`).toBe(true)
-      }
-
-      // `status` sem run e uma recusa de PRODUTO (nao ha run), nunca de posse.
-      const status = await runCli(fixture.root, ['mission', 'status', '--json'])
-      expect(status.json().error?.code).toBe('NO_RUN')
-
-      // Zero segundo `state.db`, zero arquivo novo: ler nao deixou rastro.
-      expect(await conteudoDoRuntime(fixture.root)).toEqual(antes)
-      expect(reusoDoDono(await runCli(fixture.root, ['serve', '--port', '0', '--json']))).toBe(
-        urlDe(dono),
-      )
-    } finally {
-      await encerrar(vivos)
-      await fixture.cleanup().catch(() => undefined)
+    // Processo B, CLI real, sem posse. Nenhum destes pode exigir ownership.
+    for (const argv of [
+      ['providers', '--json'],
+      ['doctor', '--json'],
+    ]) {
+      const saida = await runCli(fixture.root, argv)
+      expect(saida.code, `${argv[0]} deveria ler sem posse:\n${saida.stderr}`).toBe(0)
+      expect(saida.json().ok, `${argv[0]} deveria reportar ok`).toBe(true)
     }
+
+    // `status` sem run e uma recusa de PRODUTO (nao ha run), nunca de posse.
+    const status = await runCli(fixture.root, ['mission', 'status', '--json'])
+    expect(status.json().error?.code).toBe('NO_RUN')
+
+    // Zero segundo `state.db`, zero arquivo novo: ler nao deixou rastro. E o dono continua
+    // dono — um `serve` novo REUSA o endereco em vez de subir.
+    expect(await conteudoDoRuntime(fixture.root)).toEqual(antes)
+    expect(reusoDoDono(await runCli(fixture.root, ['serve', '--port', '0', '--json']))).toBe(
+      endereco,
+    )
   })
-})
 
-describe('o leitor nao atrapalha o dono (Fase 16.12)', () => {
-  it('leitores abertos nao impedem o dono de escrever nem de adotar', async () => {
-    const fixture: Fixture = await materializeFixture()
-    const vivos: LiveCli[] = []
-    const leitores: { close(): void }[] = []
+  it('leitores abertos nao impedem o dono de escrever', async () => {
+    const leitores: Persistence[] = []
     try {
-      const dono = await spawnCli(fixture.root, ['serve', '--port', '0'], PRONTO)
-      vivos.push(dono)
-      const runtime = join(fixture.root, '.agentic')
-
       // Tres leitores SEGURADOS durante a escrita. Um leitor que criasse writer, disputasse
       // posse ou travasse o banco apareceria aqui como SQLITE_BUSY no dono — e apareceria
       // exatamente no caminho que o usuario usa, porque `status` e `doctor` sao isto.
@@ -184,34 +140,44 @@ describe('o leitor nao atrapalha o dono (Fase 16.12)', () => {
 
       // `approve` com dono no ar VIAJA para o dono: quem escreve e o control plane, com os
       // tres leitores pendurados no mesmo `state.db`.
-      const missao = join(runtime, 'missions', 'EXEMPLO-001.mission.yaml')
       const aprovacao = await runCli(fixture.root, [
         'mission',
         'approve',
-        missao,
+        join(runtime, 'missions', 'EXEMPLO-001.mission.yaml'),
         '--actor',
         'humano@teste',
         '--json',
       ])
       expect(aprovacao.code, `${aprovacao.stdout}${aprovacao.stderr}`).toBe(0)
 
-      // E os leitores enxergam o que o dono acabou de gravar: WAL entregando snapshot novo
-      // a conexoes que ja estavam abertas antes da escrita.
+      // E um leitor novo enxerga o que o dono acabou de gravar: WAL entregando snapshot
+      // fresco a quem nunca disputou posse nenhuma.
       const leitor = openPersistence({ baseDir: runtime, mode: 'readonly' })
       try {
         expect(leitor.queries.listRuns({ limit: 10 }).length).toBeGreaterThan(0)
       } finally {
         leitor.close()
       }
-
-      // Nenhum leitor virou dono: o `serve` seguinte continua reusando o mesmo endereco.
-      expect(reusoDoDono(await runCli(fixture.root, ['serve', '--port', '0', '--json']))).toBe(
-        urlDe(dono),
-      )
     } finally {
       for (const leitor of leitores) leitor.close()
-      await encerrar(vivos)
-      await fixture.cleanup().catch(() => undefined)
+    }
+  })
+
+  it('com o dono ENCERRADO, a leitura continua funcionando', async () => {
+    await dono.stop()
+
+    /**
+     * O teste NAO afirma se o `-wal` sobrou. Medido: um `close()` limpo no mesmo processo
+     * checkpointa e apaga os sidecars; um dono encerrado por SIGTERM costuma deixa-los no
+     * disco. As duas coisas sao o SQLite decidindo quando checkpointar, e amarrar a suite a
+     * essa escolha seria testar a biblioteca em vez do produto. O que e nosso — e o que
+     * quebraria o `status` do usuario — e a leitura funcionar dos dois jeitos.
+     */
+    const frio = openPersistence({ baseDir: runtime, mode: 'readonly' })
+    try {
+      expect(frio.queries.listRuns({ limit: 10 }).length).toBeGreaterThan(0)
+    } finally {
+      frio.close()
     }
   })
 })
@@ -221,9 +187,9 @@ describe('projeto ainda nao inicializado (Fase 10)', () => {
     const fixture: Fixture = await materializeFixture()
     try {
       const runtime = join(fixture.root, '.agentic')
-      await rm(join(runtime, 'state.db'), { force: true })
-      await rm(join(runtime, 'state.db-wal'), { force: true })
-      await rm(join(runtime, 'state.db-shm'), { force: true })
+      for (const sufixo of ['', '-wal', '-shm']) {
+        await rm(join(runtime, `state.db${sufixo}`), { force: true })
+      }
       expect(await existe(join(runtime, 'state.db'))).toBe(false)
 
       // `doctor` continua util num projeto novo: ele diagnostica o AMBIENTE, e nao ter banco
