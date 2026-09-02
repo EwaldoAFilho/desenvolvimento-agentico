@@ -118,14 +118,14 @@ export class AgenticHost implements vscode.Disposable {
           nodePath: settings.get<string>('nodePath', ''),
           cliPath: settings.get<string>('cliPath', ''),
         })
-        log.info(
-          `toolchain: node ${toolchain.node.version} (${toolchain.node.path}); cli ${toolchain.cli.path} [${toolchain.cli.source}]`,
-        )
+        const banner = `toolchain: node ${toolchain.node.version} (${toolchain.node.path}); cli ${toolchain.cli.path} [${toolchain.cli.source}]`
+        log.info(banner)
         return launchServe({
           toolchain,
           repoRoot: project.repoRoot,
           env: childEnv(process.env, toolchain.node),
           onLine: (line) => log.child(line),
+          banner,
         })
       },
       signal: sendSignal,

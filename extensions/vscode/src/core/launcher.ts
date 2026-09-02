@@ -32,6 +32,8 @@ export interface LaunchInput {
   readonly repoRoot: string
   readonly env: Record<string, string | undefined>
   readonly onLine?: (line: string) => void
+  /** Primeira linha do diagnostico: com qual node e qual CLI o processo nasceu. */
+  readonly banner?: string
 }
 
 const OUTPUT_TAIL_LINES = 40
@@ -45,7 +47,7 @@ export function launchServe(input: LaunchInput): SpawnedProcess {
     detached: process.platform !== 'win32',
     windowsHide: true,
   })
-  const tail: string[] = []
+  const tail: string[] = input.banner === undefined ? [] : [input.banner]
   let done = false
   const feed = (chunk: unknown): void => {
     for (const line of String(chunk).split(/\r?\n/)) {
