@@ -320,18 +320,49 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * atravessam a mesma posse (o `reopen` do harness).
    */
   const desregistrar = lease?.onRelease(() => persistence.close())
-  const clock = config.clock ?? systemClock()
-  const ids = config.ids ?? ulidGenerator({ clock })
-  const registry =
-    config.registry ??
-    createProviderRegistryFromProject(config.project, {
-      ...(config.scripts === undefined ? {} : { scripts: config.scripts }),
-      ...(config.providerFactories === undefined ? {} : { factories: config.providerFactories }),
-    })
-  const gates = loadGateProfiles(config.gatesFile)
-  const gateRunner = config.gateRunner ?? new GateRunner()
-  const profiles = profilesOf(config.project)
-  const agentEnv = envAllowlist(config.agentEnvAllow ?? DEFAULT_AGENT_ENV_ALLOW)
+  /**
+   * A partir daqui a conexao ja existe, entao nada pode falhar sem devolve-la.
+   *
+   * `loadGateProfiles` recusa um `gates.yaml` invalido e `createProviderRegistryFromProject`
+   * recusa um registro mal declarado — as duas sao falhas de CONFIGURACAO, ou seja, o caso
+   * comum e nao o excepcional. Sem este `try`, cada uma delas deixava um `state.db` aberto
+   * por um plane que nunca chegou a existir: na CLI isso segura o arquivo ate o processo
+   * sair, e num plane COM posse seria pior — o escritor ficaria vivo sem ninguem para
+   * fecha-lo antes do `release`.
+   */
+  let montagem: {
+    clock: Clock
+    ids: IdGenerator
+    registry: ProviderRegistry
+    gates: GateProfiles
+    gateRunner: GateExecutor
+    profiles: AgentProfile[]
+    agentEnv: Record<string, string>
+  }
+  try {
+    const clockMontado = config.clock ?? systemClock()
+    montagem = {
+      clock: clockMontado,
+      ids: config.ids ?? ulidGenerator({ clock: clockMontado }),
+      registry:
+        config.registry ??
+        createProviderRegistryFromProject(config.project, {
+          ...(config.scripts === undefined ? {} : { scripts: config.scripts }),
+          ...(config.providerFactories === undefined
+            ? {}
+            : { factories: config.providerFactories }),
+        }),
+      gates: loadGateProfiles(config.gatesFile),
+      gateRunner: config.gateRunner ?? new GateRunner(),
+      profiles: profilesOf(config.project),
+      agentEnv: envAllowlist(config.agentEnvAllow ?? DEFAULT_AGENT_ENV_ALLOW),
+    }
+  } catch (error) {
+    desregistrar?.()
+    persistence.close()
+    throw error
+  }
+  const { clock, ids, registry, gates, gateRunner, profiles, agentEnv } = montagem
 
   const deps: ApplicationDeps = {
     store: persistence.runs,

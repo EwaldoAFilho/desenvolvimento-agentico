@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readlinkSync } from 'node:fs'
 import { mkdtemp, realpath, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { platform, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { compileMission } from '@agentic/compiler'
 import type { RunId } from '@agentic/domain'
@@ -392,6 +392,48 @@ describe('a propriedade central: sem posse, nada persiste', () => {
     expect(await aberto.plane.persistence.runs.loadAttempts(RUN_INEXISTENTE)).toEqual([])
     expect(aberto.plane.persistence.artifacts.list(RUN_INEXISTENTE)).toEqual([])
     expect(aberto.plane.persistence.events.latestSeq()).toBe(0)
+  })
+})
+
+/**
+ * Descritores abertos apontando para este `state.db`, lidos do proprio processo.
+ *
+ * A prova obvia — "depois da falha, outro dono ainda escreve" — nao prova nada: no Linux o
+ * SQLite nao tranca o arquivo so por estar aberto, entao ela passaria COM o vazamento. O que
+ * distingue os dois casos e o descritor, e `/proc/self/fd` responde isso sem biblioteca
+ * nenhuma. Fora do Linux o teste se declara inconclusivo em vez de fingir que mediu.
+ */
+function descritoresAbertos(db: string): number | undefined {
+  if (platform() !== 'linux') return undefined
+  let total = 0
+  for (const fd of readdirSync('/proc/self/fd')) {
+    try {
+      if (readlinkSync(`/proc/self/fd/${fd}`) === db) total += 1
+    } catch {
+      /* o descritor pode ter sumido entre listar e resolver */
+    }
+  }
+  return total
+}
+
+describe('construcao que falha nao deixa conexao aberta', () => {
+  it('gates invalidos devolvem o descritor do banco', async () => {
+    const root = await projetoVazio()
+    await comBancoCriado(root)
+    const base = configBase()
+    const db = join(root, '.agentic', 'state.db')
+
+    const antes = descritoresAbertos(db)
+    // `gates.yaml` invalido e falha de CONFIGURACAO — o caso comum, nao o excepcional. Sem
+    // devolver a conexao, ela seguraria o `state.db` ate o processo sair; num plane COM
+    // posse seria pior, porque o escritor ficaria vivo sem ninguem para fecha-lo.
+    expect(() =>
+      createControlPlane({ ...base, gatesFile: { profiles: {} } as never, repoRoot: root }),
+    ).toThrow()
+    const depois = descritoresAbertos(db)
+
+    if (antes !== undefined && depois !== undefined) expect(depois).toBe(antes)
+    await rm(root, { recursive: true, force: true })
   })
 })
 
