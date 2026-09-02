@@ -211,6 +211,55 @@ ADR-0014; (7) nenhum threat model novo; (8) nenhuma regressão nem teste enfraqu
 Ciclos usados: **2** de 2 (revisão 1 → correção 1; revisão 2 → correção 2), mais a leitura de
 confirmação. Contagem própria da 004B, não herdada da 004.
 
+## L. Integração e revisão de promoção — **não promovida**
+
+`integration/STABILITY-FINAL-PRE-VSCODE` foi criada a partir de `main` (`797b8e72…`) com um
+merge `--no-ff` de `fix/STABILITY-SLICE-004B`: a cadeia 002 → 003 → 003B → 003C → 004 → 004B é
+linear e todas as seis são ancestrais da integration; a árvore resultante é **idêntica** à do
+HEAD da 004B (tree-id igual, diff vazio).
+
+**Promotion gates na integration (PASS):** build PASS; verify PASS (192 arquivos, 2293
+testes); e2e PASS (98 + 4 pulados); browser PASS (10/10); suíte crítica — ownership, readonly,
+restart, service lifecycle, process settlement, mission gate, adoption, CLI lifecycle — PASS
+(27 arquivos, 205 testes).
+
+**Promotion review (Codex fresh, somente leitura, `main..integration`) — FAIL.** Pergunta:
+"existe BLOCKER/MAJOR operacional que impeça esta árvore de ser a foundation runtime de uma
+extensão VS Code local?" Threat model: local single control plane + clientes legítimos + sem
+código hostil in-process. Achados, classificados:
+
+| Classe | Achado | Onde | Situação |
+| --- | --- | --- | --- |
+| **BLOCKER** (critérios 2 e 6) | os filhos `git` da **integração** (`rebase`, `merge --ff-only`, `update-ref`) nascem por `execFile`, fora do runtime de processos: sem grupo, sem `AbortSignal`. Sob `SIGKILL` do dono, o lock morre (correto), o próximo dono assume, e o `git` órfão pode continuar mutando a worktree da tentativa e a branch da missão enquanto B já é dono — inclusive concorrente com a reconciliação, a remoção de worktree ou uma nova integração de B | `workspace/git.ts`, `workspace/integrator.ts` | **pré-existente** (desde que o integrador existe), fora do escopo congelado da 004B. Não é o limite declarado em ADR-0014 (gate/`workspaceSetup` órfãos), porque este órfão altera **refs** diretamente. Não corrigido |
+| **MAJOR** (critérios 4 e 9) | **D6 parcial**: fast-forward feito, `SIGKILL` antes de gravar `DONE`; o próximo dono reconcilia `INTERRUPTED` e pode refazer trabalho já integrado (`NO_CHANGES`, tentativas gastas) | `integrator.ts`, `orchestrator.ts` `#reconcile` | **conhecido e registrado** desde a 004 (G); não corrigido |
+| **MAJOR** (critério 7; toca o 8) | **cancel humano durante gate/integração em `#jobs`**: `cancel run`/`cancel task` só conhecem handles de agente e resíduos já registrados; um gate (de task ou de missão) ou uma integração em curso não viram resíduo antes de terminar e o cancel não aciona o `#abort`; o estado pode gravar `CANCELLED` com o processo vivo. O `close` seguinte ainda espera `#jobs` e retém a posse | `orchestrator.ts` `cancel`/`cancelTask` | **pré-existente**, classificado FORA nas duas revisões da 004B (J); não corrigido |
+
+Critérios que o revisor deu como OK: (1) único owner; (3) readonly client; (5) stop seguro;
+(8) mission gate no encerramento gracioso; (10) CLI lifecycle. Windows, `setsid`, pid
+reaproveitado e gate/setup órfãos pós-`SIGKILL` foram reconhecidos como limites declarados;
+D14 como lacuna do harness, não defeito.
+
+**Decisão desta sessão:** a 004B passou (revisão própria PASS, gates PASS), mas a promoção
+exige os três PASS e a revisão de promoção reprovou por achados **fora** do escopo congelado
+e **não** causados pela 004B. A regra da fatia proíbe hardening lateral e um terceiro ciclo.
+`main` fica em `797b8e72…`; a integration fica criada e provada; nada foi promovido, empurrado,
+etiquetado, lançado ou empacotado. Veredito: `HUMAN_DECISION_REQUIRED`.
+
+**O que a decisão humana precisa escolher:**
+
+1. **Declarar limites e promover.** Estender ADR-0014 com o `git` da integração órfão sob
+   `SIGKILL` como limite declarado (mesma família de D13: só `SIGKILL`, janela de segundos,
+   sem supervisor de processos ou `PDEATHSIG` portátil), e aceitar D6 parcial e o cancel
+   durante `#jobs` como dívida registrada. Custo: uma ADR-adenda; risco: os três permanecem.
+2. **Abrir STABILITY-SLICE-004C** antes da extensão, com escopo congelado em: (a) cancel
+   humano cobrindo gate/integração em voo — registrar o job como efeito não assentado e/ou
+   abortar por task/run antes de gravar `CANCELLED`; (b) marcador durável de integração (D6);
+   (c) filhos `git` da integração pelo runtime de processos (grupo + `AbortSignal`) no
+   encerramento gracioso, e declarar o `SIGKILL` como limite. Estimativa: uma sessão, dois
+   ciclos de revisão.
+3. **Promover com os achados registrados** (decisão explícita de risco), mantendo os três
+   como primeiras tasks de DA-VSCODE-001.
+
 ## I. Windows
 
 O contrato (`cancel()`/`exit()`/`AgentOutcome.groupTerminated`) é portável: em Windows não há
