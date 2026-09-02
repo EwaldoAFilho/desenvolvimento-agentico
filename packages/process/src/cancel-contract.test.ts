@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import nodeProcess from 'node:process'
 import { afterAll, describe, expect, it } from 'vitest'
-import { isProcessGroupAliveError, runCaptured, spawnStreaming } from './runtime.js'
+import {
+  confirmProcessGroupGone,
+  isProcessGroupAliveError,
+  runCaptured,
+  spawnStreaming,
+} from './runtime.js'
 import type { RunSpec } from './types.js'
 
 /**
@@ -203,6 +208,19 @@ describe('exit() — saida do lider + assentamento do grupo, em toda forma de sa
     await teimoso.cancel('encerrando')
     expect(await teimoso.exit()).toMatchObject({ signal: 'SIGKILL', groupTerminated: true })
   }, 20_000)
+
+  it('sonda que LANCA nao prova nada: confirmProcessGroupGone responde "vivo" (falha fechado) sem rejeitar', async () => {
+    const { value, orfas } = await comRejeicoesOrfas(() =>
+      confirmProcessGroupGone(nodeProcess.pid, {
+        groupGraceMs: 60,
+        probeGroup: () => {
+          throw new Error('sonda quebrada')
+        },
+      }),
+    )
+    expect(value).toBe(false)
+    expect(orfas).toEqual([])
+  })
 
   it('processo que nunca existiu (spawn falhou) nao tem grupo: groupTerminated=true e pid null', async () => {
     const status = await runCaptured(

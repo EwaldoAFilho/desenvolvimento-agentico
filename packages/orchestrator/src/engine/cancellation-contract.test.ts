@@ -11,6 +11,7 @@ import { createFakeCli, type FakeCli } from './__fixtures__/fake-cli.js'
 import { GATE_ALWAYS_PASS } from './__fixtures__/files.js'
 import { createHarness, DEFAULT_ACTOR, type Harness } from './__fixtures__/harness.js'
 import { ShutdownTimeoutError } from './errors.js'
+import type { GateExecutor } from './types.js'
 
 /**
  * STABILITY-SLICE-004B — contrato de cancelamento e assentamento do grupo de processos, do
@@ -305,6 +306,106 @@ describe('C3 — o residuo sobrevive entre tentativas de stop', () => {
     g.mata()
     await harness.plane.close({ graceMs: 8_000 })
     expect(harness.plane.lifecycle).toBe('closed')
+  }, 60_000)
+})
+
+describe('revisao ciclo 1 — intencao sem tentativa em voo; residuo de gate sem pid', () => {
+  it('cancel task com residuo de setup e SEM tentativa em voo: recusado, nenhum redespacho, e cumprido sozinho quando a prova chega', async () => {
+    const g = grupo()
+    h = await createHarness({
+      mission: MISSION,
+      gates: GATES,
+      project: { workspaceSetup: ["node -e 'process.exit(0)'"] },
+      safetyIntervalMs: 0,
+      processProbe: g.probe,
+    })
+    const harness = h
+    await harness.orchestrator.tick()
+    expect((await harness.task('T01')).status).toBe('READY')
+    expect(harness.orchestrator.inflightAttempts).toHaveLength(0)
+
+    await expect(
+      harness.plane.cancelTask(harness.runId, { ...HUMANO, taskId: T01, reason: 'desisti' }),
+    ).rejects.toMatchObject({ code: 'CANCELLATION_UNSETTLED' })
+    expect((await harness.task('T01')).status).toBe('READY')
+
+    // Passado o cooldown do workspace, o scheduler voltaria a despachar a task (e o setup
+    // reprovaria de novo, gravando outro GUARD_FAILED): a intencao de cancelar tem de segurar
+    // o despacho mesmo sem tentativa em voo.
+    const guardas = async (): Promise<number> =>
+      (await harness.eventTypes()).filter((type) => type === 'policy.invalid_transition').length
+    const antes = await guardas()
+    await delay(2_300)
+    await harness.orchestrator.tick()
+    await harness.orchestrator.tick()
+    expect((await harness.task('T01')).status).toBe('READY')
+    expect(await guardas()).toBe(antes)
+    expect(await harness.attempts('T01')).toHaveLength(0)
+    expect(harness.orchestrator.inflightAttempts).toHaveLength(0)
+
+    // A prova chega: o proximo tick cumpre o cancelamento pedido, sem novo comando humano.
+    g.mata()
+    await harness.orchestrator.tick()
+    expect((await harness.task('T01')).status).toBe('CANCELLED')
+    expect(await harness.eventTypes()).toContain('task.cancelled')
+    await harness.plane.close({ graceMs: 8_000 })
+    expect(harness.plane.lifecycle).toBe('closed')
+  }, 60_000)
+
+  it('gate que relata grupo vivo SEM pid: residuo nao sondavel falha fechado — close recusa, e continua recusando', async () => {
+    const semPid: GateExecutor = {
+      run: (request) =>
+        Promise.resolve({
+          id: 'gate_sem_pid',
+          gateId: request.gate.id,
+          scope: request.scope,
+          runId: request.runId,
+          attemptId: request.attemptId,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          status: 'PASS',
+          results: [
+            {
+              index: 0,
+              command: 'fake',
+              cwd: request.cwd,
+              required: true,
+              argv: ['fake'],
+              exitCode: 0,
+              signal: null,
+              timedOut: false,
+              groupTerminated: false,
+              pid: null,
+              durationMs: 1,
+              startedAt: new Date(),
+              finishedAt: new Date(),
+              truncated: false,
+              stdout: { text: '', truncated: false, digest: 'd', artifactDigest: 'd' },
+              stderr: { text: '', truncated: false, digest: 'd', artifactDigest: 'd' },
+            },
+          ],
+          skipped: [],
+          residualProcess: true,
+          cwd: request.cwd,
+          envAllow: [],
+        }),
+    }
+    h = await createHarness({
+      mission: MISSION,
+      gates: GATES,
+      safetyIntervalMs: 0,
+      gateRunner: semPid,
+    })
+    const harness = h
+    await harness.orchestrator.drain()
+    expect((await harness.task('T01')).status).toBe('DONE')
+
+    const primeiro = await fecha(harness)
+    expect(primeiro).toBeInstanceOf(ShutdownTimeoutError)
+    expect((primeiro as ShutdownTimeoutError).residualProcesses.join(' ')).toMatch(/gate .*sem pid/)
+    const segundo = await fecha(harness)
+    expect(segundo).toBeInstanceOf(ShutdownTimeoutError)
+    expect(harness.lease.held).toBe(true)
   }, 60_000)
 })
 

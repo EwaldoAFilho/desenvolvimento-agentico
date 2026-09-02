@@ -23,6 +23,7 @@ import { parseGatesFile, parseMissionFile, parseProjectFile, toMissionSpec } fro
 import type { AgentLogConfig } from '../agent-log.js'
 import { type ControlPlane, createControlPlane } from '../control-plane.js'
 import type { Orchestrator } from '../orchestrator.js'
+import type { GateExecutor } from '../types.js'
 import { type ConcurrencyProbe, pass, review, scriptedFactory, type StepFn } from './agents.js'
 import {
   GATE_ALWAYS_PASS,
@@ -66,6 +67,8 @@ export interface HarnessOptions {
    * quando quer provar que o encerramento so libera com a morte confirmada.
    */
   readonly processProbe?: GroupProbeDeps
+  /** Substitui o executor de gates: a suite fabrica resultados que um runner real nao produz. */
+  readonly gateRunner?: GateExecutor
 }
 
 export interface Harness {
@@ -183,6 +186,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       ),
       ...(options.agentLog === undefined ? {} : { agentLog: options.agentLog }),
       ...(options.processProbe === undefined ? {} : { processProbe: options.processProbe }),
+      ...(options.gateRunner === undefined ? {} : { gateRunner: options.gateRunner }),
       ...(options.safetyIntervalMs === undefined
         ? {}
         : { safetyIntervalMs: options.safetyIntervalMs }),
