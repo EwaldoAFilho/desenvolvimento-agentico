@@ -280,14 +280,19 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   ADR-0014) e é a mesma para `SIGINT`/`SIGTERM`, `agentic serve`, `mission start` e o
   `stop()` do serviço:
 
-  1. **parar de aceitar** — o plane recusa `open`, `createRun`, `approveMission`, `startRun`
-     e `adoptRecoverableRuns`; streams SSE são encerrados; a porta fecha; a descoberta sai;
+  1. **parar de aceitar** — `quiesce()` antes de o servidor parar: o plane recusa `open`,
+     `createRun`, `approveMission`, `startRun` e `adoptRecoverableRuns`, inclusive para a
+     requisição HTTP ainda em voo; depois streams SSE são encerrados, a porta fecha e a
+     descoberta sai;
   2. **cancelar e drenar** — por orquestrador: timer desligado, ticks recusados, despacho
      barrado; handles de agente cancelados (árvore inteira); gate e `workspaceSetup`
      abortados por sinal; a **cadeia do tick** e **todos** os jobs esperados, inclusive os
      que um tick em voo registrou depois do retrato inicial — com prazo;
   3. **colher** — integração e mission gate que terminaram durante a espera são gravados
-     (o merge já está na branch; a medição já foi feita). Desfecho de agente, gate de task e
+     (o merge já está na branch; a medição já foi feita), uma mensagem por vez e sem engolir
+     falha: transação que falha mantém a mensagem na caixa e faz o encerramento rejeitar. O
+     run só é derivado se já estava em `VERIFYING`; nunca sobe de `RUNNING` a `VERIFYING`
+     aqui, porque o mission gate não iniciaria (I12). Desfecho de agente, gate de task e
      revisão são descartados: registrá-los iniciaria trabalho novo, e quem adota reconcilia;
   4. **fechar** — escritas de artefato em voo terminam antes de o banco fechar;
   5. **devolver** — `release()` devolve `false` se um escritor recusou fechar, e o

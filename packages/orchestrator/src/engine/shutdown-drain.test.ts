@@ -353,6 +353,26 @@ describe('I15 — close so resolve quando nenhum efeito do dono pode mutar o pro
     }).toEqual({ status: 'COMPLETED', execucao: 'string', gates: 1 })
   }, 90_000)
 
+  it('quiesce: o plane recusa trabalho novo antes mesmo de comecar a drenar', async () => {
+    h = await createHarness({
+      mission: MISSION,
+      gates: { unit: [GATE_ALWAYS_PASS] },
+      safetyIntervalMs: 0,
+    })
+    const harness = h
+    expect(harness.plane.lifecycle).toBe('open')
+    harness.plane.quiesce()
+    expect(harness.plane.lifecycle).toBe('closing')
+    await expect(harness.plane.open(harness.runId)).rejects.toThrow(/encerrando/)
+    await expect(
+      harness.plane.startRun({ runId: harness.runId, actor: 'x', acceptWarnings: true }),
+    ).rejects.toThrow(/encerrando/)
+    // Leitura continua; e o close termina o que o quiesce comecou.
+    expect(harness.plane.persistence.queries.listRuns()).toHaveLength(1)
+    await harness.plane.close()
+    expect(harness.plane.lifecycle).toBe('closed')
+  })
+
   it('posse: outro dono so entra depois que o close resolveu', async () => {
     const portao: Portao = { entrou: deferred(), abre: deferred() }
     h = await createHarness({

@@ -219,6 +219,14 @@ export interface ControlPlane {
   open(runId: RunId): Promise<Orchestrator>
   adoptRecoverableRuns(): Promise<AdoptionResult>
   /**
+   * Primeira fase do encerramento, separada para poder acontecer ANTES de o servidor parar
+   * de atender: daqui em diante `open`, `createRun`, `approveMission`, `startRun` e
+   * `adoptRecoverableRuns` recusam. Uma requisicao HTTP ja em voo que chegue a uma dessas
+   * chamadas recebe a recusa em vez de criar trabalho novo no meio da drenagem (I15).
+   * Idempotente; `close` continua sendo quem drena e fecha.
+   */
+  quiesce(): void
+  /**
    * Encerra ESTE plane (I15): recusa trabalho novo, cancela o que e cancelavel, espera o que
    * ja comecou, registra o que chegou, e so entao fecha o banco. Se algum efeito nao parar
    * dentro do prazo, REJEITA com `ShutdownTimeoutError` e deixa o banco aberto — quem
@@ -701,6 +709,11 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     },
     get lifecycle(): ControlPlaneLifecycle {
       return lifecycle
+    },
+    quiesce: (): void => {
+      if (lifecycle !== 'open') return
+      closed = true
+      lifecycle = 'closing'
     },
     ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,

@@ -115,14 +115,31 @@ describe('runWorkspaceSetup', () => {
     repo = await createTestRepo()
     const destino = await target()
     const controller = new AbortController()
+    const pidFile = join(destino, 'pid')
     const inicio = Date.now()
     const pending = runWorkspaceSetup(
       destino,
       repo.root,
-      { commands: ['node -e "setTimeout(() => {}, 30000)"', 'node -e "process.exit(0)"'] },
+      {
+        commands: [
+          `node -e "require('node:fs').writeFileSync('${pidFile}', String(process.pid)); setTimeout(() => {}, 30000)"`,
+          'node -e "process.exit(0)"',
+        ],
+      },
       controller.signal,
     )
-    setTimeout(() => controller.abort('encerrando'), 150)
+    const limite = Date.now() + 10_000
+    while (
+      !(await lstat(pidFile).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      if (Date.now() > limite) throw new Error('o comando de setup nao comecou')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const pid = Number(await readFile(pidFile, 'utf8'))
+    controller.abort('encerrando')
     const error = await pending.then(
       () => undefined,
       (cause: unknown) => cause,
@@ -130,6 +147,19 @@ describe('runWorkspaceSetup', () => {
     expect(isWorkspaceError(error)).toBe(true)
     expect((error as WorkspaceError).message).toContain('cancelado')
     expect(Date.now() - inicio).toBeLessThan(10_000)
+    // O processo do comando morre com a recusa. `kill(pid, 0)` ainda responde para um zumbi
+    // que o kernel nao reaproveitou; a espera curta separa "morto" de "ainda nao colhido".
+    const vivo = (): boolean => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const fim = Date.now() + 3_000
+    while (vivo() && Date.now() < fim) await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(vivo()).toBe(false)
   })
 
   it('sinal ja abortado: nenhum comando chega a rodar', async () => {

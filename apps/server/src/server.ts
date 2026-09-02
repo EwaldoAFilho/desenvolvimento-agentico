@@ -278,6 +278,7 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
   const close = (options: ShutdownOptions = {}): Promise<void> =>
     shutdownControlPlane(
       {
+        stopAccepting: () => plane.quiesce(),
         stopServing: () => running.close(),
         stopEffects: (steps) => plane.close(steps),
         releaseOwnership: () => lease.release(),

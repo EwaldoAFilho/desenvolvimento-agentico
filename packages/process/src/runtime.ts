@@ -239,7 +239,29 @@ class ManagedProcess implements RunningProcess {
     if (pid === null || this.#status !== null) return
     this.#signalTree(pid, 'SIGTERM')
     const exited = await this.#waitForExit(this.#killGraceMs)
-    if (!exited) this.#signalTree(pid, 'SIGKILL')
+    if (!exited) {
+      this.#signalTree(pid, 'SIGKILL')
+      return
+    }
+    /**
+     * O lider saiu, mas o GRUPO pode nao ter saido: um descendente que ignora SIGTERM e nao
+     * segura os pipes (stdio: ignore) sobrevive ao `close` do lider — e continuaria mutando a
+     * worktree depois de `cancel()` resolver, depois do `close` do control plane e depois de
+     * outro dono assumir (I15). Medido em revisao. Cancelar e cancelar a arvore inteira: o que
+     * ainda estiver no grupo recebe SIGKILL agora. So `-pid`, nunca `pid`: o lider ja morreu, e
+     * um pid reaproveitado nao e nosso.
+     */
+    this.#killGroupRemainder(pid)
+  }
+
+  /** POSIX: o grupo tem o pid do lider como pgid enquanto houver um membro vivo. */
+  #killGroupRemainder(pid: number): void {
+    if (this.#platform === 'win32') return
+    try {
+      this.#kill(-pid, 'SIGKILL')
+    } catch {
+      // ESRCH: nao sobrou ninguem no grupo — e o desfecho normal.
+    }
   }
 
   /**

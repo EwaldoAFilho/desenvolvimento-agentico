@@ -33,6 +33,8 @@ export interface Fixture {
 export interface FixtureOptions {
   /** Transforma o `project.yaml` antes do commit inicial — ex.: remover um fornecedor. */
   readonly project?: (text: string) => string
+  /** Transforma o `mission.yaml` antes do commit inicial — ex.: reduzir a uma task. */
+  readonly mission?: (text: string) => string
 }
 
 async function readSources(root: string): Promise<FixtureSources> {
@@ -78,6 +80,10 @@ export async function materializeFixture(options: FixtureOptions = {}): Promise<
   if (options.project !== undefined) {
     const original = await readFile(join(root, PROJECT_PATH), 'utf8')
     await writeFile(join(root, PROJECT_PATH), options.project(original), 'utf8')
+  }
+  if (options.mission !== undefined) {
+    const original = await readFile(join(root, MISSION_PATH), 'utf8')
+    await writeFile(join(root, MISSION_PATH), options.mission(original), 'utf8')
   }
 
   const git = async (...args: string[]): Promise<string> => {

@@ -162,14 +162,16 @@ describe('mission start publica a API por padrao', () => {
       self.status = 'COMPLETED'
     }
     const spy = servePlaneSpy()
-    let waited = false
+    let subscribed = false
     const captured = captureDeps({
       cwd: workspace.dir,
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
+      // O sinal e ASSINADO desde o inicio (Ctrl+C com agente em voo tem de encerrar pelo
+      // caminho gracioso), mas nunca chega: o comando tem de terminar mesmo assim.
       waitForShutdown: () => {
-        waited = true
-        return Promise.resolve()
+        subscribed = true
+        return new Promise<void>(() => undefined)
       },
     })
 
@@ -180,7 +182,7 @@ describe('mission start publica a API por padrao', () => {
 
     expect(result.exitCode).toBe(EXIT_OK)
     expect(orchestrator.drains).toBe(1)
-    expect(waited).toBe(false)
+    expect(subscribed).toBe(true)
     // A porta e desligada junto com o processo: nada de registro apontando para o vazio.
     expect(spy.published.closed()).toBe(1)
   })
@@ -311,6 +313,8 @@ describe('run pausado nao derruba o control plane', () => {
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
       pausePollMs: 5,
+      // O Ctrl+C chega DEPOIS de o run pausar: o aviso de pausa precisa ter saido antes.
+      waitForShutdown: () => new Promise<void>((resolve) => setTimeout(resolve, 30)),
     })
 
     const result = await missionStartCommand(
@@ -382,6 +386,8 @@ describe('o default aparece na linha de comando', () => {
       cwd: workspace.dir,
       controlPlane: () => planeOf(specHash, orchestrator),
       servePlane: spy.serve,
+      // `--serve` fica no ar ate o sinal: o teste manda o sinal na hora.
+      waitForShutdown: () => Promise.resolve(),
     })
 
     const code = await main(

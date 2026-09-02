@@ -378,24 +378,29 @@ export class Orchestrator {
     this.stop()
     this.#closed = true
     if (!this.#abort.signal.aborted) this.#abort.abort('control plane encerrando')
-    for (const entry of [...this.#inflight.values()]) {
-      if (entry.handle === undefined) continue
-      await entry.handle.cancel('control plane encerrado').catch(() => undefined)
-    }
-    if (!(await this.#settle(deadline))) {
-      throw new ShutdownTimeoutError({
+    const timeout = (): ShutdownTimeoutError =>
+      new ShutdownTimeoutError({
         runId: this.#runId,
         graceMs,
         pendingJobs: this.#jobs.size,
         chainBusy: this.#chainBusy,
         inflightAttempts: [...this.#inflight.keys()],
       })
-    }
-    try {
-      await this.#collect()
-    } catch (error) {
-      this.#errors.push(error)
-    }
+    // Cancelamentos em paralelo e DENTRO do prazo: um handle cujo cancel nunca resolve nao
+    // pode pendurar o encerramento sem prazo — ele o faz falhar, com a posse retida.
+    const cancels = [...this.#inflight.values()]
+      .map((entry) => entry.handle)
+      .filter((handle) => handle !== undefined)
+      .map((handle) => handle.cancel('control plane encerrado').catch(() => undefined))
+    if (!(await withDeadline(Promise.all(cancels), deadline))) throw timeout()
+    if (!(await this.#settle(deadline))) throw timeout()
+    // Colher e gravar. Falha aqui NAO e engolida: a mensagem fica na caixa, o encerramento
+    // rejeita, a posse fica retida e o proximo `abandon` tenta gravar de novo — nunca um
+    // merge na branch com a task ainda INTEGRATING no banco.
+    const colheita = this.#collect()
+    colheita.catch(() => undefined)
+    if (!(await withDeadline(colheita, deadline))) throw timeout()
+    await colheita
     this.#inflight.clear()
     this.#inbox = []
   }
@@ -422,13 +427,29 @@ export class Orchestrator {
    * sem reconciliar, promover ou despachar.
    */
   async #collect(): Promise<void> {
-    if (!this.#inbox.some((message) => COLLECTABLE_AFTER_CLOSE.has(message.kind))) return
+    const colhivel = (message: Message): boolean => COLLECTABLE_AFTER_CLOSE.has(message.kind)
+    if (!this.#inbox.some(colhivel)) return
     await this.#enqueue(async () => {
       const state = await this.#load()
       this.#status = state.run.status
       if (isTerminalRunStatus(state.run.status)) return
-      await this.#drainInbox(state)
-      await this.#derive(state)
+      // Uma por vez e SEM `#guard`: a mensagem so sai da caixa depois de gravada. Uma
+      // transacao que falhe (disco, banco) propaga, e o encerramento nao resolve.
+      for (;;) {
+        const index = this.#inbox.findIndex(colhivel)
+        if (index === -1) break
+        const message = this.#inbox[index]
+        if (message === undefined) break
+        await this.#handle(state, message)
+        this.#inbox.splice(index, 1)
+      }
+      /**
+       * I12: `#derive` so CONCLUI um run que ja esta em VERIFYING (mission gate colhido). Ele
+       * nunca leva RUNNING a VERIFYING aqui — o mission gate nao iniciaria (fechado), e o
+       * disco ficaria com um run em VERIFYING sem gate em voo e sem resultado. Com todas as
+       * tasks DONE e o run RUNNING, o primeiro tick do proximo dono deriva e inicia o gate.
+       */
+      if (state.run.status === 'VERIFYING') await this.#derive(state)
       this.#status = state.run.status
     })
   }

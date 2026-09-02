@@ -150,6 +150,7 @@ describe('mission start avisa sobre o modo sem HTTP', () => {
     let closed = false
     const captured = captureDeps({
       cwd: workspace.dir,
+      waitForShutdown: () => Promise.resolve(),
       controlPlane: () => plane,
       servePlane: (input) => {
         received = input.plane
@@ -182,6 +183,7 @@ describe('mission start avisa sobre o modo sem HTTP', () => {
     const drained = { value: false }
     const captured = captureDeps({
       cwd: workspace.dir,
+      waitForShutdown: () => Promise.resolve(),
       controlPlane: () => startPlane(specHash, drained),
       servePlane: () => Promise.reject(new Error('EADDRINUSE')),
     })

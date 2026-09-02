@@ -47,6 +47,10 @@ async function run(): Promise<void> {
     exit: () => undefined,
     waitForShutdown: () =>
       new Promise<void>((resolve) => {
+        // O vite-node instala um tratador de SIGTERM que sai na hora; em producao o binario
+        // roda no Node puro. Removido para o sinal medir o produto, nao o harness.
+        nodeProcess.removeAllListeners('SIGTERM')
+        nodeProcess.removeAllListeners('SIGINT')
         nodeProcess.once('SIGTERM', () => resolve())
         nodeProcess.once('SIGINT', () => resolve())
       }),

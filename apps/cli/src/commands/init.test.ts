@@ -99,6 +99,7 @@ describe('serve', () => {
     let closed = false
     const captured = captureDeps({
       cwd: root,
+      waitForShutdown: () => Promise.resolve(),
       bootServer: (config) => {
         bootCalls.push(config)
         return Promise.resolve({

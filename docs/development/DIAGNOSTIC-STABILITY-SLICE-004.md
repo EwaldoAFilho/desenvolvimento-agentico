@@ -109,7 +109,25 @@ Todos sobre código de produção, sem agente real, com o ponto de espera contro
 | serviço | start idempotente e concorrente; stop idempotente e concorrente; restart troca de dono; projetos independentes; `stop` que falha → `FAILED` com posse retida e `start` recusado; `stop` seguinte devolve |
 | entre processos | SIGINT/SIGTERM com run `RUNNING`: A drena, posse livre, descoberta removida, B adota, tentativa antiga `INTERRUPTED`, run anda. SIGKILL: B adota e reconcilia. Mission gate que ignora SIGTERM: a posse só fica livre **depois** de `close` de A resolver (≥ 1,5 s depois do sinal), gate morto, nada persistido, B conclui com uma execução. Fase 21 (SIGKILL com gate em voo): B refaz do zero, uma execução; o gate órfão de A termina sozinho |
 
-## F. Problemas registrados, não corrigidos
+## F. Revisão independente — ciclo 1 (Codex, somente leitura)
+
+Veredito inicial: **FAIL**, com dois BLOCKER e três MAJOR. Todos reais, todos fechados no
+mesmo ciclo, cada um com prova:
+
+| Achado | Onde estava | Fecho | Prova |
+| --- | --- | --- | --- |
+| **BLOCKER** — descendente que ignora SIGTERM sobrevive a `cancel()`: o runtime só escalava a SIGKILL se o *líder* não tivesse assentado, e o líder assenta pelo `close` dos pipes mesmo com um neto vivo em `stdio: ignore` | `packages/process/src/runtime.ts` `#terminate` | depois de o líder sair, o resto do grupo recebe SIGKILL (`-pid`, nunca `pid`); `workspaceSetup` derruba a árvore e espera o `close` (teto de 2 s) antes de responder | `tree-kill.test.ts`: líder sai no SIGTERM, neto ignora — grupo morto, marcador nunca escrito; `setup.test.ts`: o pid do comando está morto quando a recusa chega |
+| **BLOCKER** — `mission start` só assinava SIGINT/SIGTERM quando o run pausava; com agente, gate ou setup em voo o Node matava o processo, o SO soltava a posse e o efeito continuava | `apps/cli/src/foreground.ts` | o supervisor assina desde o início e corre o sinal contra o `drain`; ao vencer, para o loop e devolve ao `shutdownControlPlane` | `foreground-signal.test.ts` (e2e, CLI real, processo separado): SIGINT e SIGTERM com `workspaceSetup` em voo — CLI termina, setup morto, posse livre, nenhuma task `RUNNING` |
+| **MAJOR** — requisição HTTP em voo ainda chegava a `createRun`/`approveMission` durante `app.close()`, antes de o plane recusar | `apps/server/src/ownership.ts` | passo 0, `stopAccepting` → `plane.quiesce()` antes de `stopServing` | `ownership.test.ts` (ordem `aceitar, servidor, efeitos, posse`); `shutdown-drain.test.ts` (`quiesce` recusa `open`/`startRun`, leitura segue, `close` termina) |
+| **MAJOR** — falha ao gravar a integração colhida era engolida por `#guard`: merge na branch, task `INTEGRATING` no banco, posse devolvida | `Orchestrator.#collect` | uma mensagem por vez, sem `#guard`; falha propaga, a mensagem fica na caixa, `close` rejeita, posse retida, o próximo `close` grava | `integration-in-flight.test.ts`: `saveTaskRun(DONE)` falha uma vez — `close` rejeita, lease retido, outro processo não adquire, o `close` seguinte grava `DONE` |
+| **MAJOR** — colher a última integração levava o run a `VERIFYING` sem gate em voo nem resultado (I12) | `Orchestrator.#collect` | `#derive` só roda no collect quando o run já está em `VERIFYING`; `RUNNING` com todas as tasks `DONE` fica assim para o próximo dono derivar | `integration-in-flight.test.ts`: task `DONE`, run `RUNNING` depois do close; o próximo dono deriva, o mission gate roda uma vez, T01 não é refeita |
+| MINOR — `graceMs` não cobria os `cancel()` nem a colheita | `Orchestrator.#abandon` | cancelamentos em paralelo sob `withDeadline`; colheita sob `withDeadline`; vencer o prazo é `ShutdownTimeoutError` | `shutdown-drain.test.ts` continua verde; a semântica do timeout está em ADR-0014 |
+| NOTA — colheita grava artefato e descarta worktree | — | documentado: são efeitos aguardados dentro da cadeia, não trabalho novo | — |
+
+Limite novo registrado (Windows): o abort do `workspaceSetup` mata só o shell, e o SIGKILL ao
+grupo remanescente é POSIX (ADR-0014).
+
+## G. Problemas registrados, não corrigidos
 
 | | Descrição |
 | --- | --- |

@@ -26,7 +26,54 @@ afterAll(() => {
   rmSync(workDir, { recursive: true, force: true })
 })
 
+/**
+ * Pai que sai educadamente no SIGTERM, deixando um neto que IGNORA SIGTERM e nao segura
+ * pipe nenhum. E o descendente que sobrevivia ao `cancel()`: o lider assentava, o grupo nao.
+ */
+const parentExitsGrandchildIgnoresTerm = (grandchildDelayMs: number): string =>
+  [
+    'const cp = require("node:child_process")',
+    `const neto = 'process.on("SIGTERM", () => {}); setTimeout(() => { require("node:fs").writeFileSync(process.env.TARGET, "neto") }, ${grandchildDelayMs})'`,
+    'cp.spawn(process.execPath, ["-e", neto], { stdio: "ignore", env: process.env })',
+    'process.on("SIGTERM", () => process.exit(0))',
+    'process.stdout.write("pai-pronto\\n")',
+    'setInterval(() => {}, 1000)',
+  ].join(';\n')
+
 describe('tree-kill', () => {
+  it('cancel: lider que sai no SIGTERM nao deixa neto que o ignora vivo (I15)', async () => {
+    const target = join(workDir, 'neto-teimoso.txt')
+    const running = spawnStreaming(
+      {
+        command: NODE,
+        args: ['-e', parentExitsGrandchildIgnoresTerm(1_500)],
+        cwd: workDir,
+        env: { TARGET: target },
+      },
+      { killGraceMs: 300 },
+    )
+    for await (const line of running.stdout()) {
+      if (line.includes('pai-pronto')) break
+    }
+    const pid = running.pid
+    if (pid === null) throw new Error('sem pid')
+    await running.cancel('encerrando')
+    // O grupo inteiro tem de estar morto: `kill(-pgid, 0)` so responde para grupo vivo.
+    const grupoVivo = ((): boolean => {
+      try {
+        nodeProcess.kill(-pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    })()
+    await delay(2_000)
+    expect({ grupoVivo, netoEscreveu: existsSync(target) }).toEqual({
+      grupoVivo: false,
+      netoEscreveu: false,
+    })
+  }, 20_000)
+
   it('controle: sem timeout, o neto chega a escrever o arquivo', async () => {
     const target = join(workDir, 'controle.txt')
     const result = await runCaptured({

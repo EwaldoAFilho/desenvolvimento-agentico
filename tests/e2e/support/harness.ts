@@ -21,6 +21,8 @@ export interface HarnessOptions {
   readonly step?: StepFn
   /** Transforma o project.yaml do fixture antes do commit inicial. */
   readonly project?: (text: string) => string
+  /** Transforma o mission.yaml do fixture antes do commit inicial. */
+  readonly mission?: (text: string) => string
   readonly probe?: ConcurrencyProbe
   /** Ausente = so tick por evento (usado quando o teste dirige o loop com `drain`). */
   readonly safetyIntervalMs?: number
@@ -88,9 +90,10 @@ const sleep = (ms: number): Promise<void> =>
  * rede, sem quota.
  */
 export async function createMissionHarness(options: HarnessOptions = {}): Promise<MissionHarness> {
-  const fixture = await materializeFixture(
-    options.project === undefined ? {} : { project: options.project },
-  )
+  const fixture = await materializeFixture({
+    ...(options.project === undefined ? {} : { project: options.project }),
+    ...(options.mission === undefined ? {} : { mission: options.mission }),
+  })
   const sources = fixture.sources
   const step = options.step ?? missionStep
 

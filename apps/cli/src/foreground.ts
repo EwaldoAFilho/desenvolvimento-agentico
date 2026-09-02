@@ -6,7 +6,11 @@ export const DEFAULT_PAUSE_POLL_MS = 200
 export type ForegroundOutcome = 'ended' | 'shutdown'
 
 export interface ForegroundOptions {
-  /** Ctrl+C / SIGTERM. So e assinado quando o run pausa: nada de handler ocioso. */
+  /**
+   * Ctrl+C / SIGTERM. Assinado desde o INICIO: com agente, gate ou integracao em voo, o sinal
+   * precisa levar ao encerramento gracioso — sem tratador, o Node mata o processo, o SO
+   * solta a posse e o agente (em outro grupo de processos) continua escrevendo (I15).
+   */
   waitForShutdown(): Promise<void>
   readonly pollMs?: number
   /** Avisa o humano de que o processo ficou no ar de proposito. */
@@ -36,24 +40,36 @@ export async function superviseForeground(
   options: ForegroundOptions,
 ): Promise<ForegroundOutcome> {
   const pollMs = options.pollMs ?? DEFAULT_PAUSE_POLL_MS
-  let shutdown: Promise<void> | undefined
   let stopped = false
+  const shutdown = options.waitForShutdown().then(() => {
+    stopped = true
+  })
+  const encerrar = (): ForegroundOutcome => {
+    // Desliga o loop; quem chamou encerra o plane pela primitiva de encerramento, que drena
+    // e cancela o que estiver em voo. O `drain` pendente termina sozinho quando o
+    // orquestrador fechar.
+    orchestrator.stop()
+    return 'shutdown'
+  }
 
   for (;;) {
-    await orchestrator.drain()
+    const drained = orchestrator.drain()
+    // Se o sinal vencer a corrida, ninguem mais espera este `drain`: a rejeicao dele (se
+    // houver) nao pode virar `unhandledRejection`.
+    drained.catch(() => undefined)
+    const venceu = await Promise.race([
+      drained.then(() => 'drained' as const),
+      shutdown.then(() => 'shutdown' as const),
+    ])
+    if (venceu === 'shutdown' || stopped) return encerrar()
     if (orchestrator.status !== 'PAUSED') return 'ended'
 
     options.onPaused?.()
-    if (shutdown === undefined) {
-      shutdown = options.waitForShutdown().then(() => {
-        stopped = true
-      })
-    }
     // Espera curta e repetida: `resume` chega por HTTP e muda o status do orquestrador.
     while (!stopped && orchestrator.status === 'PAUSED') {
       await Promise.race([shutdown, delay(pollMs)])
     }
-    if (stopped) return 'shutdown'
+    if (stopped) return encerrar()
     options.onResumed?.()
   }
 }

@@ -126,14 +126,30 @@ export function spawnOwner(
   return new Promise<SpawnedOwner>((done, fail) => {
     const finish = (report: OwnerReport): void => {
       clearTimeout(timer)
+      // TRACE-TEMP
+      require('node:fs').appendFileSync(
+        '/tmp/agentic-trace.log',
+        `${new Date().toISOString()} [${process.pid}] spawnOwner(${options.label}) pid=${child.pid} reportou ok=${report.ok}\n`,
+      )
       done({
         label: options.label,
         report,
         pid: child.pid ?? -1,
         stop: async (signal = 'SIGTERM'): Promise<StopReport> => {
-          child.kill(signal)
+          const trace = (msg: string): void => {
+            // TRACE-TEMP
+            require('node:fs').appendFileSync(
+              '/tmp/agentic-trace.log',
+              `${new Date().toISOString()} [${process.pid}] stop(${options.label}, pid=${child.pid}) ${msg} exitCode=${child.exitCode} signalCode=${child.signalCode} killed=${child.killed}\n`,
+            )
+          }
+          trace('antes do kill')
+          const sent = child.kill(signal)
+          trace(`kill(${signal}) -> ${sent}`)
           await ended(child)
+          trace('ended')
           await drained(out)
+          trace('drained')
           return ultimaLinha()
         },
         kill: async (): Promise<void> => {

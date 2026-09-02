@@ -209,6 +209,17 @@ describe('ordem do encerramento', () => {
     expect(p.ordem).toEqual(['servidor', 'efeitos', 'posse'])
   })
 
+  it('parar de ACEITAR vem antes de parar de ATENDER: requisicao em voo nao cria trabalho', async () => {
+    const p = passos()
+    await shutdownControlPlane({
+      ...p.steps,
+      stopAccepting: (): void => {
+        p.ordem.push('aceitar')
+      },
+    })
+    expect(p.ordem).toEqual(['aceitar', 'servidor', 'efeitos', 'posse'])
+  })
+
   it('servidor que nao fecha nao impede os efeitos de parar, e a falha nao vira silencio', async () => {
     const p = passos({ servidor: new Error('socket preso') })
     await expect(shutdownControlPlane(p.steps)).rejects.toThrow('socket preso')

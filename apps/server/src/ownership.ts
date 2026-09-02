@@ -85,7 +85,13 @@ export interface ShutdownOptions {
 }
 
 export interface ShutdownSteps {
-  /** Para de aceitar comando novo e retira o endereco do mapa. */
+  /**
+   * Fecha a porta de entrada do control plane ANTES de o servidor parar: `app.close()`
+   * espera as requisicoes em voo terminarem, e uma delas ainda podia chegar a `createRun`
+   * ou `approveMission` durante o encerramento. Sincrono e idempotente.
+   */
+  stopAccepting?(): void
+  /** Para de atender (espera as requisicoes em voo) e retira o endereco do mapa. */
   stopServing(): Promise<void>
   /**
    * Abandona orquestradores (cancela, drena, colhe) e fecha o banco: e aqui que os EFEITOS
@@ -119,9 +125,12 @@ export class OwnershipRetainedError extends Error {
  * SIGINT/SIGTERM, `mission start` em primeiro plano, o `stop` do servico e o futuro
  * `Stop` da extensao. Dois caminhos diferentes seriam duas chances de errar a ordem.
  *
- * Quatro regras, cada uma com um modo de falha atras:
+ * Cinco regras, cada uma com um modo de falha atras:
  *
- * 1. Parar de atender vem primeiro, mas NAO pode bloquear o resto: um socket que se recusa a
+ * 0. Parar de ACEITAR vem antes de parar de ATENDER: o plane recusa trabalho novo enquanto
+ *    o servidor ainda espera as requisicoes em voo — sem isso uma delas criava run no meio
+ *    da drenagem.
+ * 1. Parar de atender vem em seguida, mas NAO pode bloquear o resto: um socket que se recusa a
  *    fechar nao e razao para deixar loop despachando agente. A falha e guardada e relancada
  *    no fim, para nao virar silencio.
  * 2. Se os EFEITOS nao pararem, a posse NAO e devolvida. Entregar o projeto com loop andando
@@ -135,6 +144,7 @@ export async function shutdownControlPlane(
   steps: ShutdownSteps,
   options: ShutdownOptions = {},
 ): Promise<void> {
+  steps.stopAccepting?.()
   const falhaAoParar = await steps.stopServing().then(
     () => undefined,
     (error: unknown) => error,

@@ -184,6 +184,7 @@ export async function missionStartCommand(
     let published: BootedServer | undefined
     const encerrar = (): Promise<void> =>
       shutdownControlPlane({
+        stopAccepting: () => plane.quiesce(),
         stopServing: async (): Promise<void> => {
           await published?.close()
         },

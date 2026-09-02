@@ -3,7 +3,7 @@ import { chmod, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import nodeProcess from 'node:process'
-import { openPersistence } from '@agentic/persistence'
+import { acquireControlPlaneOwnership, openPersistence } from '@agentic/persistence'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createMissionHarness, type MissionHarness } from './support/harness.js'
 
@@ -152,3 +152,136 @@ describe.skipIf(nodeProcess.platform === 'win32')('D6 — integracao em voo no e
     }
   }, 180_000)
 })
+
+/** Reduz a missao do fixture a UMA task sem mission gate: a ultima integracao e a primeira. */
+function missaoDeUmaTask(missionText: string): string {
+  const inicio = missionText.indexOf('  - id: T02')
+  const fim = missionText.indexOf('missionGate:')
+  if (inicio === -1 || fim === -1) throw new Error('fixture: nao achei as tasks da missao')
+  return missionText.slice(0, inicio) + missionText.slice(fim).replace('missionGate: mission', '')
+}
+
+describe.skipIf(nodeProcess.platform === 'win32')(
+  'colheita no encerramento (I12 e falha de escrita)',
+  () => {
+    let harness: MissionHarness | undefined
+
+    afterAll(async () => {
+      await harness?.cleanup().catch(() => undefined)
+    })
+
+    it('colher a ULTIMA integracao nao leva o run a VERIFYING: fica RUNNING para o proximo dono derivar', async () => {
+      await rm(entrou, { force: true })
+      await rm(segue, { force: true })
+      harness = await createMissionHarness({
+        project: comAgentesInProcess,
+        mission: missaoDeUmaTask,
+      })
+      const h = harness
+      await h.start({ acceptWarnings: true })
+      h.orchestrator.start()
+      await esperar('a integracao entrar no rebase', () => existe(entrou))
+      const closing = h.plane.close()
+      await sleep(200)
+      await writeFile(segue, '', 'utf8')
+      await closing
+
+      const frio = openPersistence({ baseDir: join(h.root, '.agentic'), mode: 'readonly' })
+      try {
+        const run = await frio.runs.loadRun(h.runId)
+        const tasks = await frio.runs.loadTaskRuns(h.runId)
+        // Task DONE (o merge foi gravado) e run AINDA RUNNING: nao ha gate em voo para
+        // sustentar um VERIFYING, entao ele nao e escrito (I12).
+        expect({ run: run?.status, tasks: tasks.map((t) => t.status) }).toEqual({
+          run: 'RUNNING',
+          tasks: ['DONE'],
+        })
+      } finally {
+        frio.close()
+      }
+
+      // O proximo dono deriva no primeiro tick: o run sai de RUNNING, o mission gate roda UMA
+      // vez sob ele (o do fixture confere os oito modulos e reprova com uma task so — o
+      // veredito do gate nao esta em teste aqui), e a task integrada NAO e refeita.
+      harness = await h.reopen()
+      await harness.orchestrator.drain()
+      const final = await harness.run()
+      const missionGates = (await harness.events()).filter(
+        (event) => event.type === 'gate.started' && event.payload.scope === 'mission',
+      )
+      expect({
+        terminal: ['COMPLETED', 'FAILED'].includes(final.status),
+        gates: missionGates.length,
+        tentativasT01: (await harness.attempts('T01')).length,
+      }).toEqual({ terminal: true, gates: 1, tentativasT01: 1 })
+    }, 180_000)
+
+    it('falha ao gravar a integracao colhida NAO e engolida: close rejeita, o proximo close grava', async () => {
+      await harness?.cleanup().catch(() => undefined)
+      await rm(entrou, { force: true })
+      await rm(segue, { force: true })
+      harness = await createMissionHarness({
+        project: comAgentesInProcess,
+        mission: missaoDeUmaTask,
+      })
+      const h = harness
+      await h.start({ acceptWarnings: true })
+      h.orchestrator.start()
+      await esperar('a integracao entrar no rebase', () => existe(entrou))
+
+      // A transacao que marca a task DONE falha UMA vez — disco cheio, banco ocupado.
+      const runs = h.plane.persistence.runs
+      const original = runs.withTransaction.bind(runs)
+      let falhas = 0
+      const { vi } = await import('vitest')
+      vi.spyOn(runs, 'withTransaction').mockImplementation((work) =>
+        original(async (uow) => {
+          const proxy = new Proxy(uow, {
+            get(target, prop) {
+              const bind = (value: unknown): unknown =>
+                typeof value === 'function'
+                  ? (value as (...args: unknown[]) => unknown).bind(target)
+                  : value
+              if (prop === 'saveTaskRun') {
+                const save = bind(Reflect.get(target, prop, target)) as (task: {
+                  readonly status: string
+                }) => Promise<void>
+                return (task: { readonly status: string }) => {
+                  if (task.status === 'DONE' && falhas === 0) {
+                    falhas += 1
+                    throw new Error('disco cheio ao gravar a task DONE')
+                  }
+                  return save(task)
+                }
+              }
+              return bind(Reflect.get(target, prop, target))
+            },
+          })
+          return work(proxy as typeof uow)
+        }),
+      )
+
+      const primeiro = h.plane.close()
+      await sleep(200)
+      await writeFile(segue, '', 'utf8')
+      await expect(primeiro).rejects.toThrow('disco cheio')
+      // Posse retida: o lease ainda esta com este processo, e o plane continua "closing".
+      expect(h.lease.held).toBe(true)
+      expect(h.plane.lifecycle).toBe('closing')
+      const outro = acquireControlPlaneOwnership({ baseDir: join(h.root, '.agentic') })
+      expect(outro.ok).toBe(false)
+
+      // O close seguinte grava o que ficou na caixa e termina limpo.
+      await h.plane.close()
+      expect(h.plane.lifecycle).toBe('closed')
+      vi.restoreAllMocks()
+      const frio = openPersistence({ baseDir: join(h.root, '.agentic'), mode: 'readonly' })
+      try {
+        const tasks = await frio.runs.loadTaskRuns(h.runId)
+        expect(tasks.map((t) => t.status)).toEqual(['DONE'])
+      } finally {
+        frio.close()
+      }
+    }, 180_000)
+  },
+)

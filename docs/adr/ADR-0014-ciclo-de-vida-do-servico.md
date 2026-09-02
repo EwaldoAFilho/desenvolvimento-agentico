@@ -35,13 +35,18 @@ todo caminho de saída — `agentic serve` sob `SIGINT`/`SIGTERM`, `mission star
 plano, `agentic-server` e o `stop()` do serviço:
 
 ```text
-1. PARAR DE ACEITAR   plane recusa open/createRun/approve/start/adopt; streams SSE encerrados;
-                      porta fechada; descoberta removida
+1. PARAR DE ACEITAR   plane.quiesce() ANTES de o servidor parar: open/createRun/approve/start/
+                      adopt recusam, inclusive para a requisicao HTTP que ainda esta em voo;
+                      depois streams SSE encerrados, porta fechada, descoberta removida
 2. CANCELAR/DRENAR    por orquestrador: timer desligado, ticks recusados, despacho barrado;
                       handles de agente cancelados (tree-kill); gate e workspaceSetup abortados
                       por AbortSignal; a CADEIA do tick e TODOS os jobs esperados — inclusive
                       os registrados depois do retrato inicial — com prazo
-3. COLHER             integração e mission gate que terminaram durante a espera são gravados
+3. COLHER             integração e mission gate que terminaram durante a espera são gravados,
+                      uma mensagem por vez e SEM engolir falha: transação que falha mantém a
+                      mensagem na caixa e faz o close rejeitar (posse retida; o próximo close
+                      grava). O run só é DERIVADO se já estava em VERIFYING — nunca sobe de
+                      RUNNING a VERIFYING aqui, porque o mission gate não iniciaria (I12)
 4. FECHAR             escritas de artefato em voo terminam (settle); só então o banco fecha
 5. DEVOLVER           lease.release() — e ele devolve `false` se algum escritor recusou fechar
 ```
@@ -56,7 +61,7 @@ Um `close` seguinte tenta de novo.
 
 | Efeito | Cancelável? | Decisão |
 | --- | --- | --- |
-| processo de agente (executor, revisor) | sim, pelo handle | cancelado na hora; resultado descartado; a tentativa fica `RUNNING`/`REVIEW` para o próximo dono reconciliar como `INTERRUPTED` |
+| processo de agente (executor, revisor) | sim, pelo handle | cancelado na hora; resultado descartado; a tentativa fica `RUNNING`/`REVIEW` para o próximo dono reconciliar como `INTERRUPTED`. Cancelar é cancelar a **árvore**: se o líder sai no SIGTERM mas um descendente o ignora (medido em revisão), o resto do grupo recebe SIGKILL |
 | processo de agente nascido **durante** o encerramento | sim | `#dispatchExecutor`/`#dispatchReviewer` cancelam o handle assim que `start()` devolve, e não observam |
 | gate de task, mission gate, `workspaceSetup` | sim, por `AbortSignal` (SIGTERM, depois SIGKILL) | cancelado; gate cancelado **não vira resultado** — o próximo dono refaz (I12, ao menos uma vez) |
 | integração (`git rebase` + fast-forward) | não | esperada (segundos); o resultado é **colhido** e gravado: a task vira `DONE` antes de a posse sair |
@@ -109,6 +114,10 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
   está sendo atendido. Os streams são encerrados explicitamente, antes de `app.close()`,
   porque o Fastify fecha o socket do servidor **antes** dos ganchos `onClose` registrados na
   montagem (ordem LIFO) — medido.
+- **Assinar o sinal só quando o run pausa (`mission start`).** Era o desenho anterior, e a
+  revisão o mediu como blocker: com agente, gate ou `workspaceSetup` em voo não havia
+  tratador, o Node matava o processo, o SO soltava a posse e o efeito continuava. O
+  supervisor de primeiro plano assina desde o início e corre o sinal contra o `drain`.
 - **Esperar os agentes terminarem naturalmente antes de cancelar.** Tentativas não são
   retomadas depois de um reinício (STATE-MACHINES 1.4); esperar minutos por um resultado
   que será descartado só atrasa o `Stop`. Cancelar na hora é honesto.
@@ -143,6 +152,10 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
 
 ### Limites declarados
 
+- **Windows.** O tree-kill do runtime de processo usa `taskkill /T`, mas o abort de
+  `workspaceSetup` (shell) mata só o processo do shell (`child.kill('SIGKILL')`), não a
+  árvore, e o SIGKILL ao grupo remanescente é POSIX. Windows não está na suíte; fica
+  registrado, não resolvido.
 - **`SIGKILL` não drena.** A posse morre com o processo (ADR-0013), o próximo dono adota e
   reconcilia. Mas um comando de gate ou de `workspaceSetup` que o processo morto havia
   iniciado fica **órfão até terminar sozinho**: ele não alcança o banco (a conexão morreu com

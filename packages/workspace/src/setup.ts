@@ -46,6 +46,8 @@ export const DEFAULT_WORKSPACE_SETUP_TIMEOUT_MS = 600_000
 export const EMPTY_SETUP_RESULT: WorkspaceSetupResult = { linked: [], skipped: [], commands: [] }
 
 const OUTPUT_TAIL_BYTES = 8192
+/** Espera maxima pelo `close` do shell depois de derrubar a arvore. */
+const KILL_SETTLE_MS = 2_000
 
 export function normalizeSetupCommand(
   command: string | WorkspaceSetupCommand,
@@ -149,22 +151,33 @@ function runShell(
     child.stderr?.on('data', collect)
 
     let timer: NodeJS.Timeout | undefined
-    const onAbort = (): void => {
-      aborted = true
-      killTree()
-      settle(null)
-    }
+    let derrubada: NodeJS.Timeout | undefined
     const settle = (exitCode: number | null): void => {
       if (settled) return
       settled = true
       if (timer !== undefined) clearTimeout(timer)
+      if (derrubada !== undefined) clearTimeout(derrubada)
       signal?.removeEventListener('abort', onAbort)
       resolvePromise({ exitCode, timedOut, aborted, durationMs: Date.now() - startedAt, output })
     }
+    /**
+     * Derrubar a arvore e ESPERAR o `close` do shell antes de responder: resolver na hora
+     * deixaria o chamador seguir com um processo ainda morrendo. O teto existe para um
+     * descendente que segure os pipes nao pendurar o encerramento — passado ele, o grupo ja
+     * recebeu SIGKILL e o que sobrar nao sobrevive.
+     */
+    const derrubar = (): void => {
+      killTree()
+      derrubada = setTimeout(() => settle(null), KILL_SETTLE_MS)
+      derrubada.unref?.()
+    }
+    const onAbort = (): void => {
+      aborted = true
+      derrubar()
+    }
     timer = setTimeout(() => {
       timedOut = true
-      killTree()
-      settle(null)
+      derrubar()
     }, timeoutMs)
     timer.unref?.()
     signal?.addEventListener('abort', onAbort, { once: true })
