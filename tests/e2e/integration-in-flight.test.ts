@@ -117,7 +117,6 @@ describe.skipIf(nodeProcess.platform === 'win32')('D6 — integracao em voo no e
     ])
     await writeFile(segue, '', 'utf8')
     await closing
-    h.lease.release()
 
     // O plane fechou: o disco e lido por uma conexao propria, somente leitura.
     const frio = openPersistence({ baseDir: join(h.root, '.agentic'), mode: 'readonly' })
@@ -140,12 +139,16 @@ describe.skipIf(nodeProcess.platform === 'win32')('D6 — integracao em voo no e
     proximo.orchestrator.start()
     await esperar(
       'o run progredir sob o novo dono',
-      async () => (await proximo.tasks()).some((task) => task.taskId === 'T03' && task.status !== 'PENDING'),
+      async () =>
+        (await proximo.tasks()).some((task) => task.taskId === 'T03' && task.status !== 'PENDING'),
       60_000,
     )
     proximo.orchestrator.stop()
     for (const taskId of feitas) {
-      expect((await proximo.attempts(taskId)).length, `${taskId} nao pode ganhar tentativa nova`).toBe(1)
+      expect(
+        (await proximo.attempts(taskId)).length,
+        `${taskId} nao pode ganhar tentativa nova`,
+      ).toBe(1)
     }
   }, 180_000)
 })

@@ -72,12 +72,24 @@ async function main(): Promise<void> {
     })),
   })
 
+  // O `vite-node` que executa este processo instala um tratador de SIGTERM que sai na hora
+  // (`process.exit`), pulando o encerramento gracioso — em producao o binario roda no Node
+  // puro e nao tem esse tratador. Aqui ele e removido para que SIGTERM meca o produto, nao
+  // o harness. SIGINT e tratado pelo mesmo motivo, por simetria.
+  nodeProcess.removeAllListeners('SIGTERM')
+  nodeProcess.removeAllListeners('SIGINT')
   await new Promise<void>((resolve) => {
     nodeProcess.once('SIGTERM', () => resolve())
     nodeProcess.once('SIGINT', () => resolve())
   })
-  // Encerramento normal: fecha a porta, retira o registro que ainda for NOSSO e solta a posse.
-  await running.close().catch(() => undefined)
+  // Encerramento normal: para de atender, drena os efeitos, fecha o banco e solta a posse
+  // (I15). A segunda linha diz QUANDO isso terminou — e o carimbo que o teste compara com o
+  // instante em que outro processo conseguiu a posse.
+  const closed = await running.close().then(
+    () => ({ ok: true as const }),
+    (error: unknown) => ({ ok: false as const, error: String(error) }),
+  )
+  nodeProcess.stdout.write(`${JSON.stringify({ label, closedAt: Date.now(), ...closed })}\n`)
 }
 
 await main()

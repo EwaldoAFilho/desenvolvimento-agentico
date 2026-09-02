@@ -45,13 +45,39 @@ function ended(child: ChildProcess): Promise<void> {
   return new Promise<void>((done) => child.once('exit', () => done()))
 }
 
+/**
+ * O `exit` do filho chega ANTES de o pipe do stdout esvaziar: a ultima linha que ele
+ * escreveu pode ainda estar a caminho. Quem precisa dessa linha espera o stream terminar —
+ * com teto, porque um neto segurando o pipe nao pode pendurar o teste.
+ */
+function drained(stream: Readable, maxMs = 3_000): Promise<void> {
+  if (stream.readableEnded || stream.destroyed) return Promise.resolve()
+  return new Promise<void>((done) => {
+    const timer = setTimeout(done, maxMs)
+    const finish = (): void => {
+      clearTimeout(timer)
+      done()
+    }
+    stream.once('end', finish)
+    stream.once('close', finish)
+  })
+}
+
+/** O que o dono reportou ao encerrar de forma graciosa. */
+export interface StopReport {
+  /** `Date.now()` do filho quando `close()` resolveu; ausente se ele nem reportou. */
+  readonly closedAt?: number
+  readonly ok?: boolean
+  readonly error?: string
+}
+
 export interface SpawnedOwner {
   readonly label: string
   /** O que o processo reportou: virou dono, ou foi recusado com motivo. */
   readonly report: OwnerReport
   readonly pid: number
   /** Encerramento gracioso: o control plane fecha, retira o registro e solta a posse. */
-  stop(signal?: 'SIGTERM' | 'SIGINT'): Promise<void>
+  stop(signal?: 'SIGTERM' | 'SIGINT'): Promise<StopReport>
   /** Queda ABRUPTA: nenhum handler roda, nada e liberado pelo processo. */
   kill(): Promise<void>
 }
@@ -83,6 +109,19 @@ export function spawnOwner(
   err.on('data', (chunk: unknown) => {
     stderr += String(chunk)
   })
+  /** A ultima linha JSON completa do stdout — e a do encerramento, quando houver. */
+  const ultimaLinha = (): StopReport => {
+    const linhas = stdout.split('\n').filter((linha) => linha.trim().length > 0)
+    for (let i = linhas.length - 1; i >= 1; i -= 1) {
+      try {
+        const parsed = JSON.parse(linhas[i] ?? '') as StopReport
+        if (typeof parsed.closedAt === 'number') return parsed
+      } catch {
+        /* ruido */
+      }
+    }
+    return {}
+  }
 
   return new Promise<SpawnedOwner>((done, fail) => {
     const finish = (report: OwnerReport): void => {
@@ -91,9 +130,11 @@ export function spawnOwner(
         label: options.label,
         report,
         pid: child.pid ?? -1,
-        stop: async (signal = 'SIGTERM'): Promise<void> => {
+        stop: async (signal = 'SIGTERM'): Promise<StopReport> => {
           child.kill(signal)
           await ended(child)
+          await drained(out)
+          return ultimaLinha()
         },
         kill: async (): Promise<void> => {
           child.kill('SIGKILL')
