@@ -70,7 +70,17 @@ export class FileArtifactStore {
   }
 
   async write(input: ArtifactWrite): Promise<ArtifactRecord> {
-    if (this.#handle.mode === 'readonly') throw new ReadOnlyDatabaseError('artifact.write')
+    /**
+     * A pergunta e `writable`, nao `mode`, e a diferenca custa um arquivo.
+     *
+     * Este e o unico caminho de escrita do pacote que produz efeito FORA do banco: `mkdir` e
+     * `writeFile` acontecem primeiro, e o `INSERT` so depois. Perguntando pelo `mode` — que
+     * nao muda quando a conexao fecha — uma referencia capturada antes de `lease.release()`
+     * criava ou SOBRESCREVIA o arquivo e so entao falhava no banco. Artefato e evidencia:
+     * sobrescrever um arquivo ja referenciado deixa digest e metadados mentindo sobre o
+     * conteudo, que e pior que a escrita recusada.
+     */
+    if (!this.#handle.writable) throw new ReadOnlyDatabaseError('artifact.write')
     const absolute = this.resolvePath(input.runId, input.relativePath)
     const bytes =
       typeof input.content === 'string' ? Buffer.from(input.content, 'utf8') : input.content

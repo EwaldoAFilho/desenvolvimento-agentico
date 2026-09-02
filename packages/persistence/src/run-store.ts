@@ -187,7 +187,10 @@ export class SqliteRunStore implements RunStore {
   }
 
   async #execute<T>(work: (uow: BufferedUnitOfWork) => Promise<T>): Promise<CommitResult<T>> {
-    if (this.#handle.mode === 'readonly') throw new ReadOnlyDatabaseError('withTransaction')
+    // `writable`, nao `mode`: depois que a posse fecha a conexao, recusar aqui devolve um
+    // erro do produto em vez do `TypeError` cru do driver — e recusa ANTES de rodar o
+    // `work`, que pode ter efeitos proprios.
+    if (!this.#handle.writable) throw new ReadOnlyDatabaseError('withTransaction')
     const uow = new BufferedUnitOfWork()
     const result = await work(uow)
     const pending = uow.drain()

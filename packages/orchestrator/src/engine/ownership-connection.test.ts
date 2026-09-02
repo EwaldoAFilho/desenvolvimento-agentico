@@ -203,6 +203,32 @@ describe('A. capacidade capturada nao sobrevive a posse', () => {
     ).toBe(true)
     expect(runsNoDisco(aberto.runtimeDir)).toBe(1)
   })
+
+  it('artefato capturado nao grava ARQUIVO depois do release', async () => {
+    const aberto = await cenario({ comPosse: true })
+    const { spec, compiled } = missaoCompilada()
+    const run = await aberto.plane.createRun({ mission: spec, compiled, missionText: MISSION })
+    const store = aberto.plane.persistence.artifacts
+    const write = store.write.bind(store)
+    const destino = store.resolvePath(run.id, 'roubado.txt')
+
+    aberto.lease?.release()
+
+    /**
+     * O artefato e o unico caminho de escrita da persistencia que toca o DISCO antes de
+     * tocar o banco: `mkdir` + `writeFile` acontecem, e so depois vem o `INSERT`.
+     *
+     * Fechar a conexao, sozinho, nao cobre isso — a chamada falha DEPOIS de ja ter criado
+     * ou sobrescrito o arquivo. E artefato e evidencia: sobrescrever um arquivo ja
+     * referenciado pelo banco deixa digest e metadados mentindo sobre o conteudo.
+     */
+    expect(
+      await recusa(() =>
+        write({ runId: run.id, kind: 'patch', relativePath: 'roubado.txt', content: 'invasor' }),
+      ),
+    ).toBe(true)
+    expect(existsSync(destino), 'nenhum byte pode ter chegado ao disco').toBe(false)
+  })
 })
 
 describe('B. reflexao nao produz escritor', () => {

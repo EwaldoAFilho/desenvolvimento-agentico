@@ -19,6 +19,18 @@ export interface DatabaseHandle {
   readonly db: SqliteDatabase
   readonly path: string
   readonly mode: DatabaseMode
+  /**
+   * Esta conexao pode escrever AGORA. Pergunta VIVA, nao decidida na construcao.
+   *
+   * `mode` sozinho responde a pergunta errada: ele diz como a conexao foi ABERTA, e nunca
+   * muda quando ela fecha. Quem confia so nele acha que pode escrever num handle ja fechado
+   * — e um caminho de escrita que produz efeito ANTES de tocar o banco (o artefato grava o
+   * arquivo e so entao insere a linha) chega a mutar o disco antes de descobrir o engano.
+   *
+   * `db.open` fecha essa distancia: depois de `lease.release()` a conexao do dono e fechada,
+   * e todo caminho de escrita passa a recusar no PRIMEIRO passo, sem efeito colateral.
+   */
+  readonly writable: boolean
   readonly schemaVersion: number
   close(): void
 }
@@ -76,6 +88,9 @@ export function openDatabase(options: OpenDatabaseOptions): DatabaseHandle {
     db,
     path,
     mode,
+    get writable(): boolean {
+      return mode === 'readwrite' && db.open
+    },
     schemaVersion: version,
     close: (): void => {
       if (db.open) db.close()
