@@ -176,7 +176,9 @@ describe('ordem do encerramento', () => {
     solta: boolean
   }
 
-  function passos(falhas: { readonly servidor?: Error; readonly efeitos?: Error } = {}): Passos {
+  function passos(
+    falhas: { readonly servidor?: Error; readonly efeitos?: Error; readonly posse?: boolean } = {},
+  ): Passos {
     const ordem: string[] = []
     const registro: Passos = {
       ordem,
@@ -190,9 +192,11 @@ describe('ordem do encerramento', () => {
           ordem.push('efeitos')
           if (falhas.efeitos !== undefined) throw falhas.efeitos
         },
-        releaseOwnership: (): void => {
+        releaseOwnership: (): boolean => {
           ordem.push('posse')
+          if (falhas.posse === true) return false
           registro.solta = true
+          return true
         },
       },
     }
@@ -211,6 +215,30 @@ describe('ordem do encerramento', () => {
     // Os orquestradores pararam mesmo assim, e o projeto foi devolvido.
     expect(p.ordem).toEqual(['servidor', 'efeitos', 'posse'])
     expect(p.solta).toBe(true)
+  })
+
+  it('soltar que NAO solta e falha, nunca silencio: o chamador sabe que continua dono', async () => {
+    const p = passos({ posse: true })
+    await expect(shutdownControlPlane(p.steps)).rejects.toMatchObject({
+      code: 'OWNERSHIP_RETAINED',
+    })
+    expect(p.ordem).toEqual(['servidor', 'efeitos', 'posse'])
+    expect(p.solta).toBe(false)
+  })
+
+  it('o prazo do encerramento chega aos efeitos', async () => {
+    let recebido: unknown
+    await shutdownControlPlane(
+      {
+        stopServing: async (): Promise<void> => undefined,
+        stopEffects: async (options): Promise<void> => {
+          recebido = options
+        },
+        releaseOwnership: () => true,
+      },
+      { graceMs: 1234 },
+    )
+    expect(recebido).toEqual({ graceMs: 1234 })
   })
 
   it('efeitos que NAO param seguram a posse: o projeto nao passa adiante com loop vivo', async () => {

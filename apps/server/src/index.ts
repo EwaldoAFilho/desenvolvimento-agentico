@@ -47,8 +47,13 @@ export {
   resolveMissionPath,
   warningsOf,
 } from './missions.js'
-export type { OwnershipStepInput, ShutdownSteps } from './ownership.js'
-export { ControlPlaneBusyError, claimControlPlane, shutdownControlPlane } from './ownership.js'
+export type { OwnershipStepInput, ShutdownOptions, ShutdownSteps } from './ownership.js'
+export {
+  ControlPlaneBusyError,
+  claimControlPlane,
+  OwnershipRetainedError,
+  shutdownControlPlane,
+} from './ownership.js'
 export type { ProjectIdentity, ProjectIdentityInput } from './project-identity.js'
 export {
   configPathOf,
@@ -66,7 +71,7 @@ export type { ApproveMissionResult, MissionListItem } from './routes/missions.js
 export { registerMissionRoutes } from './routes/missions.js'
 export type { HealthBody } from './routes/read.js'
 export { loadRunOr404, registerReadRoutes } from './routes/read.js'
-export { registerStreamRoutes } from './routes/stream.js'
+export { closeStreams, registerStreamRoutes } from './routes/stream.js'
 export type { AgentSlot, InFlightAgent, RunningTally } from './running.js'
 export {
   applyPersistedRunning,
@@ -79,5 +84,15 @@ export {
 } from './running.js'
 export type { AttachServerInput, CreateServerInput, RunningServer } from './server.js'
 export { attachServer, createServer, startServer } from './server.js'
+export type {
+  BootedControlPlane,
+  BootFn,
+  ControlPlaneService,
+  ControlPlaneServiceDeps,
+  ServiceFailure,
+  ServiceSnapshot,
+  ServiceStatus,
+} from './service.js'
+export { createControlPlaneService, ServiceStateError } from './service.js'
 export { HEARTBEAT_FRAME, SSE_HEADERS, SseChannel, sseFrame } from './sse.js'
 export { isApiPath, MISSING_BUILD_MESSAGE, pathnameOf, registerStatic, safeJoin } from './static.js'

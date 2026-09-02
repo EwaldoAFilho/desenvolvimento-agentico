@@ -79,20 +79,47 @@ export async function claimControlPlane(input: OwnershipStepInput): Promise<Cont
   })
 }
 
+export interface ShutdownOptions {
+  /** Prazo para os efeitos pararem. Vencido com efeito vivo, a posse NAO e devolvida. */
+  readonly graceMs?: number
+}
+
 export interface ShutdownSteps {
   /** Para de aceitar comando novo e retira o endereco do mapa. */
   stopServing(): Promise<void>
-  /** Abandona orquestradores e fecha o banco: e aqui que os EFEITOS param. */
-  stopEffects(): Promise<void>
-  /** Devolve o projeto. Depois disto, outro processo pode assumir. */
-  releaseOwnership(): void
+  /**
+   * Abandona orquestradores (cancela, drena, colhe) e fecha o banco: e aqui que os EFEITOS
+   * param. Rejeitar aqui significa "ainda ha efeito vivo", e o encerramento para ANTES da
+   * posse.
+   */
+  stopEffects(options: ShutdownOptions): Promise<void>
+  /**
+   * Devolve o projeto. Depois disto, outro processo pode assumir. `false` = um escritor
+   * recusou fechar e o lock continua com este processo; `void` vale como sucesso (legado).
+   */
+  releaseOwnership(): boolean | undefined
+}
+
+/** A posse NAO foi devolvida no fim do encerramento: algum escritor ainda esta vivo (I15). */
+export class OwnershipRetainedError extends Error {
+  readonly code = 'OWNERSHIP_RETAINED'
+
+  constructor() {
+    super(
+      'a posse do projeto NAO foi devolvida: um escritor recusou fechar (efeito em voo). ' +
+        'Este processo continua dono ate encerrar de novo ou sair (I15)',
+    )
+    this.name = 'OwnershipRetainedError'
+  }
 }
 
 /**
  * A ordem do encerramento, isolada porque ela E a garantia — e porque so da para provar uma
- * ordem que tem nome.
+ * ordem que tem nome. E a MESMA primitiva para todo caminho de saida: `agentic serve` sob
+ * SIGINT/SIGTERM, `mission start` em primeiro plano, o `stop` do servico e o futuro
+ * `Stop` da extensao. Dois caminhos diferentes seriam duas chances de errar a ordem.
  *
- * Tres regras, cada uma com um modo de falha atras:
+ * Quatro regras, cada uma com um modo de falha atras:
  *
  * 1. Parar de atender vem primeiro, mas NAO pode bloquear o resto: um socket que se recusa a
  *    fechar nao e razao para deixar loop despachando agente. A falha e guardada e relancada
@@ -101,13 +128,18 @@ export interface ShutdownSteps {
  *    e o dano de D4 voltando por um caminho de falha; um projeto que continua possuido por um
  *    processo defeituoso e o mal menor, porque a posse morre junto com o processo.
  * 3. Soltar a posse e o ultimo ato.
+ * 4. Soltar que NAO solta (um escritor recusou fechar) e falha, nunca silencio: o chamador
+ *    precisa saber que continua dono.
  */
-export async function shutdownControlPlane(steps: ShutdownSteps): Promise<void> {
+export async function shutdownControlPlane(
+  steps: ShutdownSteps,
+  options: ShutdownOptions = {},
+): Promise<void> {
   const falhaAoParar = await steps.stopServing().then(
     () => undefined,
     (error: unknown) => error,
   )
-  await steps.stopEffects()
-  steps.releaseOwnership()
+  await steps.stopEffects(options)
+  if (steps.releaseOwnership() === false) throw new OwnershipRetainedError()
   if (falhaAoParar !== undefined) throw falhaAoParar
 }

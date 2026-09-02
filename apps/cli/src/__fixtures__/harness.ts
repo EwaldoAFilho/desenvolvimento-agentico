@@ -126,6 +126,7 @@ export function fakePlane(partial: Partial<ControlPlane>): ControlPlane {
     // Leitura por padrao: um dublê que se declarasse dono esconderia justamente a recusa
     // que o comando sob teste precisa encontrar.
     access: 'readonly',
+    lifecycle: 'open',
     registry: fakeRegistry([]),
     gates: undefined as never,
     clock: undefined as never,

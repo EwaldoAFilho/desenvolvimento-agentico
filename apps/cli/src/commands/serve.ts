@@ -1,4 +1,4 @@
-import { startServer } from '@agentic/server'
+import { createControlPlaneService } from '@agentic/server'
 import { loadProjectContext } from '../context.js'
 import type { CommandDeps } from '../deps.js'
 import { describeEndpoint, discoverRuntime, resolveEndpoint } from '../discovery.js'
@@ -59,24 +59,33 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     return ok('serve', { endpoint, running: true } satisfies ServeData)
   }
 
-  const boot = deps.bootServer ?? startServer
-  try {
-    const running = await boot({
+  /**
+   * O ciclo de vida do processo e o do SERVICO (STABILITY-SLICE-004): `start` disputa a
+   * posse e sobe; SIGINT/SIGTERM viram `stop`, que e a MESMA primitiva de encerramento que
+   * o `agentic-server` e o futuro Stop da extensao usam — parar de atender, drenar os
+   * efeitos, fechar o banco e so entao devolver o projeto (I15).
+   */
+  const service = createControlPlaneService(
+    {
       // Onde PROCURAR o projeto. O diretorio de estado — posse, `state.db` e descoberta —
       // o servidor deriva sozinho, pela mesma conta que `mission start` e `mission approve`
       // usam; nao ha como um chamador aponta-lo para outro lugar (I14).
       repoRoot: context.repoRoot,
       projectFile: context.projectPath,
       ...(args.port === undefined ? {} : { port: args.port }),
-    })
-    out.line(`control plane no ar em ${running.url}`)
+    },
+    deps.bootServer === undefined ? {} : { boot: deps.bootServer },
+  )
+  let url = endpoint
+  try {
+    const running = await service.start()
+    url = running.url ?? endpoint
+    out.line(`control plane no ar em ${url}`)
     out.line(`host/porta vem de \`server\` em ${context.projectPath}`)
     out.line('endereco publicado em .agentic/control-plane.json enquanto este processo viver')
     out.line()
     out.line('sem run ativo: use START MISSION no dashboard ou `agentic mission start`.')
     await deps.waitForShutdown()
-    await running.close()
-    return ok('serve', { endpoint: running.url, running: true } satisfies ServeData)
   } catch (error) {
     if (posseDeOutro(error)) {
       // Este projeto ja tem dono. A descoberta e consultada SEM a flag de porta de proposito:
@@ -105,4 +114,21 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
       reason,
     } satisfies ServeData)
   }
+
+  // Encerramento gracioso. Se algum efeito nao parar dentro do prazo, a posse NAO e
+  // devolvida (I15) e este comando diz isso em vez de terminar como se tudo tivesse parado:
+  // o processo sai em seguida, e ai o sistema operacional solta o lock.
+  try {
+    await service.stop()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    out.line('o control plane nao encerrou limpo:')
+    out.line(reason)
+    return failure('serve', 'SHUTDOWN_INCOMPLETE', reason, {
+      endpoint: url,
+      running: false,
+      reason,
+    } satisfies ServeData)
+  }
+  return ok('serve', { endpoint: url, running: true } satisfies ServeData)
 }

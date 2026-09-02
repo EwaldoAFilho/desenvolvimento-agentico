@@ -1,5 +1,5 @@
-import http from 'node:http'
 import { readFile } from 'node:fs/promises'
+import http from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServerHarness, type ServerHarness } from './__fixtures__/harness.js'

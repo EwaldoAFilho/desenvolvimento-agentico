@@ -11,12 +11,12 @@ import {
 } from './control-plane-file.js'
 import { type ServerDeps, type ServerDepsInput, toServerDeps } from './deps.js'
 import { registerErrorHandler } from './errors.js'
-import { claimControlPlane, shutdownControlPlane } from './ownership.js'
+import { claimControlPlane, type ShutdownOptions, shutdownControlPlane } from './ownership.js'
 import { PROJECT_HEADER, PROJECT_MISMATCH, runtimeDirOf } from './project-identity.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
 import { registerReadRoutes } from './routes/read.js'
-import { registerStreamRoutes } from './routes/stream.js'
+import { closeStreams, registerStreamRoutes } from './routes/stream.js'
 import { registerStatic } from './static.js'
 
 export interface CreateServerInput extends ServerDepsInput {
@@ -94,7 +94,12 @@ export interface RunningServer {
    * publica sobre um plane cuja posse ja foi resolvida por quem o abriu.
    */
   readonly lease?: ControlPlaneLease
-  close(): Promise<void>
+  /**
+   * Encerramento gracioso (I15): para de atender, cancela e drena os efeitos, fecha o banco
+   * e so entao devolve a posse. Rejeita — SEM devolver a posse — se algum efeito nao parar
+   * dentro do prazo. Idempotente.
+   */
+  close(options?: ShutdownOptions): Promise<void>
 }
 
 export interface AttachServerInput extends ServerDepsInput {
@@ -166,8 +171,10 @@ export async function attachServer(input: AttachServerInput): Promise<RunningSer
     url: `http://${address.host}:${port}`,
     ...(runtime === undefined ? {} : { runtime, runtimeFile: controlPlaneFilePath(runtimeDir) }),
     close: async (): Promise<void> => {
-      // Fecha a porta ANTES de tirar o endereco do mapa: entre uma coisa e outra ninguem
-      // pode receber um comando que este processo ja nao vai executar.
+      // Streams do dashboard primeiro: sao conexoes ativas que `app.close()` esperaria para
+      // sempre. Depois a porta, ANTES de tirar o endereco do mapa: entre uma coisa e outra
+      // ninguem pode receber um comando que este processo ja nao vai executar.
+      closeStreams(app)
       await app.close()
       // So apaga o registro se ele ainda for o NOSSO. `instanceId` e a prova forte — pid e
       // porta sao reaproveitados, e um processo em encerramento nao pode apagar o registro
@@ -268,14 +275,15 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
   }
   // A ordem do encerramento e garantia tanto quanto a do boot; ela vive em
   // `shutdownControlPlane`, com o porque de cada passo e um teste por regra.
-  const close = (): Promise<void> =>
-    shutdownControlPlane({
-      stopServing: () => running.close(),
-      stopEffects: () => plane.close(),
-      releaseOwnership: () => {
-        lease.release()
+  const close = (options: ShutdownOptions = {}): Promise<void> =>
+    shutdownControlPlane(
+      {
+        stopServing: () => running.close(),
+        stopEffects: (steps) => plane.close(steps),
+        releaseOwnership: () => lease.release(),
       },
-    })
+      options,
+    )
 
   // READY e depois disto, nao antes: um run recuperavel sem dono e um run que o banco diz
   // estar andando e que ninguem faz andar (I13). A adocao vem DEPOIS do `listen` de

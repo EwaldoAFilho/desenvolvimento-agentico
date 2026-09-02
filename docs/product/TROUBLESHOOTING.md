@@ -460,6 +460,37 @@ apagá-lo não libera nada enquanto o dono vive, e não é o caminho para resolv
 
 ---
 
+### Ctrl+C demora, ou o control plane diz que não encerrou limpo
+
+**Sintoma.** Depois do Ctrl+C, `agentic serve` leva alguns segundos para sair — ou termina
+com:
+
+```console
+o control plane nao encerrou limpo:
+run 01M1...: encerramento excedeu 30000ms com efeito ainda em voo (2 efeito(s)
+assincrono(s); tentativas T03-a2-...); a posse do projeto NAO e devolvida enquanto isso durar (I15)
+```
+
+**A demora é o encerramento gracioso fazendo o trabalho dele** (ADR-0014). Ele para de
+atender, cancela os processos de agente e de gate (SIGTERM, e SIGKILL dois segundos depois
+se ignorarem), espera uma integração em curso terminar, grava o que já chegou e só então
+devolve o projeto. Um agente que ignora SIGTERM custa esses dois segundos; um `git rebase`
+em andamento custa o tempo dele.
+
+**A mensagem de "não encerrou limpo" é rara e é honesta.** Algum efeito não parou dentro do
+prazo, e o control plane preferiu **segurar a posse** a entregar o projeto com efeito vivo —
+que era o dano medido em D4. O processo sai logo depois, e o sistema operacional solta o lock
+no mesmo instante; o próximo `agentic serve` adota o run e reconcilia a tentativa que ficou
+em voo como `INTERRUPTED`. Nada precisa ser limpo à mão. Se acontecer com frequência, o
+detalhe da mensagem diz qual efeito não parou — é isso que vale relatar.
+
+**Um segundo Ctrl+C durante o encerramento** mata o processo na hora (o Node não tem mais
+tratador para o sinal). Equivale a `kill -9`: nada é drenado, a posse morre com o processo e
+um comando de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar
+sozinho. Funciona, mas é queda, não encerramento.
+
+---
+
 ## Missão e execução
 
 ### Missão com WARNING: o que significa aceitar
