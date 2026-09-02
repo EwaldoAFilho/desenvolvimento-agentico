@@ -141,3 +141,67 @@ describe('posse do projeto', () => {
     expect(proximo.held).toBe(true)
   })
 })
+
+describe('revogacao de escritores (I14)', () => {
+  it('ganchos rodam ANTES de o lock ser solto', () => {
+    const baseDir = projeto()
+    const dono = possuir(baseDir)
+    const ordem: string[] = []
+    dono.onRelease(() => ordem.push('escritor fechado'))
+
+    // Um segundo processo so pode assumir depois do lock; se o gancho rodasse depois, haveria
+    // um instante com dono novo e escritor velho vivos ao mesmo tempo.
+    dono.release()
+    ordem.push('lock solto')
+    expect(ordem).toEqual(['escritor fechado', 'lock solto'])
+    expect(acquireControlPlaneOwnership({ baseDir }).ok).toBe(true)
+  })
+
+  it('cancelar o registro tira o gancho', () => {
+    const dono = possuir(projeto())
+    let chamou = 0
+    const cancelar = dono.onRelease(() => {
+      chamou += 1
+    })
+    cancelar()
+    dono.release()
+    expect(chamou).toBe(0)
+  })
+
+  it('registrar depois do release fecha o escritor na hora', () => {
+    const dono = possuir(projeto())
+    dono.release()
+    let chamou = 0
+    dono.onRelease(() => {
+      chamou += 1
+    })
+    // Um escritor que chega tarde nao pode ficar vivo esperando um `release` que ja passou.
+    expect(chamou).toBe(1)
+  })
+
+  it('gancho que FALHA nao solta o projeto: o lock continua preso', () => {
+    const baseDir = projeto()
+    const dono = possuir(baseDir)
+    let tentativas = 0
+    dono.onRelease(() => {
+      tentativas += 1
+      if (tentativas === 1) throw new Error('close falhou')
+    })
+
+    dono.release()
+    /**
+     * O escritor pode ter ficado aberto. Entregar o projeto agora daria DOIS escritores
+     * sobre o mesmo `state.db` — o dano de D4. Segurar o lock so atrasa o takeover, e a
+     * posse morre com o processo de qualquer jeito (ADR-0013).
+     */
+    expect(dono.held).toBe(false)
+    const outro = acquireControlPlaneOwnership({ baseDir })
+    expect(outro.ok).toBe(false)
+
+    // E o gancho continua registrado: um `release` seguinte tenta fechar de novo, em vez de
+    // virar no-op sobre um escritor ainda vivo.
+    dono.release()
+    expect(tentativas).toBe(2)
+    expect(acquireControlPlaneOwnership({ baseDir }).ok).toBe(true)
+  })
+})

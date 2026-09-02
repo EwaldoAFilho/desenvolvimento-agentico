@@ -284,14 +284,30 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
        */
       release: (): void => {
         held = false
-        for (const hook of ganchos) {
+        /**
+         * Escritor que NAO fechou impede a entrega do projeto. E o ponto todo.
+         *
+         * Engolir a falha e soltar o lock em seguida seria o pior desfecho possivel: a
+         * conexao mutavel continuaria aberta — e `writable` continuaria verdadeiro, porque
+         * ele pergunta ao driver — enquanto outro processo ja poderia assumir. Dois
+         * escritores sobre o mesmo `state.db`, que e exatamente o dano de D4.
+         *
+         * Segurar o lock e o mal MENOR e ja era o modelo declarado (ADR-0013): um projeto
+         * que continua possuido por um processo defeituoso apenas ATRASA o takeover, e a
+         * posse morre com o processo de qualquer jeito. O gancho que falhou fica registrado
+         * para um `release` seguinte tentar de novo, em vez de virar no-op sobre um escritor
+         * ainda vivo.
+         */
+        let algumFalhou = false
+        for (const hook of [...ganchos]) {
           try {
             hook()
+            ganchos.delete(hook)
           } catch {
-            /* fechar e devolver recurso; falhar aqui nao pode trancar o projeto */
+            algumFalhou = true
           }
         }
-        ganchos.clear()
+        if (algumFalhou) return
         if (!db.open) return
         // Fechar ja desfaz a transacao; o ROLLBACK explicito so torna a intencao legivel.
         try {

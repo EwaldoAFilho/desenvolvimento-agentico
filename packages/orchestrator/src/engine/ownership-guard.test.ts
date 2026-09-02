@@ -221,6 +221,17 @@ describe('plane COM posse continua funcionando', () => {
     ).rejects.toThrow(/sem posse do projeto/i)
   })
 
+  it('access acompanha a posse: nao afirma `owned` depois do release', async () => {
+    const aberto = await cenario({ comPosse: true })
+    expect(aberto.plane.access).toBe('owned')
+    aberto.lease?.release()
+    // Congelado na construcao, este campo afirmaria `owned` com a conexao ja fechada e o
+    // projeto possivelmente com outro dono. Nenhuma escrita passaria por causa disso — quem
+    // recusa e a conexao —, mas uma API observavel que mente sobre autoridade convida o
+    // proximo chamador a confiar nela.
+    expect(aberto.plane.access).toBe('readonly')
+  })
+
   it('posse SOLTA fecha a conexao: nao ha plane meio-vivo sobre projeto alheio', async () => {
     const aberto = await cenario({ comPosse: true })
     const { spec, compiled } = missaoCompilada()

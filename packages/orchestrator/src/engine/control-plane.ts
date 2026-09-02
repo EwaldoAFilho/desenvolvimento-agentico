@@ -307,8 +307,16 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    */
   const posseViva = lease?.held === true
   const mode: DatabaseMode = posseViva ? 'readwrite' : 'readonly'
-  const access: ControlPlaneAccess = posseViva ? 'owned' : 'readonly'
   const persistence = openPersistence({ baseDir: runtimeDir, mode })
+  /**
+   * `access` SEGUE a posse; nao e um retrato da construcao.
+   *
+   * Congelado, ele afirmaria `owned` depois do `release` — com a conexao ja fechada e o
+   * projeto possivelmente com outro dono. Nenhuma escrita passaria por causa disso (quem
+   * recusa e a conexao), mas uma API observavel que mente sobre autoridade e um convite a
+   * que o proximo chamador confie nela.
+   */
+  const access = (): ControlPlaneAccess => (lease?.held === true ? 'owned' : 'readonly')
   /**
    * A capacidade de escrever morre COM a posse, nao depois dela.
    *
@@ -609,7 +617,9 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
 
   return {
     persistence,
-    access,
+    get access(): ControlPlaneAccess {
+      return access()
+    },
     ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,
     gates,

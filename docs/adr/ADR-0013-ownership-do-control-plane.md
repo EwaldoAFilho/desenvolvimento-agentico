@@ -348,6 +348,56 @@ verdade em outro processo:
 Três leitores mantidos abertos durante uma escrita do dono não produziram `SQLITE_BUSY`, não
 criaram segundo banco e não disputaram posse.
 
+### O que a revisao independente da 003C cobrou
+
+**Fechado nesta fatia:**
+
+- **`artifacts.write` gravava o arquivo mesmo sem posse.** Era o unico caminho de escrita da
+  persistencia com efeito FORA do banco — `mkdir` + `writeFile` primeiro, `INSERT` depois — e
+  a guarda perguntava `handle.mode`, que diz como a conexao foi ABERTA e nunca muda quando
+  ela fecha. `DatabaseHandle.writable` (`mode === 'readwrite' && db.open`) passa a ser a
+  pergunta, e os tres caminhos de escrita a consultam antes de qualquer efeito.
+- **Falha ao revogar um escritor soltava o projeto assim mesmo.** O `release` engolia a
+  excecao do gancho e fechava o lock em seguida — ou seja, a conexao mutavel podia continuar
+  aberta enquanto outro processo assumia. Dois escritores sobre o mesmo `state.db` e o dano
+  de D4 voltando por um caminho de falha. Agora, gancho que falha **impede** a liberacao do
+  lock e continua registrado para a proxima tentativa, que e o modelo ja declarado aqui:
+  atrasar o takeover e o mal menor, e a posse morre com o processo de qualquer jeito.
+- **Construcao que falhava vazava a conexao.** `gates.yaml` invalido ou registro de provider
+  mal declarado lancavam com o `state.db` ja aberto. A montagem passou a acontecer sob `try`.
+- **`plane.access` mentia depois do `release`.** Congelado na construcao, afirmava `owned`
+  com a conexao fechada e o projeto possivelmente com outro dono. Virou getter sobre
+  `lease.held`.
+
+**NAO fechado — e por que fica fora desta fatia:**
+
+Dois achados sobreviveram, e os dois sao da mesma familia: **efeito assincrono ja em voo
+quando a posse e devolvida**. Nenhum deles e alcancado por chamador hostil; os dois vivem no
+lifecycle legitimo.
+
+1. **`artifacts.write` iniciado ANTES do `release`.** A guarda viva responde uma vez; depois
+   dela ha dois `await` (`mkdir`, `writeFile`). Um `release` no meio nao cancela a operacao
+   pendente, e a continuacao ainda grava — possivelmente depois de outro processo assumir.
+2. **`Orchestrator.abandon()` nao drena o tick em execucao.** Ele espera o snapshot de
+   `#jobs`, mas o tick e serializado a parte, em `#chain`. Um tick que ja passou pela
+   checagem de `#closed` pode estar criando worktree ou dentro de `provider.start()` antes de
+   se registrar em `#jobs` — entao `plane.close()` retorna, o servidor solta a posse, e o
+   tick antigo ainda produz efeito depois do takeover.
+
+Os dois sao **pre-existentes**: `orchestrator.ts` nao foi tocado nesta fatia, e a ordem
+`mkdir`/`writeFile` do artefato tambem nao. O que a 003C mudou foi torna-los VISIVEIS, ao
+afirmar pela primeira vez que "a capacidade morre com a posse" — uma promessa que a conexao
+cumpre e que efeito em voo, worktree e processo de agente ainda nao cumprem.
+
+Fecha-los exige drenar trabalho em voo antes de soltar a posse: barreira de encerramento,
+cancelamento cooperativo do tick e revogacao de efeitos fora do banco. Isso e **service
+lifecycle**, o assunto declarado da proxima fatia, e nao cabe em "posse na conexao" sem
+reabrir o desenho do encerramento inteiro.
+
+**Consequencia honesta:** a fronteira do BANCO e estrutural. A fronteira de MUTACAO como um
+todo — arquivo, worktree, processo de agente — ainda depende de disciplina de lifecycle.
+Dizer o contrario seria a afirmacao falsa que esta ADR existe para nao fazer.
+
 ### Limites que continuam declarados
 
 - O threat model não mudou: **instâncias legítimas do produto**, não código hostil executando
