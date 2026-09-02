@@ -186,6 +186,9 @@ function runShell(
       settle(null)
     })
     child.on('close', (code) => {
+      // O grupo termina com o shell, tambem na saida normal: um daemon que um comando de setup
+      // deixe para tras continuaria mutando a worktree depois de o dono ir embora (I15).
+      killTree()
       settle(code)
     })
   })

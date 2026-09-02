@@ -511,6 +511,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
             runId: request.runId,
             attemptId: request.attemptId,
             missionId: request.missionId,
+            // O sinal de encerramento tem de chegar ao `workspaceSetup` da worktree da missao.
+            ...(request.signal === undefined ? {} : { signal: request.signal }),
           }),
         release: (workspace, disposition) => provider.release(workspace, disposition),
       },

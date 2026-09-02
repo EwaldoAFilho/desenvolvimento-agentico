@@ -239,22 +239,23 @@ class ManagedProcess implements RunningProcess {
     if (pid === null || this.#status !== null) return
     this.#signalTree(pid, 'SIGTERM')
     const exited = await this.#waitForExit(this.#killGraceMs)
-    if (!exited) {
-      this.#signalTree(pid, 'SIGKILL')
-      return
-    }
-    /**
-     * O lider saiu, mas o GRUPO pode nao ter saido: um descendente que ignora SIGTERM e nao
-     * segura os pipes (stdio: ignore) sobrevive ao `close` do lider — e continuaria mutando a
-     * worktree depois de `cancel()` resolver, depois do `close` do control plane e depois de
-     * outro dono assumir (I15). Medido em revisao. Cancelar e cancelar a arvore inteira: o que
-     * ainda estiver no grupo recebe SIGKILL agora. So `-pid`, nunca `pid`: o lider ja morreu, e
-     * um pid reaproveitado nao e nosso.
-     */
-    this.#killGroupRemainder(pid)
+    if (!exited) this.#signalTree(pid, 'SIGKILL')
   }
 
-  /** POSIX: o grupo tem o pid do lider como pgid enquanto houver um membro vivo. */
+  /**
+   * O lider saiu, mas o GRUPO pode nao ter saido.
+   *
+   * Um descendente que nao segura os pipes (`stdio: ignore`) sobrevive ao `close` do lider —
+   * tanto quando o lider e cancelado e sai educadamente no SIGTERM quanto quando ele termina
+   * SOZINHO, deixando um daemon para tras. Esse descendente continuaria mutando a worktree
+   * depois de o processo assentar, depois do `close` do control plane e depois de outro dono
+   * assumir (I15). Medido em revisao, nas duas formas.
+   *
+   * A unidade do efeito e o GRUPO, entao o grupo termina com o lider, sempre: o que ainda
+   * estiver nele recebe SIGKILL no instante em que o lider assenta. So `-pid`, nunca `pid`:
+   * o lider ja morreu, e um pid reaproveitado nao e nosso. Limite declarado: um descendente
+   * que trocou de sessao (`setsid`) saiu do grupo e deste alcance.
+   */
   #killGroupRemainder(pid: number): void {
     if (this.#platform === 'win32') return
     try {
@@ -322,6 +323,8 @@ class ManagedProcess implements RunningProcess {
     if (this.#closeTimer !== null) clearTimeout(this.#closeTimer)
     this.#desligarAbort?.()
     this.#desligarAbort = null
+    // O grupo termina com o lider — em toda saida, nao so no cancelamento.
+    if (this.#pid !== null) this.#killGroupRemainder(this.#pid)
     this.#timeoutTimer = null
     this.#closeTimer = null
     this.#out.end()

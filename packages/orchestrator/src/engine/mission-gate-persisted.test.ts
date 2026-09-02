@@ -106,3 +106,87 @@ describe('D12 — mission gate persistido sobrevive ao reinicio', () => {
     expect(iniciados).toHaveLength(1)
   })
 })
+
+/**
+ * A derivacao da colheita nao falha em silencio.
+ *
+ * Resultado de mission gate ja na caixa quando o `close` chega: `#collect` grava a execucao
+ * e deriva o run. Se a transicao final falhar, o `close` REJEITA (posse retida) em vez de
+ * resolver com o run em VERIFYING sem resultado — e o `close` seguinte deriva de novo.
+ */
+describe('colheita do mission gate: derivacao que falha nao e engolida', () => {
+  let harness: Harness | undefined
+
+  afterAll(async () => {
+    vi.restoreAllMocks()
+    await harness?.cleanup()
+  })
+
+  it('close rejeita, a posse fica, o proximo close conclui o run', async () => {
+    harness = await createHarness({
+      mission: { missionGate: 'mission', tasks: [{ id: 'T01' }], defaultGate: 'unit' },
+      gates: { unit: [GATE_ALWAYS_PASS], mission: [GATE_ALWAYS_PASS] },
+      safetyIntervalMs: 0,
+    })
+    const h = harness
+    // Dirige na mao ate o run entrar em VERIFYING: o job do mission gate parte neste tick e
+    // o resultado dele cai na caixa SEM tick para processa-lo (nao ha timer nem auto-tick).
+    const limite = Date.now() + 60_000
+    while ((await h.run()).status !== 'VERIFYING') {
+      await h.orchestrator.tick()
+      if (Date.now() > limite) throw new Error('nao cheguei a VERIFYING')
+      await delay(20)
+    }
+    await delay(800)
+
+    const runs = h.plane.persistence.runs
+    const original = runs.withTransaction.bind(runs)
+    let falhas = 0
+    vi.spyOn(runs, 'withTransaction').mockImplementation((work) =>
+      original(async (uow) => {
+        const proxy = new Proxy(uow, {
+          get(target, prop) {
+            const bind = (value: unknown): unknown =>
+              typeof value === 'function'
+                ? (value as (...args: unknown[]) => unknown).bind(target)
+                : value
+            if (prop === 'saveRun') {
+              const save = bind(Reflect.get(target, prop, target)) as (run: {
+                readonly status: string
+              }) => Promise<void>
+              return (run: { readonly status: string }) => {
+                if (run.status === 'COMPLETED' && falhas === 0) {
+                  falhas += 1
+                  throw new Error('disco cheio na transicao final')
+                }
+                return save(run)
+              }
+            }
+            return bind(Reflect.get(target, prop, target))
+          },
+        })
+        return work(proxy as typeof uow)
+      }),
+    )
+
+    await expect(h.plane.close()).rejects.toThrow('disco cheio')
+    expect(h.lease.held).toBe(true)
+    expect(h.plane.lifecycle).toBe('closing')
+    expect(falhas).toBe(1)
+
+    await h.plane.close()
+    expect(h.plane.lifecycle).toBe('closed')
+    vi.restoreAllMocks()
+    const { openPersistence } = await import('@agentic/persistence')
+    const frio = openPersistence({ baseDir: `${h.root}/.agentic`, mode: 'readonly' })
+    try {
+      const run = await frio.runs.loadRun(h.runId)
+      expect({ status: run?.status, execucao: typeof run?.missionGateExecutionId }).toEqual({
+        status: 'COMPLETED',
+        execucao: 'string',
+      })
+    } finally {
+      frio.close()
+    }
+  }, 120_000)
+})

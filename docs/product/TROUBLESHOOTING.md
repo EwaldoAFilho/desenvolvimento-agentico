@@ -473,9 +473,10 @@ assincrono(s); tentativas T03-a2-...); a posse do projeto NAO e devolvida enquan
 
 **A demora é o encerramento gracioso fazendo o trabalho dele** (ADR-0014). Ele para de
 atender, cancela os processos de agente e de gate (SIGTERM, e SIGKILL dois segundos depois
-se ignorarem), espera uma integração em curso terminar, grava o que já chegou e só então
-devolve o projeto. Um agente que ignora SIGTERM custa esses dois segundos; um `git rebase`
-em andamento custa o tempo dele.
+se ignorarem — e o que sobrar no grupo de processos deles recebe SIGKILL junto), espera uma
+integração em curso terminar, grava o que já chegou e só então devolve o projeto. Um agente
+que ignora SIGTERM custa esses dois segundos; um `git rebase` em andamento custa o tempo
+dele.
 
 **A mensagem de "não encerrou limpo" é rara e é honesta.** Algum efeito não parou dentro do
 prazo, e o control plane preferiu **segurar a posse** a entregar o projeto com efeito vivo —
@@ -484,10 +485,15 @@ no mesmo instante; o próximo `agentic serve` adota o run e reconcilia a tentati
 em voo como `INTERRUPTED`. Nada precisa ser limpo à mão. Se acontecer com frequência, o
 detalhe da mensagem diz qual efeito não parou — é isso que vale relatar.
 
-**Um segundo Ctrl+C durante o encerramento** mata o processo na hora (o Node não tem mais
-tratador para o sinal). Equivale a `kill -9`: nada é drenado, a posse morre com o processo e
-um comando de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar
-sozinho. Funciona, mas é queda, não encerramento.
+**A mensagem de "não encerrou limpo" não encerra o processo.** Ele fica no ar, dono do
+projeto, e o próximo Ctrl+C tenta o encerramento outra vez — sair soltaria a posse com o
+efeito vivo, que é o que a regra proíbe. Quando o efeito termina (a integração acaba, o gate
+morre), o Ctrl+C seguinte devolve o projeto e o processo sai.
+
+**Derrubar à força é `kill -9`.** Nada é drenado, a posse morre com o processo e um comando
+de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar sozinho — sem
+alcançar o banco. Funciona, mas é queda, não encerramento; o próximo `agentic serve` adota
+o run e reconcilia.
 
 ---
 

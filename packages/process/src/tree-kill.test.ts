@@ -40,7 +40,34 @@ const parentExitsGrandchildIgnoresTerm = (grandchildDelayMs: number): string =>
     'setInterval(() => {}, 1000)',
   ].join(';\n')
 
+/**
+ * Pai que deixa um DAEMON: `unref()` no filho e sai na hora. Sem o `unref` o Node segura o
+ * pai ate o filho terminar, e o cenario nem existe.
+ */
+const parentLeavingDaemon = (grandchildDelayMs: number): string =>
+  [
+    'const cp = require("node:child_process")',
+    `const neto = 'setTimeout(() => { require("node:fs").writeFileSync(process.env.TARGET, "neto") }, ${grandchildDelayMs})'`,
+    'cp.spawn(process.execPath, ["-e", neto], { stdio: "ignore", env: process.env }).unref()',
+    'process.stdout.write("pai-pronto\\n")',
+  ].join(';\n')
+
 describe('tree-kill', () => {
+  it('lider que termina SOZINHO leva o grupo junto: daemon em stdio:ignore nao sobrevive (I15)', async () => {
+    // Nenhum cancel, nenhum timeout: o pai sai normalmente e deixa um daemon. O daemon nao
+    // pode continuar mutando a worktree depois de o processo assentar.
+    const target = join(workDir, 'daemon.txt')
+    const result = await runCaptured({
+      command: NODE,
+      args: ['-e', parentLeavingDaemon(1_500)],
+      cwd: workDir,
+      env: { TARGET: target },
+    })
+    expect(result.code).toBe(0)
+    await delay(2_000)
+    expect(existsSync(target)).toBe(false)
+  }, 20_000)
+
   it('cancel: lider que sai no SIGTERM nao deixa neto que o ignora vivo (I15)', async () => {
     const target = join(workDir, 'neto-teimoso.txt')
     const running = spawnStreaming(

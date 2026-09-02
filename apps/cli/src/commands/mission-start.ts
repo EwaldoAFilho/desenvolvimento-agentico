@@ -202,17 +202,22 @@ export async function missionStartCommand(
       await encerrar().catch(() => undefined)
       throw error
     }
-    try {
-      await encerrar()
-    } catch (error) {
-      // Encerrou sem devolver o projeto (efeito em voo dentro do prazo): dizer e melhor que
-      // terminar como se tudo tivesse parado. O processo sai em seguida e o SO solta o lock.
-      const reason = messageOf(error)
-      out.line()
-      out.line(`o control plane nao encerrou limpo: ${reason}`)
-      return failure('mission start', 'SHUTDOWN_INCOMPLETE', reason, result.data)
+    /**
+     * Encerrou sem devolver o projeto (efeito em voo dentro do prazo)? Entao NAO sair: sair
+     * soltaria o lock pelo sistema operacional com o efeito vivo (I15). O processo fica, diz o
+     * que houve, e o proximo sinal tenta de novo.
+     */
+    for (;;) {
+      try {
+        await encerrar()
+        return result
+      } catch (error) {
+        out.line()
+        out.line(`o control plane nao encerrou limpo: ${messageOf(error)}`)
+        out.line('a posse do projeto continua com este processo; Ctrl+C de novo tenta outra vez.')
+        await deps.waitForShutdown()
+      }
     }
-    return result
   }
 
   async function orquestrar(

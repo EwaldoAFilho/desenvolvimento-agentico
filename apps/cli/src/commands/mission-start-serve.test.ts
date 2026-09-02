@@ -231,6 +231,46 @@ describe('mission start publica a API por padrao', () => {
     expect(captured.stdout()).toContain('`--port <n>`')
   })
 
+  it('encerramento que nao devolve a posse NAO sai: espera outro sinal e tenta de novo (I15)', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.onDrain = (self) => {
+      self.status = 'COMPLETED'
+    }
+    let closes = 0
+    let sinais = 0
+    const plane = planeOf(specHash, orchestrator)
+    const base = plane.close
+    // O primeiro `close` encontra efeito vivo dentro do prazo e rejeita; o segundo termina.
+    ;(plane as { close: ControlPlane['close'] }).close = (options) => {
+      closes += 1
+      return closes === 1
+        ? Promise.reject(new Error('run X: encerramento excedeu 30000ms com efeito ainda em voo'))
+        : base(options)
+    }
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => plane,
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        sinais += 1
+        return sinais === 1 ? new Promise<void>(() => undefined) : Promise.resolve()
+      },
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    expect(closes).toBe(2)
+    expect(captured.stdout()).toContain('nao encerrou limpo')
+    expect(captured.stdout()).toContain('continua com este processo')
+  })
+
   it('`--serve` mantem o control plane no ar depois que o run termina', async () => {
     workspace = await createWorkspace()
     const specHash = await approvedRun(workspace.dir, workspace.missionPath)

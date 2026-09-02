@@ -127,6 +127,18 @@ mesmo ciclo, cada um com prova:
 Limite novo registrado (Windows): o abort do `workspaceSetup` mata só o shell, e o SIGKILL ao
 grupo remanescente é POSIX (ADR-0014).
 
+### Ciclo 2
+
+Veredito: **FAIL** de novo — dois BLOCKER e três MAJOR, todos reais, todos fechados:
+
+| Achado | Fecho | Prova |
+| --- | --- | --- |
+| **BLOCKER** — descendente cujo líder já terminou **normalmente** ficava fora do alcance (o SIGKILL ao grupo só acontecia dentro do cancelamento) | o grupo termina com o líder em **toda** saída: `#settle` do runtime e o `close` do shell de setup matam o resto do grupo | `tree-kill.test.ts`: pai sai sozinho aos 200 ms, neto em `stdio: ignore` escreveria aos 1,5 s — nunca escreve; `setup.test.ts`: daemon deixado por comando de setup morre com ele |
+| **BLOCKER** — `agentic-server` respondia a um `stop` que falhou com `process.exit(1)`, soltando o lock pelo SO com o efeito vivo | nenhum entrypoint sai com a posse retida: `agentic-server`, `agentic serve` e `mission start` dizem o que houve e esperam o **próximo sinal** para tentar de novo | `init.test.ts` (serve) e `mission-start-serve.test.ts`: `close` falha uma vez, o comando espera o segundo sinal, encerra e devolve `ok`; nunca termina com a posse retida |
+| **MAJOR** — `serve` e `agentic-server` assinavam os sinais depois do boot/adoção | assinados antes de `start()`; sinal durante o boot é atendido logo depois pelo mesmo `stop` | `init.test.ts`: ordem `sinal-assinado, boot-comecou, boot-terminou, close` |
+| **MAJOR** — o adaptador da worktree do mission gate descartava `signal` | passa `signal` a `acquireMissionWorkspace` | typecheck; caminho coberto por `service-lifecycle` (gate teimoso cancelado) |
+| **MAJOR** — na colheita, uma falha na derivação (ERROR do mission gate → `FAILED`) era engolida pelo `#guard`; a mensagem já tinha saído da caixa | a derivação da colheita propaga falha nova; um `close` repetido deriva de novo mesmo com a caixa vazia (`derivacaoPendente`) | `mission-gate-persisted.test.ts`: `saveRun(COMPLETED)` falha uma vez — `close` rejeita, posse fica, o `close` seguinte conclui o run com a execução |
+
 ## G. Problemas registrados, não corrigidos
 
 | | Descrição |

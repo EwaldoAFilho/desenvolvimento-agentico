@@ -250,6 +250,9 @@ describe('spawnStreaming', () => {
     expect(sinais).toEqual([
       [-4242, 'SIGTERM'],
       [-4242, 'SIGKILL'],
+      // Ao assentar, o resto do grupo recebe SIGKILL de novo: um daemon que o lider tenha
+      // deixado nao sobrevive a ele (I15). Sempre `-pid`, nunca `pid`.
+      [-4242, 'SIGKILL'],
     ])
     expect(status.cancelled).toBe(true)
     expect(status.signal).toBe('SIGKILL')

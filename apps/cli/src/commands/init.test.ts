@@ -123,6 +123,70 @@ describe('serve', () => {
     expect(captured.stdout()).toContain('control plane no ar')
   })
 
+  it('stop que nao devolve a posse NAO sai: espera outro sinal e tenta de novo (I15)', async () => {
+    const root = await scratch()
+    await initCommand({}, captureDeps({ cwd: root }).deps)
+    let closes = 0
+    let sinais = 0
+    const captured = captureDeps({
+      cwd: root,
+      // Dois sinais: o primeiro encontra efeito vivo (close falha), o segundo encerra.
+      waitForShutdown: () => {
+        sinais += 1
+        return Promise.resolve()
+      },
+      bootServer: () =>
+        Promise.resolve({
+          url: 'http://127.0.0.1:4317',
+          close: () => {
+            closes += 1
+            return closes === 1
+              ? Promise.reject(new Error('orquestrador nao encerrou dentro do prazo'))
+              : Promise.resolve()
+          },
+        }),
+    })
+
+    const result = await serveCommand({}, captured.deps)
+
+    expect(result.exitCode).toBe(0)
+    expect(closes).toBe(2)
+    expect(sinais).toBe(2)
+    expect(captured.stdout()).toContain('nao encerrou limpo')
+    expect(captured.stdout()).toContain('continua com este processo')
+  })
+
+  it('sinal que chega DURANTE o boot e atendido logo depois, pelo mesmo stop', async () => {
+    const root = await scratch()
+    await initCommand({}, captureDeps({ cwd: root }).deps)
+    const ordem: string[] = []
+    const captured = captureDeps({
+      cwd: root,
+      // O sinal e assinado antes de subir e "chega" antes de o boot terminar.
+      waitForShutdown: () => {
+        ordem.push('sinal-assinado')
+        return Promise.resolve()
+      },
+      bootServer: async () => {
+        ordem.push('boot-comecou')
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        ordem.push('boot-terminou')
+        return {
+          url: 'http://127.0.0.1:4317',
+          close: () => {
+            ordem.push('close')
+            return Promise.resolve()
+          },
+        }
+      },
+    })
+
+    const result = await serveCommand({}, captured.deps)
+
+    expect(result.exitCode).toBe(0)
+    expect(ordem).toEqual(['sinal-assinado', 'boot-comecou', 'boot-terminou', 'close'])
+  })
+
   it('CONTROLE: falha ao subir vira SERVER_UNAVAILABLE com a alternativa', async () => {
     const root = await scratch()
     await initCommand({}, captureDeps({ cwd: root }).deps)

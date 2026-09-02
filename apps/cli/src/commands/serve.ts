@@ -77,6 +77,10 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     deps.bootServer === undefined ? {} : { boot: deps.bootServer },
   )
   let url = endpoint
+  // Assinado ANTES de subir: a adocao no boot ja despacha agente, e um sinal nessa janela
+  // nao pode cair no tratador padrao do Node. Chegando durante o boot, ele e atendido logo
+  // depois — pelo mesmo `stop`.
+  const shutdown = deps.waitForShutdown()
   try {
     const running = await service.start()
     url = running.url ?? endpoint
@@ -85,7 +89,7 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     out.line('endereco publicado em .agentic/control-plane.json enquanto este processo viver')
     out.line()
     out.line('sem run ativo: use START MISSION no dashboard ou `agentic mission start`.')
-    await deps.waitForShutdown()
+    await shutdown
   } catch (error) {
     if (posseDeOutro(error)) {
       // Este projeto ja tem dono. A descoberta e consultada SEM a flag de porta de proposito:
@@ -115,20 +119,22 @@ export async function serveCommand(args: ServeArgs, deps: CommandDeps): Promise<
     } satisfies ServeData)
   }
 
-  // Encerramento gracioso. Se algum efeito nao parar dentro do prazo, a posse NAO e
-  // devolvida (I15) e este comando diz isso em vez de terminar como se tudo tivesse parado:
-  // o processo sai em seguida, e ai o sistema operacional solta o lock.
-  try {
-    await service.stop()
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    out.line('o control plane nao encerrou limpo:')
-    out.line(reason)
-    return failure('serve', 'SHUTDOWN_INCOMPLETE', reason, {
-      endpoint: url,
-      running: false,
-      reason,
-    } satisfies ServeData)
+  /**
+   * Encerramento gracioso. Se algum efeito nao parar dentro do prazo, a posse NAO e devolvida
+   * (I15) — e este comando NAO sai: sair soltaria o lock pelo sistema operacional com o
+   * efeito ainda vivo, que e o que a regra proibe. O processo fica, diz o que houve, e o
+   * proximo sinal tenta de novo. `kill -9` continua sendo a saida de quem sabe o que faz.
+   */
+  for (;;) {
+    try {
+      await service.stop()
+      return ok('serve', { endpoint: url, running: true } satisfies ServeData)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      out.line('o control plane nao encerrou limpo:')
+      out.line(reason)
+      out.line('a posse do projeto continua com este processo; Ctrl+C de novo tenta outra vez.')
+      await deps.waitForShutdown()
+    }
   }
-  return ok('serve', { endpoint: url, running: true } satisfies ServeData)
 }

@@ -57,11 +57,20 @@ processo que ainda está terminando é o mal menor: a posse morre com o processo
 jeito, e entregar o projeto com efeito vivo é o dano de D4 voltando por um caminho de falha.
 Um `close` seguinte tenta de novo.
 
+E **o processo não sai** nesse caso — nem `agentic serve`, nem `agentic-server`, nem
+`mission start`. Sair soltaria o lock pelo sistema operacional com o efeito vivo, que é
+exatamente o que a regra proíbe. Os três dizem o que houve e esperam o **próximo sinal**, que
+tenta o `stop` de novo. `kill -9` continua sendo a saída de quem sabe o que faz.
+
+Os sinais são assinados **antes** do boot, não depois: a adoção dos runs recuperáveis já
+despacha agente, e um `SIGTERM` nessa janela caía no tratador padrão do Node. Um sinal que
+chega durante o boot é atendido logo depois dele, pelo mesmo `stop`.
+
 ### O que é cancelado, o que é esperado, o que é colhido
 
 | Efeito | Cancelável? | Decisão |
 | --- | --- | --- |
-| processo de agente (executor, revisor) | sim, pelo handle | cancelado na hora; resultado descartado; a tentativa fica `RUNNING`/`REVIEW` para o próximo dono reconciliar como `INTERRUPTED`. Cancelar é cancelar a **árvore**: se o líder sai no SIGTERM mas um descendente o ignora (medido em revisão), o resto do grupo recebe SIGKILL |
+| processo de agente (executor, revisor) | sim, pelo handle | cancelado na hora; resultado descartado; a tentativa fica `RUNNING`/`REVIEW` para o próximo dono reconciliar como `INTERRUPTED`. A unidade do efeito é o **grupo de processos**: quando o líder assenta — cancelado, por timeout ou saindo sozinho — o resto do grupo recebe SIGKILL. Um daemon que um agente ou um comando de setup deixe para trás não sobrevive ao processo que o criou (medido em revisão, nas duas formas) |
 | processo de agente nascido **durante** o encerramento | sim | `#dispatchExecutor`/`#dispatchReviewer` cancelam o handle assim que `start()` devolve, e não observam |
 | gate de task, mission gate, `workspaceSetup` | sim, por `AbortSignal` (SIGTERM, depois SIGKILL) | cancelado; gate cancelado **não vira resultado** — o próximo dono refaz (I12, ao menos uma vez) |
 | integração (`git rebase` + fast-forward) | não | esperada (segundos); o resultado é **colhido** e gravado: a task vira `DONE` antes de a posse sair |
@@ -162,6 +171,9 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
   o dono) e a worktree da missão é reivindicada pelo próximo dono pela prova de posse
   (`mission-owner`), mas ele existe. Medido: o gate órfão de A termina por conta própria
   enquanto B já refaz o gate. Encerramento gracioso é o caminho normal; `SIGKILL` é queda.
-- **Um segundo Ctrl+C durante o encerramento** mata o processo (comportamento padrão do
-  Node sem tratador): equivale a `SIGKILL` e cai no caso acima.
+- **Um segundo Ctrl+C durante o encerramento** tenta o encerramento de novo (o tratador é
+  reinstalado a cada espera). Derrubar à força é `kill -9`, e cai no caso acima.
+- **Descendente que trocou de sessão** (`setsid`) saiu do grupo de processos e do alcance
+  do SIGKILL ao grupo. Não há sessão nova por desenho nos comandos do produto; um agente que
+  o faça está fora do que o produto controla.
 - **Ameaça continua sendo instância legítima**, não código hostil no mesmo processo.

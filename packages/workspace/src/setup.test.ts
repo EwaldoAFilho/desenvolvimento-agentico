@@ -162,6 +162,27 @@ describe('runWorkspaceSetup', () => {
     expect(vivo()).toBe(false)
   })
 
+  it('daemon deixado por um comando de setup morre com o comando (I15)', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const marca = join(destino, 'daemon')
+    // Dois scripts em arquivo, para nao depender de aspas no shell: o pai dispara o daemon e
+    // sai; o daemon escreveria aos 1,5 s se sobrevivesse ao comando de setup.
+    await writeFile(
+      join(destino, 'daemon.cjs'),
+      `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marca)}, 'x'), 1500)\n`,
+      'utf8',
+    )
+    await writeFile(
+      join(destino, 'pai.cjs'),
+      "require('node:child_process').spawn(process.execPath, ['daemon.cjs'], { stdio: 'ignore' }).unref()\n",
+      'utf8',
+    )
+    await runWorkspaceSetup(destino, repo.root, { commands: ['node pai.cjs'] })
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await expect(lstat(marca)).rejects.toThrow()
+  })
+
   it('sinal ja abortado: nenhum comando chega a rodar', async () => {
     repo = await createTestRepo()
     const destino = await target()

@@ -428,7 +428,11 @@ export class Orchestrator {
    */
   async #collect(): Promise<void> {
     const colhivel = (message: Message): boolean => COLLECTABLE_AFTER_CLOSE.has(message.kind)
-    if (!this.#inbox.some(colhivel)) return
+    // Ha o que gravar: mensagem colhivel na caixa, ou um resultado de mission gate ja colhido
+    // (em memoria) cuja derivacao ainda nao chegou ao banco — o caso de um `close` anterior
+    // que falhou exatamente na transicao final e esta sendo repetido.
+    const derivacaoPendente = this.#missionGate !== undefined && this.#status === 'VERIFYING'
+    if (!this.#inbox.some(colhivel) && !derivacaoPendente) return
     await this.#enqueue(async () => {
       const state = await this.#load()
       this.#status = state.run.status
@@ -448,8 +452,17 @@ export class Orchestrator {
        * nunca leva RUNNING a VERIFYING aqui — o mission gate nao iniciaria (fechado), e o
        * disco ficaria com um run em VERIFYING sem gate em voo e sem resultado. Com todas as
        * tasks DONE e o run RUNNING, o primeiro tick do proximo dono deriva e inicia o gate.
+       *
+       * E a derivacao nao pode falhar em silencio aqui: `#derive` guarda as proprias falhas em
+       * `errors` (o tick seguinte tentaria de novo — mas nao ha tick seguinte num encerramento).
+       * Uma falha nova vira rejeicao do `abandon`, a posse fica retida e o proximo `close`
+       * deriva outra vez.
        */
-      if (state.run.status === 'VERIFYING') await this.#derive(state)
+      if (state.run.status === 'VERIFYING') {
+        const antes = this.#errors.length
+        await this.#derive(state)
+        if (this.#errors.length > antes) throw this.#errors[antes]
+      }
       this.#status = state.run.status
     })
   }
