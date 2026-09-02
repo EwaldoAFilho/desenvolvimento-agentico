@@ -120,12 +120,6 @@ interface Inflight {
   policy?: ReviewPolicy
   policyOutcome?: ReviewPolicyOutcome
   reviewStartedAt?: number
-  /**
-   * Cancelamento humano PEDIDO cuja prova de morte ainda nao chegou (C2). Enquanto existir,
-   * nenhuma mensagem desta tentativa avanca a task: o proximo desfecho sonda de novo e, provada
-   * a morte, cumpre a intencao; senao a task continua onde esta.
-   */
-  cancelRequested?: HumanCommand
 }
 
 /**
@@ -330,6 +324,14 @@ export class Orchestrator {
    * propria sonda e e SONDADO DE NOVO a cada tentativa — nunca apagado sem prova (C3).
    */
   readonly #residual = new Map<string, ResidualEffect>()
+  /**
+   * Cancelamentos humanos de task PEDIDOS cuja prova de morte ainda nao chegou (C2). Por task,
+   * independentemente de haver tentativa em voo: um residuo de `workspaceSetup` ou de uma
+   * tentativa ja encerrada tambem segura a intencao. Enquanto existir, a task nao e despachada
+   * e nenhuma mensagem dela avanca; cada tick e cada desfecho sondam de novo e, provada a
+   * morte, cumprem o cancelamento sem novo comando.
+   */
+  readonly #cancelIntent = new Map<TaskId, TaskCommandInput>()
 
   constructor(deps: EngineDeps, runId: RunId) {
     this.#deps = deps
@@ -474,13 +476,25 @@ export class Orchestrator {
    * Sem pgid nao ha o que sondar — fica registrado como nao provado, e a posse nao sai por ele
    * (fechar aberto e o lado certo de I15).
    */
-  #rememberGroup(key: string, pid: number | undefined, taskId?: TaskId): void {
+  #rememberGroup(key: string, pid: number | null | undefined, taskId?: TaskId): void {
     this.#residual.set(key, {
       ...(taskId === undefined ? {} : { taskId }),
       settled:
-        pid === undefined
+        pid === undefined || pid === null
           ? () => Promise.resolve(false)
           : () => confirmProcessGroupGone(pid, this.#deps.processProbe ?? {}),
+    })
+  }
+
+  /** Nome de um residuo de gate: diz o pid quando ha um, e diz quando NAO ha. */
+  #rememberGateGroups(
+    prefix: string,
+    groups: readonly (number | null)[] | undefined,
+    taskId?: TaskId,
+  ): void {
+    groups?.forEach((pid, index) => {
+      const quem = pid === null ? 'sem pid' : `pgid ${pid}`
+      this.#rememberGroup(`${prefix} #${index} (${quem})`, pid, taskId)
     })
   }
 
@@ -700,6 +714,8 @@ export class Orchestrator {
     // Encerramento pedido no meio do tick: o que falta e trabalho NOVO, e para aqui. O que
     // ja foi gravado fica; o `abandon` colhe o que couber.
     if (this.#closed) return
+    await this.#settlePendingCancels(state)
+    if (this.#closed) return
     await this.#drainInbox(state)
     if (this.#closed) return
     await this.#promote(state)
@@ -895,10 +911,10 @@ export class Orchestrator {
     if (inflight === undefined) return
     const taskRun = state.tasks.get(inflight.spec.id)
     if (taskRun === undefined) return
-    // Um cancelamento humano ficou pendente sobre esta tentativa: a mensagem nao avanca a
-    // task — uma tentativa que o humano mandou cancelar nao vira gate, revisao nem retry por
-    // conta propria. O que ela faz e dar a chance de PROVAR a morte e cumprir a intencao.
-    const cancelRequested = inflight.cancelRequested
+    // Um cancelamento humano ficou pendente sobre esta task: a mensagem nao avanca a task —
+    // uma tentativa que o humano mandou cancelar nao vira gate, revisao nem retry por conta
+    // propria. O que ela faz e dar a chance de PROVAR a morte e cumprir a intencao.
+    const cancelRequested = this.#cancelIntent.get(inflight.spec.id)
     if (cancelRequested !== undefined) {
       return this.#settleRequestedCancel(state, taskRun, inflight, cancelRequested)
     }
@@ -1868,6 +1884,9 @@ export class Orchestrator {
     const taskRun = state.tasks.get(decision.taskId)
     const spec = this.#specOf(state, decision.taskId)
     if (taskRun === undefined || spec === undefined || taskRun.status !== 'READY') return
+    // O humano mandou cancelar esta task e a prova de morte ainda nao chegou: despachar de
+    // novo seria trocar a intencao por trabalho. Ela espera a prova (tick) ou o comando.
+    if (this.#cancelIntent.has(spec.id)) return
 
     // ADR-0007: arvore compartilhada tem um escritor. Enquanto uma tentativa nao encerra,
     // nem o gate nem a revisao dela liberaram a arvore — despachar seria colisao garantida.
@@ -2410,9 +2429,11 @@ export class Orchestrator {
           directory: attemptDirectory(inflight.spec.id, inflight.attempt.attemptNumber),
           signal: this.#abort.signal,
         })
-        for (const pgid of outcome.residualGroups ?? []) {
-          this.#rememberGroup(`gate ${inflight.attempt.id} (pgid ${pgid})`, pgid, inflight.spec.id)
-        }
+        this.#rememberGateGroups(
+          `gate ${inflight.attempt.id}`,
+          outcome.residualGroups,
+          inflight.spec.id,
+        )
         this.#push({
           kind: 'gate',
           attemptId: inflight.attempt.id,
@@ -2488,9 +2509,7 @@ export class Orchestrator {
             directory: 'mission',
             signal: this.#abort.signal,
           })
-          for (const pgid of outcome.residualGroups ?? []) {
-            this.#rememberGroup(`mission gate (pgid ${pgid})`, pgid)
-          }
+          this.#rememberGateGroups('mission gate', outcome.residualGroups)
           // Cancelado pelo encerramento: nao e medicao, nao vira resultado. Se virasse, o
           // `abandon` colheria um ERROR e o run terminaria FAILED por um gate que ninguem
           // reprovou. O proximo dono refaz o gate do zero (I12).
@@ -2682,6 +2701,8 @@ export class Orchestrator {
       if (naoProvados.length > 0) {
         throw new CancellationUnsettledError({ runId: this.#runId, residual: naoProvados })
       }
+      // Tudo provado morto: as intencoes pendentes de task sao cumpridas pelo run inteiro.
+      this.#cancelIntent.clear()
       const now = this.#deps.clock.now()
       for (const taskId of [...state.tasks.keys()]) {
         const taskRun = state.tasks.get(taskId)
@@ -2846,7 +2867,7 @@ export class Orchestrator {
         (effect) => effect.taskId === command.taskId,
       )
       if (naoProvados.length > 0) {
-        if (inflight !== undefined) inflight.cancelRequested = command
+        this.#cancelIntent.set(command.taskId, command)
         throw new CancellationUnsettledError({
           runId: this.#runId,
           taskId: command.taskId,
@@ -2890,12 +2911,33 @@ export class Orchestrator {
     })
     state.tasks.set(next.taskId, next)
     this.#locks.delete(command.taskId)
+    this.#cancelIntent.delete(command.taskId)
     if (inflight !== undefined) {
-      inflight.cancelRequested = undefined
       this.#inflight.delete(inflight.attempt.id)
       await this.#release(inflight, 'keep')
     }
     this.#requestTick()
+  }
+
+  /**
+   * Intencoes de cancelar task sem tentativa em voo (residuo de `workspaceSetup`, tentativa
+   * ja encerrada): a cada tick, sonda de novo o que sobrou da task e, provada a morte, cumpre
+   * o cancelamento — sem novo comando humano. As que TEM tentativa em voo sao cumpridas no
+   * desfecho dela (`#settleRequestedCancel`). Uma task que ja saiu do estado cancelavel por
+   * outro caminho (skip, por exemplo) solta a intencao.
+   */
+  async #settlePendingCancels(state: TickState): Promise<void> {
+    for (const [taskId, command] of [...this.#cancelIntent.entries()]) {
+      const taskRun = state.tasks.get(taskId)
+      if (taskRun === undefined || !CANCELLABLE.has(taskRun.status)) {
+        this.#cancelIntent.delete(taskId)
+        continue
+      }
+      if ([...this.#inflight.values()].some((item) => item.spec.id === taskId)) continue
+      const vivos = await this.#reprobeResidual((effect) => effect.taskId === taskId)
+      if (vivos.length > 0) continue
+      await this.#guard(() => this.#cancelTaskNow(state, taskRun, undefined, command), taskId)
+    }
   }
 
   /**
@@ -2907,7 +2949,7 @@ export class Orchestrator {
     state: TickState,
     taskRun: TaskRun,
     inflight: Inflight,
-    command: HumanCommand,
+    command: TaskCommandInput,
   ): Promise<void> {
     const naoProvados = await this.#settleCancellation(
       [inflight],
@@ -2915,10 +2957,7 @@ export class Orchestrator {
       (effect) => effect.taskId === inflight.spec.id,
     )
     if (naoProvados.length > 0) return
-    await this.#cancelTaskNow(state, taskRun, inflight, {
-      ...command,
-      taskId: inflight.spec.id,
-    })
+    await this.#cancelTaskNow(state, taskRun, inflight, command)
   }
 
   /** Pular exige motivo: dispensar trabalho e decisao humana registrada. */

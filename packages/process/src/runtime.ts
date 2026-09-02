@@ -108,10 +108,19 @@ export async function confirmProcessGroupGone(
 ): Promise<boolean> {
   if ((deps.platform ?? nodeProcess.platform) === 'win32') return true
   const probe = deps.probeGroup ?? isProcessGroupAlive
+  // Uma sonda que LANCA nao provou nada: conta como "ainda existe" (falha fechado) em vez de
+  // virar rejeicao — esta funcao e chamada de caminhos sem quem espere (`void #finish()`).
+  const alive = (): boolean => {
+    try {
+      return probe(-pid)
+    } catch {
+      return true
+    }
+  }
   // Relogio REAL, nao um injetado: o teto e espera de parede.
   const deadline = Date.now() + (deps.groupGraceMs ?? DEFAULT_GROUP_GRACE_MS)
   for (;;) {
-    if (!probe(-pid)) return true
+    if (!alive()) return true
     if (Date.now() >= deadline) return false
     await sleep(GROUP_PROBE_INTERVAL_MS)
   }

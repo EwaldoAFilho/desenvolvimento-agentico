@@ -31,18 +31,19 @@ export interface GateOutcome {
   readonly failure?: FailureReason
   readonly cwd: string
   /**
-   * Pids dos comandos cujo grupo de processos ainda existia quando o teto venceu. Presente so
-   * quando ha algum: o encerramento nao pode presumir que pararam, e precisa do pid para
-   * sondar cada grupo (`-pid`) de novo na tentativa seguinte (C3).
+   * Um item por comando cujo grupo de processos ainda existia quando o teto venceu: o pid do
+   * lider (o grupo e `-pid`), para sondar de novo na tentativa seguinte de encerramento (C3),
+   * ou `null` quando o registro nao trouxe pid — residuo que ninguem consegue sondar e que,
+   * por isso, nunca se prova morto (falha fechado, ADR-0014). Presente so quando ha algum.
    */
-  readonly residualGroups?: readonly number[]
+  readonly residualGroups?: readonly (number | null)[]
 }
 
 /** Grupos que o gate nao conseguiu provar mortos: um por comando com `groupTerminated: false`. */
-function residualGroupsOf(result: GateRunResult): number[] {
-  const groups: number[] = []
+function residualGroupsOf(result: GateRunResult): (number | null)[] {
+  const groups: (number | null)[] = []
   for (const record of result.results) {
-    if (!record.groupTerminated && record.pid !== null) groups.push(record.pid)
+    if (!record.groupTerminated) groups.push(record.pid)
   }
   return groups
 }
@@ -92,6 +93,9 @@ async function toCommandResults(
  * sao erro de configuracao (POLICY_VIOLATION): repetir a tentativa nao corrigiria.
  */
 export async function runGate(input: RunGateInput): Promise<GateOutcome> {
+  // Fora do `try`: o residuo e um FATO observado no instante em que o gate rodou, e uma falha
+  // posterior (persistir a saida) nao pode apaga-lo — seria devolver a posse com o grupo vivo.
+  let residual: { readonly residualGroups?: readonly (number | null)[] } = {}
   try {
     const gate = input.gates.require(input.gateId)
     const result = await input.gateRunner.run({
@@ -104,7 +108,7 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     })
     const residualGroups = residualGroupsOf(result)
-    const residual = residualGroups.length === 0 ? {} : { residualGroups }
+    if (residualGroups.length > 0) residual = { residualGroups }
     // Gate cancelado nao e medicao: nao vira artefato nem execucao. O proximo dono refaz.
     if (input.signal?.aborted === true) {
       return {
@@ -135,6 +139,7 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
         detail: `gate ${input.gateId} nao pode ser executado: ${describeError(error)}`,
       },
       cwd: input.cwd,
+      ...residual,
     }
   }
 }
