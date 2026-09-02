@@ -118,7 +118,12 @@ function windowFor(project: Project, label: string): AgenticService {
         },
       ),
     spawnServe: () => {
-      const child = launchServe({ toolchain, repoRoot: project.root, env: { ...process.env } })
+      const child = launchServe({
+        toolchain,
+        projectDir: project.root,
+        repoRoot: project.root,
+        env: { ...process.env },
+      })
       spawned.push(child)
       return Promise.resolve(child)
     },

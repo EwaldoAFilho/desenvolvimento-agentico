@@ -261,13 +261,71 @@ export async function resolveToolchain(
   }
 }
 
+/**
+ * Ambiente do filho: uma ALLOWLIST operacional, nunca `process.env` inteiro (P17).
+ *
+ * O extension host herda o ambiente da sessao do usuario — e ali pode haver token de nuvem,
+ * chave de API, credencial de CI. Nada disso e injetado no control plane: passa so o que um
+ * processo precisa para achar executaveis, o diretorio do usuario, locale, proxy e certificados.
+ * Quem precisar de mais declara os nomes em `agentic.childEnvAllow`.
+ */
+export const CHILD_ENV_ALLOW: readonly string[] = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'TERM',
+  'TZ',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_STATE_HOME',
+  'XDG_RUNTIME_DIR',
+  'NVM_DIR',
+  'NODE_ENV',
+  'CI',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  // Windows
+  'SYSTEMROOT',
+  'SystemRoot',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'USERPROFILE',
+  'PROGRAMFILES',
+]
+
 /** `PATH` do filho com o diretorio do `node` escolhido na frente: shims `#!/usr/bin/env node` acham o mesmo Node. */
 export function childEnv(
   env: Readonly<Record<string, string | undefined>>,
   node: NodeBinary,
+  extraAllow: readonly string[] = [],
 ): Record<string, string | undefined> {
-  if (node.path === 'node') return { ...env }
+  const allowed = new Set([...CHILD_ENV_ALLOW, ...extraAllow])
+  const out: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && allowed.has(key)) out[key] = value
+  }
+  if (node.path === 'node') return out
   const dir = dirname(node.path)
-  const current = env.PATH ?? ''
-  return { ...env, PATH: current.length === 0 ? dir : `${dir}:${current}` }
+  const current = out.PATH ?? ''
+  return { ...out, PATH: current.length === 0 ? dir : `${dir}:${current}` }
 }

@@ -132,12 +132,12 @@
       "view/title": [
         {
           "command": "agentic.start",
-          "when": "view == agentic.status && agentic.controlPlane != running",
+          "when": "view == agentic.status && agentic.controlPlane == stopped",
           "group": "navigation@1"
         },
         {
           "command": "agentic.stop",
-          "when": "view == agentic.status && agentic.controlPlane == running",
+          "when": "view == agentic.status && (agentic.controlPlane == running || agentic.controlPlane == failed)",
           "group": "navigation@1"
         },
         {
@@ -204,6 +204,14 @@
           "type": "boolean",
           "default": true,
           "description": "Ao fechar esta janela, encerrar graciosamente o control plane que ELA iniciou. Um control plane iniciado por outra janela ou pelo terminal nunca é tocado."
+        },
+        "agentic.childEnvAllow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Nomes de variáveis de ambiente ADICIONAIS repassadas ao `agentic serve`. Por padrão só passa uma allowlist operacional (`PATH`, `HOME`, locale, proxy, certificados…); nenhum segredo herdado pelo VS Code é injetado (P17)."
         }
       }
     }

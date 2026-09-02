@@ -205,4 +205,18 @@ describe('resolveToolchain', () => {
     )
     expect(childEnv({ PATH: '/usr/bin' }, { path: 'node', version: 'v22' }).PATH).toBe('/usr/bin')
   })
+
+  it('o ambiente do filho e uma allowlist: segredo herdado nao viaja (P17)', () => {
+    const env = {
+      PATH: '/usr/bin',
+      HOME: '/home/u',
+      OPENAI_API_KEY: 'sk-x',
+      GH_TOKEN: 'ghp',
+      AWS_SECRET_ACCESS_KEY: 'aws',
+      MEU_AJUSTE: 'ok',
+    }
+    const child = childEnv(env, { path: 'node', version: 'v22' })
+    expect(Object.keys(child).sort()).toEqual(['HOME', 'PATH'])
+    expect(childEnv(env, { path: 'node', version: 'v22' }, ['MEU_AJUSTE']).MEU_AJUSTE).toBe('ok')
+  })
 })

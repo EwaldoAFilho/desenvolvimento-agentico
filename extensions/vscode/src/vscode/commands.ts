@@ -5,6 +5,7 @@ import {
   type OpenDiffArgs,
   openDiff,
   openPath,
+  type PathAuthorization,
 } from './git-content.js'
 import type { HomePanel } from './home-panel.js'
 import type { AgenticHost } from './host.js'
@@ -33,37 +34,46 @@ export function registerCommands(
     if (typeof file === 'string') panel.open(file)
     else panel.open()
   })
+  /** Comandos com caminho so abrem dentro do projeto detectado (o mesmo limite do painel). */
+  const scopeOf = (): { repoRoot: string; auth: PathAuthorization } | undefined => {
+    const project = host.project
+    if (project === undefined) return undefined
+    return {
+      repoRoot: project.repoRoot,
+      auth: { roots: [project.repoRoot, project.projectDir], published: new Set() },
+    }
+  }
   register('agentic.openMissionFile', (arg) => {
     const file =
       typeof arg === 'string' ? arg : (arg as { readonly file?: string } | undefined)?.file
-    const repoRoot = host.project?.repoRoot
-    if (file !== undefined && repoRoot !== undefined) return openPath(repoRoot, file)
+    const scope = scopeOf()
+    if (nonEmpty(file) && scope !== undefined) return openPath(scope.repoRoot, file, scope.auth)
     return undefined
   })
   register('agentic.openFile', (path) => {
-    const repoRoot = host.project?.repoRoot
-    if (typeof path === 'string' && repoRoot !== undefined) return openPath(repoRoot, path)
+    const scope = scopeOf()
+    if (nonEmpty(path) && scope !== undefined) return openPath(scope.repoRoot, path, scope.auth)
     return undefined
   })
   register('agentic.openDiff', (args) => {
+    // `repoRoot` NUNCA vem do argumento: e sempre o projeto detectado nesta janela.
     const repoRoot = host.project?.repoRoot
-    const input = args as Partial<OpenDiffArgs> | undefined
+    const input = args as Partial<Omit<OpenDiffArgs, 'repoRoot'>> | undefined
     if (
       repoRoot === undefined ||
-      input?.path === undefined ||
-      input.base === undefined ||
-      input.head === undefined
+      !nonEmpty(input?.path) ||
+      !nonEmpty(input?.base) ||
+      !nonEmpty(input?.head)
     ) {
       return undefined
     }
-    return openDiff({
-      repoRoot: input.repoRoot ?? repoRoot,
-      path: input.path,
-      base: input.base,
-      head: input.head,
-    })
+    return openDiff({ repoRoot, path: input.path, base: input.base, head: input.head })
   })
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, new GitContentProvider()),
   )
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
 }

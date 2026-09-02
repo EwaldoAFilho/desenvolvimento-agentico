@@ -14,10 +14,13 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 let out = ''
 let bundle = ''
+let inputs: string[] = []
 
 beforeAll(async () => {
   out = await mkdtemp(join(tmpdir(), 'agentic-vscode-bundle-'))
-  await build({
+  const result = await build({
+    metafile: true,
+    absWorkingDir: root,
     entryPoints: [join(root, 'src/extension.ts')],
     outfile: join(out, 'extension.js'),
     bundle: true,
@@ -28,6 +31,7 @@ beforeAll(async () => {
     logLevel: 'silent',
   })
   bundle = await readFile(join(out, 'extension.js'), 'utf8')
+  inputs = Object.keys(result.metafile.inputs).map((input) => input.split('\\').join('/'))
 })
 
 afterAll(async () => {
@@ -35,6 +39,18 @@ afterAll(async () => {
 })
 
 describe('bundle da extensao', () => {
+  it('metafile: todo modulo empacotado e da extensao (ou projecao pura do dashboard)', () => {
+    expect(inputs.length).toBeGreaterThan(0)
+    // Caminhos relativos a extensions/vscode (absWorkingDir).
+    const allowed = (input: string): boolean =>
+      input.startsWith('src/') || input === '../../apps/web/src/lib/format.ts'
+    expect(inputs.filter((input) => !allowed(input))).toEqual([])
+    // Em especial: nada de apps/server, apps/cli, packages/* nem node_modules em tempo de execucao.
+    expect(
+      inputs.some((input) => /(apps\/(server|cli)|packages\/|node_modules\/)/.test(input)),
+    ).toBe(false)
+  })
+
   it('nao contem o core: nem servidor, nem banco, nem orquestrador', () => {
     // O NOME `better-sqlite3` aparece de proposito (a sonda da toolchain abre um banco com o
     // driver do PROJETO, num processo filho); o que nao pode aparecer e o CODIGO do driver.

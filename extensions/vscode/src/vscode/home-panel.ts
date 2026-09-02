@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import { messageOf } from '../core/project.js'
 import type { HomeState, HostToWebview, MissionDetail } from '../webview/protocol.js'
 import { isWebviewToHost } from '../webview/protocol.js'
-import { openDiff, openPath } from './git-content.js'
+import { openDiff, openPath, type PathAuthorization } from './git-content.js'
 import type { AgenticHost } from './host.js'
 import type { AgenticLog } from './log.js'
 
@@ -18,6 +18,8 @@ export class HomePanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined
   private selected: MissionDetail | undefined
   private selectedFile: string | undefined
+  /** Caminhos fora do repositorio que o host publicou ao painel (worktrees das tentativas). */
+  private readonly published = new Set<string>()
   private readonly disposables: vscode.Disposable[] = []
 
   constructor(
@@ -69,7 +71,12 @@ export class HomePanel implements vscode.Disposable {
       this.log.warn(`webview: mensagem ignorada: ${JSON.stringify(raw).slice(0, 200)}`)
       return
     }
-    const repoRoot = this.host.project?.repoRoot
+    const project = this.host.project
+    const repoRoot = project?.repoRoot
+    const auth: PathAuthorization | undefined =
+      project === undefined
+        ? undefined
+        : { roots: [project.repoRoot, project.projectDir], published: this.published }
     switch (raw.type) {
       case 'ready':
         this.post()
@@ -90,11 +97,11 @@ export class HomePanel implements vscode.Disposable {
         await this.select(raw.file)
         return
       case 'openMissionFile':
-        if (repoRoot !== undefined) await openPath(repoRoot, raw.file)
+        if (repoRoot !== undefined && auth !== undefined) await openPath(repoRoot, raw.file, auth)
         return
       case 'openFile':
       case 'openWorktree':
-        if (repoRoot !== undefined) await openPath(repoRoot, raw.path)
+        if (repoRoot !== undefined && auth !== undefined) await openPath(repoRoot, raw.path, auth)
         return
       case 'openDiff':
         if (repoRoot !== undefined) {
@@ -111,6 +118,13 @@ export class HomePanel implements vscode.Disposable {
     this.selectedFile = file
     try {
       this.selected = await this.host.missionDetail(file)
+      for (const task of this.selected.tasks ?? []) {
+        if (task.isolation.worktreePath !== undefined)
+          this.published.add(task.isolation.worktreePath)
+        for (const attempt of task.attempts) {
+          if (attempt.worktreePath !== undefined) this.published.add(attempt.worktreePath)
+        }
+      }
     } catch (error) {
       this.selected = undefined
       this.log.warn(`detalhe da mission ${file}: ${messageOf(error)}`)

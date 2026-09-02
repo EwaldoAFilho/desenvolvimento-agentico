@@ -46,7 +46,16 @@ um `stop` que a extensão chamaria.
    real (configuração, `PATH`, nvm), porque o driver SQLite é nativo. A CLI é a do
    repositório aberto (`apps/cli/bin/agentic.mjs`), a de `node_modules/.bin` ou a do `PATH`.
 
-7. **Ações nativas sobre dados existentes.** Abrir arquivo/pasta e diff (`git show` dos dois
+7. **O filho recebe uma allowlist de ambiente, nunca `process.env`.** O extension host herda
+   a sessão do usuário, e ali pode haver token ou chave de API; nada disso é injetado no
+   control plane (P17). Só o operacional passa (`PATH`, `HOME`, locale, proxy, certificados),
+   mais o que o usuário declarar em `agentic.childEnvAllow`.
+
+8. **A webview só abre caminhos autorizados**: dentro do `repoRoot`, do diretório de
+   configuração ou publicados pelo host (worktrees das tentativas). O payload de cada
+   mensagem é validado por inteiro antes de qualquer ação.
+
+9. **Ações nativas sobre dados existentes.** Abrir arquivo/pasta e diff (`git show` dos dois
    lados num `TextDocumentContentProvider`) usam o editor; nada de editor próprio.
 
 ## Alternativas rejeitadas

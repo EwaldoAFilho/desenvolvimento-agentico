@@ -160,13 +160,56 @@ describe('AgenticService.start', () => {
     expect(view.failure?.message).toBe('sem node')
   })
 
-  it('prazo vencido sem health: sinaliza o filho e volta a STOPPED', async () => {
+  it('prazo vencido sem health: sinaliza o filho e so volta a STOPPED com a saida provada', async () => {
     const w = world()
     const service = new AgenticService(depsOf(w))
     const view = await service.start()
     expect(view.state).toBe('STOPPED')
     expect(view.failure?.message).toContain('nao publicou')
     expect(w.spawned[0]?.signals).toEqual(['SIGTERM'])
+    expect(w.spawned[0]?.done).toBe(true)
+  })
+
+  it('prazo vencido e o filho nao sai apos SIGTERM: FAILED com o handle mantido', async () => {
+    const w = world()
+    const service = new AgenticService(
+      depsOf(w, {
+        spawnServe: () => {
+          const proc = new FakeProcess(2002)
+          proc.onKill = () => undefined
+          w.spawned.push(proc)
+          return Promise.resolve(proc)
+        },
+      }),
+    )
+    const view = await service.start()
+    expect(view.state).toBe('FAILED')
+    expect(view.failure?.message).toContain('processo mantido')
+    await expect(service.start()).rejects.toBeInstanceOf(ServiceStateError)
+    const child = w.spawned[0]
+    if (child === undefined) throw new Error('sem filho')
+    child.onKill = undefined
+    expect((await service.stop()).state).toBe('STOPPED')
+  })
+
+  it('start em RUNNING e fast-path: nao consulta, nao sobe, nao troca o handle', async () => {
+    const w = world()
+    let discoveries = 0
+    const service = new AgenticService(
+      depsOf(w, {
+        discover: () => {
+          discoveries += 1
+          if (w.spawned[0] !== undefined) w.live = liveOf(w.spawned[0].pid)
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    await service.start()
+    const before = discoveries
+    const again = await service.start()
+    expect(again).toMatchObject({ state: 'RUNNING', owned: true })
+    expect(discoveries).toBe(before)
+    expect(w.spawned).toHaveLength(1)
   })
 
   it('start concorrente compartilha a fila: um unico processo', async () => {

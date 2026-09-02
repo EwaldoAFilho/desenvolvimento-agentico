@@ -50,6 +50,8 @@ export class AgenticHost implements vscode.Disposable {
   private lastDataAt = 0
   private loading: Promise<void> | undefined
   private readonly reports = new Map<string, CompileReportDto>()
+  /** Servicos de projetos anteriores desta janela que ainda possuem um filho vivo. */
+  private readonly retired: AgenticService[] = []
 
   constructor(private readonly log: AgenticLog) {}
 
@@ -86,6 +88,9 @@ export class AgenticHost implements vscode.Disposable {
     this.project = detected
     this.watcher?.close()
     this.watcher = undefined
+    // Um servico que possui um filho vivo nao e esquecido ao trocar de projeto: continua
+    // alcancavel pelo encerramento da janela (stopOnWindowClose).
+    if (this.service !== undefined && this.service.view().owned) this.retired.push(this.service)
     this.service = undefined
     this.reports.clear()
     this.data = { missions: [] }
@@ -122,8 +127,9 @@ export class AgenticHost implements vscode.Disposable {
         log.info(banner)
         return launchServe({
           toolchain,
+          projectDir: project.projectDir,
           repoRoot: project.repoRoot,
-          env: childEnv(process.env, toolchain.node),
+          env: childEnv(process.env, toolchain.node, settings.get<string[]>('childEnvAllow', [])),
           onLine: (line) => log.child(line),
           banner,
         })
@@ -327,10 +333,24 @@ export class AgenticHost implements vscode.Disposable {
     const stopOnClose = vscode.workspace
       .getConfiguration('agentic')
       .get<boolean>('stopOnWindowClose', true)
-    const view = this.view()
-    if (stopOnClose && this.service !== undefined && view?.owned === true) {
+    if (!stopOnClose) return
+    const owned = [...this.retired, ...(this.service === undefined ? [] : [this.service])].filter(
+      (service) => service.view().owned,
+    )
+    for (const service of owned) {
       this.log.info('janela fechando: encerrando o control plane desta janela')
-      await Promise.race([this.service.stop(), sleep(4_000)])
+      // O host da extensao da poucos segundos ao deactivate. O stop continua com o proprio
+      // prazo e prova; se a janela for embora antes, o processo (grupo proprio) continua dono
+      // e a proxima janela o descobre — nunca um STOPPED falso.
+      const outcome = await Promise.race([
+        service.stop().then((view) => view.state),
+        sleep(4_000).then(() => 'DEADLINE'),
+      ])
+      if (outcome !== 'STOPPED') {
+        this.log.warn(
+          `encerramento ao fechar a janela nao provado (${outcome}); o processo segue dono ate ser parado`,
+        )
+      }
     }
   }
 

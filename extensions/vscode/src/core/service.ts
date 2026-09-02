@@ -78,6 +78,8 @@ export class AgenticService {
   private failure: ServiceFailure | undefined
   private checkedAt: string | undefined
   private chain: Promise<unknown> = Promise.resolve()
+  private pendingStart: Promise<ServiceView> | undefined
+  private pendingStop: Promise<ServiceView> | undefined
   private readonly listeners = new Set<Listener>()
   private readonly timeouts: ServiceTimeouts
   private readonly deps: ServiceDeps
@@ -121,12 +123,20 @@ export class AgenticService {
     return this.start()
   }
 
+  /** Idempotente: em RUNNING devolve o estado; chamadas concorrentes compartilham a mesma partida. */
   start(): Promise<ServiceView> {
-    return this.enqueue(() => this.doStart())
+    this.pendingStart ??= this.enqueue(() => this.doStart()).finally(() => {
+      this.pendingStart = undefined
+    })
+    return this.pendingStart
   }
 
+  /** Idempotente: em STOPPED devolve o estado; chamadas concorrentes compartilham o mesmo encerramento. */
   stop(): Promise<ServiceView> {
-    return this.enqueue(() => this.doStop())
+    this.pendingStop ??= this.enqueue(() => this.doStop()).finally(() => {
+      this.pendingStop = undefined
+    })
+    return this.pendingStop
   }
 
   /** `stop` e depois `start`, serializados: nunca dois donos. */
@@ -144,6 +154,10 @@ export class AgenticService {
   }
 
   private async doStart(): Promise<ServiceView> {
+    // Fast-path: um control plane conhecido no ar nao e disputado de novo. Uma falha
+    // transitoria do health nao pode virar um segundo `serve` substituindo o handle do filho.
+    if (this.state === 'RUNNING' && (this.ownsLive() || this.child === undefined))
+      return this.view()
     if (this.state === 'FAILED') {
       throw new ServiceStateError(
         this.state,
@@ -195,7 +209,19 @@ export class AgenticService {
         return this.view()
       }
       if (this.deps.now().getTime() > deadline) {
+        // Sinal enviado nao e processo morto: sem a saida provada, o handle fica e o estado
+        // e FAILED — o mesmo contrato do stop().
         child.kill('SIGTERM')
+        const ended = await this.waitUntil(() => child.done, this.timeouts.stopMs)
+        if (!ended) {
+          this.fail(
+            'start',
+            `agentic serve (pid ${child.pid}) nao publicou /api/health em ${this.timeouts.startMs}ms e nao saiu apos SIGTERM; ` +
+              `processo mantido (Stop de novo tenta outra vez):\n${child.output()}`,
+          )
+          this.transition('FAILED')
+          return this.view()
+        }
         this.child = undefined
         this.fail(
           'start',

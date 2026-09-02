@@ -41,6 +41,7 @@ Sem porta, sem PID, sem `curl`: tudo é descoberto.
 | `agentic.cliPath` | `""` | caminho da CLI; vazio detecta `apps/cli/bin/agentic.mjs` no repo, `node_modules/.bin/agentic`, `PATH` |
 | `agentic.nodePath` | `""` | `node` >= 22 para o control plane; vazio detecta no `PATH` e no nvm |
 | `agentic.stopOnWindowClose` | `true` | ao fechar a janela, encerra o control plane que **ela** iniciou |
+| `agentic.childEnvAllow` | `[]` | variáveis de ambiente ADICIONAIS repassadas ao `agentic serve`; por padrão só a allowlist operacional (`PATH`, `HOME`, locale, proxy, certificados). Nenhum segredo herdado pelo VS Code é injetado (P17) |
 
 ## Várias janelas
 
@@ -67,4 +68,8 @@ ou use a configuração de launch da raiz.
 - A CLI `agentic` precisa existir no repositório aberto, em `node_modules/.bin` ou no `PATH`;
   a extensão não a embute.
 - Multi-root: a primeira pasta com `.agentic/project.yaml` é o projeto da janela.
+- O `agentic serve` recebe só uma allowlist de ambiente; uma variável que o seu provider CLI
+  exija precisa ser declarada em `agentic.childEnvAllow`.
+- O painel só abre caminhos dentro do repositório, do diretório de configuração ou de
+  worktrees publicadas por ele; qualquer outro é recusado.
 - Sem chat próprio, sem editor de mission, sem aprovação/DAG (próxima missão).

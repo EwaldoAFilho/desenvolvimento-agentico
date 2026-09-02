@@ -56,22 +56,31 @@ export type WebviewToHost =
 
 export type HostToWebview = { readonly type: 'state'; readonly state: HomeState }
 
-export function isWebviewToHost(raw: unknown): raw is WebviewToHost {
-  if (typeof raw !== 'object' || raw === null) return false
-  const type = (raw as { readonly type?: unknown }).type
-  return typeof type === 'string' && KNOWN.has(type)
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
 }
 
-const KNOWN: ReadonlySet<string> = new Set([
-  'ready',
-  'refresh',
-  'start',
-  'stop',
-  'restart',
-  'showLog',
-  'selectMission',
-  'openFile',
-  'openMissionFile',
-  'openDiff',
-  'openWorktree',
-])
+/** Valida a mensagem INTEIRA: tipo conhecido e cada campo do payload com o formato esperado. */
+export function isWebviewToHost(raw: unknown): raw is WebviewToHost {
+  if (typeof raw !== 'object' || raw === null) return false
+  const message = raw as Record<string, unknown>
+  switch (message.type) {
+    case 'ready':
+    case 'refresh':
+    case 'start':
+    case 'stop':
+    case 'restart':
+    case 'showLog':
+      return true
+    case 'selectMission':
+    case 'openMissionFile':
+      return nonEmpty(message.file)
+    case 'openFile':
+    case 'openWorktree':
+      return nonEmpty(message.path)
+    case 'openDiff':
+      return nonEmpty(message.path) && nonEmpty(message.base) && nonEmpty(message.head)
+    default:
+      return false
+  }
+}

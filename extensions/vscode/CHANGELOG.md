@@ -11,3 +11,5 @@ Primeira versão utilizável (DA-VSCODE-MVP-001):
 - Missions com estado e último run; detalhes no painel.
 - Painel **Open Agentic** (Project Home) via webview sem rede, por `postMessage`.
 - Abrir arquivo/worktree e diff nativo (`git show` dos dois lados) a partir do painel.
+- Segurança: o `agentic serve` nasce com allowlist de ambiente (P17); a webview só abre
+  caminhos do projeto ou publicados pelo host; `node` é validado contra o driver nativo do projeto.

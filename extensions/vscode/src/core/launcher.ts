@@ -29,6 +29,9 @@ export interface ProcessExit {
 
 export interface LaunchInput {
   readonly toolchain: Toolchain
+  /** Onde esta `.agentic/project.yaml`: e o que `-C` recebe. */
+  readonly projectDir: string
+  /** Identidade do projeto: `cwd` do processo. Pode ser outro diretorio (`project.repoRoot: ../x`). */
   readonly repoRoot: string
   readonly env: Record<string, string | undefined>
   readonly onLine?: (line: string) => void
@@ -39,7 +42,7 @@ export interface LaunchInput {
 const OUTPUT_TAIL_LINES = 40
 
 export function launchServe(input: LaunchInput): SpawnedProcess {
-  const { file, args } = input.toolchain.command(['serve', '-C', input.repoRoot])
+  const { file, args } = input.toolchain.command(['serve', '-C', input.projectDir])
   const child = spawn(file, args, {
     cwd: input.repoRoot,
     env: input.env,
