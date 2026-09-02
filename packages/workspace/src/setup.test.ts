@@ -2,7 +2,12 @@ import { lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createTestRepo, type TestRepo } from './__fixtures__/repo.js'
-import { isWorkspaceError, WorkspaceError } from './errors.js'
+import {
+  isResidualProcessError,
+  isWorkspaceError,
+  residualGroupOf,
+  WorkspaceError,
+} from './errors.js'
 import { normalizeSetupCommand, runWorkspaceSetup } from './setup.js'
 
 let repo: TestRepo | undefined
@@ -181,6 +186,21 @@ describe('runWorkspaceSetup', () => {
     await runWorkspaceSetup(destino, repo.root, { commands: ['node pai.cjs'] })
     await new Promise((resolve) => setTimeout(resolve, 2_000))
     await expect(lstat(marca)).rejects.toThrow()
+  })
+
+  it('grupo do comando vivo alem do teto: WORKSPACE_ERROR com residualProcess e o pgid para sondar de novo (C3)', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const erro = await runWorkspaceSetup(
+      destino,
+      repo.root,
+      { commands: ['node -e "process.exit(0)"'] },
+      undefined,
+      { groupGraceMs: 100, probeGroup: () => true },
+    ).catch((error: unknown) => error)
+    expect(isResidualProcessError(erro)).toBe(true)
+    // Quem encerra precisa do grupo para provar a morte numa tentativa seguinte de stop.
+    expect(typeof residualGroupOf(erro)).toBe('number')
   })
 
   it('sinal ja abortado: nenhum comando chega a rodar', async () => {

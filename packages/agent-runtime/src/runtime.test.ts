@@ -232,6 +232,21 @@ describe('spawn — encerramento', () => {
     const segundo = await proc.exit()
     expect(segundo).toEqual(primeiro)
   })
+
+  it('exit() preserva groupTerminated do primitivo: saida natural com descendente vivo chega a quem observa (B1)', async () => {
+    // A porta do dominio carrega o campo; o runtime nao pode achata-lo no caminho.
+    const comSonda = createLocalAgentRuntime({
+      platform: 'linux',
+      pathEnv: cli.dir,
+      processDeps: { killGraceMs: 200, groupGraceMs: 100, probeGroup: () => true },
+    })
+    const proc = await comSonda.spawn(nodeSpec('process.exit(0)'), opts())
+    const status = await proc.exit()
+    expect(status).toMatchObject({ code: 0, cancelled: false, groupTerminated: false })
+
+    const normal = await runtime.spawn(nodeSpec('process.exit(0)'), opts())
+    expect((await normal.exit()).groupTerminated).toBe(true)
+  })
 })
 
 describe('spawn — executavel ausente', () => {

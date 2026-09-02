@@ -79,6 +79,8 @@ export interface ProjectFixture {
   readonly reviewDefault?: string
   readonly missionGate?: string | null
   readonly denyPaths?: readonly string[]
+  /** Comandos de `execution.workspaceSetup`, na ordem: rodam em toda worktree nova. */
+  readonly workspaceSetup?: readonly string[]
 }
 
 export function projectYaml(project: ProjectFixture = {}): string {
@@ -98,6 +100,13 @@ export function projectYaml(project: ProjectFixture = {}): string {
     `  defaultMaxAttempts: ${project.defaultMaxAttempts ?? 3}`,
     `  attemptTimeoutMinutes: ${project.attemptTimeoutMinutes ?? 5}`,
     `  retryBackoffSeconds: ${project.retryBackoffSeconds ?? 0}`,
+    ...(project.workspaceSetup === undefined
+      ? []
+      : [
+          '  workspaceSetup:',
+          '    commands:',
+          ...project.workspaceSetup.map((command) => `      - run: ${JSON.stringify(command)}`),
+        ]),
     'policies:',
     '  enforceTouches: true',
     '  requireReviewByDefault: false',

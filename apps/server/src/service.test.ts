@@ -185,6 +185,39 @@ describe('ControlPlaneService', () => {
     expect(tentativas).toBe(2)
   })
 
+  it('stop() que falha DUAS vezes continua FAILED com a posse retida; so a prova de morte devolve (C3)', async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'agentic-service-')))
+    extras.push(dir)
+    const posse = acquireControlPlaneOwnership({ baseDir: runtimeDir(dir) })
+    if (!posse.ok) throw new Error('fixture: posse recusada')
+    let tentativas = 0
+    // O residuo (grupo de processos vivo) sobrevive as duas primeiras sondas: o servico nao
+    // pode "esquecer" o control plane que falhou e devolver a posse por tabela.
+    const booted: BootedControlPlane = {
+      url: 'http://127.0.0.1:1',
+      lease: { instanceId: posse.lease.instanceId },
+      close: async (): Promise<void> => {
+        tentativas += 1
+        if (tentativas <= 2)
+          throw new Error(`grupo de processos ainda vivo (tentativa ${tentativas})`)
+        posse.lease.release()
+      },
+    }
+    const s = servico(dir, { boot: () => Promise.resolve(booted) })
+    await s.start()
+
+    await expect(s.stop()).rejects.toThrow('tentativa 1')
+    expect(s.status().status).toBe('FAILED')
+    await expect(s.stop()).rejects.toThrow('tentativa 2')
+    expect(s.status()).toMatchObject({ status: 'FAILED', failure: { at: 'stop' } })
+    expect(posseLivre(dir)).toBe(false)
+    expect(s.running).toBe(booted)
+
+    expect((await s.stop()).status).toBe('STOPPED')
+    expect(posseLivre(dir)).toBe(true)
+    expect(tentativas).toBe(3)
+  })
+
   it('status() nunca muta: consultar durante STARTING e STOPPING so observa', async () => {
     const p = await projeto()
     const s = servico(p.root)

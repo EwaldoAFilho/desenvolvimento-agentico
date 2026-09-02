@@ -16,6 +16,7 @@ import type {
 } from '@agentic/domain'
 import { taskId as toTaskId } from '@agentic/domain'
 import { acquireControlPlaneOwnership, type ControlPlaneLease } from '@agentic/persistence'
+import type { GroupProbeDeps } from '@agentic/process'
 import type { ProviderFactory } from '@agentic/providers'
 import type { GatesFile, ProjectFile } from '@agentic/schemas'
 import { parseGatesFile, parseMissionFile, parseProjectFile, toMissionSpec } from '@agentic/schemas'
@@ -59,6 +60,12 @@ export interface HarnessOptions {
   readonly factory?: ProviderFactory
   /** Teto e espera do log do agente: o teste aperta o limite para provar a truncagem. */
   readonly agentLog?: AgentLogConfig
+  /**
+   * Sonda do grupo de processos compartilhada por gate, `workspaceSetup` e pela re-sonda do
+   * orquestrador. E como a suite fabrica um grupo que "sobrevive" a SIGKILL — e o mata
+   * quando quer provar que o encerramento so libera com a morte confirmada.
+   */
+  readonly processProbe?: GroupProbeDeps
 }
 
 export interface Harness {
@@ -175,6 +182,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
         options.factory,
       ),
       ...(options.agentLog === undefined ? {} : { agentLog: options.agentLog }),
+      ...(options.processProbe === undefined ? {} : { processProbe: options.processProbe }),
       ...(options.safetyIntervalMs === undefined
         ? {}
         : { safetyIntervalMs: options.safetyIntervalMs }),
