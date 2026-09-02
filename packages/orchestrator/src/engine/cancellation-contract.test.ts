@@ -6,7 +6,7 @@ import nodeProcess from 'node:process'
 import { taskId as toTaskId } from '@agentic/domain'
 import { acquireControlPlaneOwnership } from '@agentic/persistence'
 import type { GroupProbeDeps, RuntimeDeps } from '@agentic/process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFakeCli, type FakeCli } from './__fixtures__/fake-cli.js'
 import { GATE_ALWAYS_PASS } from './__fixtures__/files.js'
 import { createHarness, DEFAULT_ACTOR, type Harness } from './__fixtures__/harness.js'
@@ -407,6 +407,92 @@ describe('revisao ciclo 1 — intencao sem tentativa em voo; residuo de gate sem
     expect(segundo).toBeInstanceOf(ShutdownTimeoutError)
     expect(harness.lease.held).toBe(true)
   }, 60_000)
+})
+
+describe('revisao ciclo 2 — cada residuo tem identidade propria', () => {
+  it('mission gate executado duas vezes deixa DOIS residuos de setup (A e B): B morre, A continua, e a posse fica por A', async () => {
+    // Sonda por pgid, na ordem em que os grupos aparecem: o 1o (setup da task) e o 2o (gate
+    // da task) morrem; do 3o em diante — os setups do mission gate, A e depois B — ficam
+    // vivos ate o teste mata-los, um de cada vez.
+    const vistos: number[] = []
+    const mortos = new Set<number>()
+    const probeGroup = (pgid: number): boolean => {
+      const pid = -pgid
+      if (!vistos.includes(pid)) vistos.push(pid)
+      return vistos.indexOf(pid) >= 2 && !mortos.has(pid)
+    }
+    h = await createHarness({
+      mission: { ...MISSION, missionGate: 'unit' },
+      gates: GATES,
+      project: { workspaceSetup: ["node -e 'process.exit(0)'"] },
+      safetyIntervalMs: 0,
+      processProbe: { groupGraceMs: 100, probeGroup },
+    })
+    const harness = h
+    // A escrita do desfecho do mission gate (setup reprovado -> `gate.finished` ERROR) falha
+    // UMA vez: a trava do gate cai e o tick seguinte executa o gate — e o setup — de novo.
+    const runs = harness.plane.persistence.runs
+    const original = runs.withTransaction.bind(runs)
+    let jaFalhou = false
+    vi.spyOn(runs, 'withTransaction').mockImplementation((work) =>
+      original(async (uow) => {
+        const proxy = new Proxy(uow, {
+          get(target, prop) {
+            const bind = (value: unknown): unknown =>
+              typeof value === 'function'
+                ? (value as (...args: unknown[]) => unknown).bind(target)
+                : value
+            if (prop === 'appendEvent') {
+              const append = bind(Reflect.get(target, prop, target)) as (event: {
+                readonly type: string
+                readonly payload: { readonly status?: string }
+              }) => Promise<void>
+              return (event: {
+                readonly type: string
+                readonly payload: { readonly status?: string }
+              }) => {
+                if (
+                  event.type === 'gate.finished' &&
+                  event.payload.status === 'ERROR' &&
+                  !jaFalhou
+                ) {
+                  jaFalhou = true
+                  throw new Error('queda ao gravar o desfecho do mission gate')
+                }
+                return append(event)
+              }
+            }
+            return bind(Reflect.get(target, prop, target))
+          },
+        })
+        return work(proxy as typeof uow)
+      }),
+    )
+    try {
+      await harness.orchestrator.drain()
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(jaFalhou).toBe(true)
+    expect((await harness.run()).status).toBe('FAILED')
+    const [, , a, b] = vistos
+    expect(typeof a).toBe('number')
+    expect(typeof b).toBe('number')
+    expect(a).not.toBe(b)
+
+    // B morre; A continua vivo. O encerramento tem de recusar POR A — que so existe se cada
+    // residuo tiver identidade propria em vez de uma chave fixa que o segundo sobrescreve.
+    mortos.add(b as number)
+    const primeiro = await fecha(harness)
+    expect(primeiro).toBeInstanceOf(ShutdownTimeoutError)
+    const residuos = (primeiro as ShutdownTimeoutError).residualProcesses.join(' ')
+    expect(residuos).toContain(`pgid ${a}`)
+    expect(residuos).not.toContain(`pgid ${b}`)
+
+    mortos.add(a as number)
+    await harness.plane.close({ graceMs: 8_000 })
+    expect(harness.plane.lifecycle).toBe('closed')
+  }, 90_000)
 })
 
 describe('B1-final — saida natural do agente com descendente vivo', () => {
