@@ -2,6 +2,7 @@ export const PACKAGE_NAME = '@agentic/persistence'
 
 export {
   type ArtifactRecord,
+  type ArtifactStoreDeps,
   type ArtifactWrite,
   createArtifactStore,
   FileArtifactStore,

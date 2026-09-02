@@ -1,5 +1,9 @@
 import { join, resolve } from 'node:path'
-import { createArtifactStore, type FileArtifactStore } from './artifact-store.js'
+import {
+  type ArtifactStoreDeps,
+  createArtifactStore,
+  type FileArtifactStore,
+} from './artifact-store.js'
 import { type DatabaseHandle, type DatabaseMode, openDatabase } from './database.js'
 import { createEventStore, type SqliteEventStore } from './event-store.js'
 import { ChangeNotifier } from './notifier.js'
@@ -26,6 +30,8 @@ export interface OpenPersistenceOptions {
   readonly mode?: DatabaseMode
   readonly busyTimeoutMs?: number
   readonly pollIntervalMs?: number
+  /** Primitivos de arquivo do store de artefatos; so o teste os troca. */
+  readonly artifacts?: ArtifactStoreDeps
 }
 
 export interface Persistence {
@@ -63,7 +69,7 @@ export function openPersistence(options: OpenPersistenceOptions = {}): Persisten
     database,
     runs: createRunStore(database, { notifier }),
     events,
-    artifacts: createArtifactStore(database, baseDir),
+    artifacts: createArtifactStore(database, baseDir, options.artifacts),
     queries: createQueries(database),
     baseDir,
     mode,

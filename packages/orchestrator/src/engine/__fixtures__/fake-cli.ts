@@ -26,6 +26,8 @@ export interface FakeStep {
   readonly grandchildDelayMs?: number
   /** Arquivo criado assim que o processo comeca; prova que ele chegou a rodar. */
   readonly aliveMarker?: string
+  /** Arquivo com o pid do processo: deixa o teste perguntar ao SO se ele ainda vive. */
+  readonly pidFile?: string
   /** Espera antes de agir, em ms. */
   readonly delayMs?: number
 }
@@ -67,6 +69,7 @@ function noise() {
 
 function act() {
   if (step.aliveMarker) writeFileSync(step.aliveMarker, dir, 'utf8')
+  if (step.pidFile) writeFileSync(step.pidFile, String(process.pid), 'utf8')
   if (step.write ?? (step.kind === 'ok' || step.kind === 'noisy')) writeChange()
   noise()
 

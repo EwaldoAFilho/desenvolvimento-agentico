@@ -32,16 +32,29 @@ export interface ArtifactRecord {
 export const RUNS_DIRECTORY = 'runs'
 
 /**
+ * Primitivos de sistema de arquivos que o store usa. Injetaveis para o teste segurar uma
+ * escrita num ponto controlado — e so para isso: o default e o `node:fs/promises` real.
+ */
+export interface ArtifactStoreDeps {
+  readonly mkdir?: (path: string, options: { readonly recursive: true }) => Promise<unknown>
+  readonly writeFile?: (path: string, data: Uint8Array) => Promise<void>
+}
+
+/**
  * Unico lugar do pacote que grava conteudo em disco (ADR-0003): blob volumoso fica em
  * arquivo, o banco guarda caminho + digest.
  */
 export class FileArtifactStore {
   readonly #handle: DatabaseHandle
   readonly #baseDir: string
+  readonly #mkdir: NonNullable<ArtifactStoreDeps['mkdir']>
+  readonly #writeFile: NonNullable<ArtifactStoreDeps['writeFile']>
 
-  constructor(handle: DatabaseHandle, baseDir: string) {
+  constructor(handle: DatabaseHandle, baseDir: string, deps: ArtifactStoreDeps = {}) {
     this.#handle = handle
     this.#baseDir = resolve(baseDir)
+    this.#mkdir = deps.mkdir ?? mkdir
+    this.#writeFile = deps.writeFile ?? writeFile
   }
 
   get baseDir(): string {
@@ -88,8 +101,8 @@ export class FileArtifactStore {
     const createdAt = input.createdAt ?? new Date()
     const relative = `${RUNS_DIRECTORY}/${input.runId}/${normalizeSeparators(input.relativePath)}`
 
-    await mkdir(dirname(absolute), { recursive: true })
-    await writeFile(absolute, bytes)
+    await this.#mkdir(dirname(absolute), { recursive: true })
+    await this.#writeFile(absolute, bytes)
 
     const row: ArtifactRow = {
       id: randomUUID(),
@@ -176,6 +189,10 @@ function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-export function createArtifactStore(handle: DatabaseHandle, baseDir: string): FileArtifactStore {
-  return new FileArtifactStore(handle, baseDir)
+export function createArtifactStore(
+  handle: DatabaseHandle,
+  baseDir: string,
+  deps?: ArtifactStoreDeps,
+): FileArtifactStore {
+  return new FileArtifactStore(handle, baseDir, deps)
 }
