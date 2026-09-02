@@ -147,29 +147,47 @@ export function raceForOwnership(
   margemMs = 1_200,
 ): Promise<RaceResult> {
   const at = Date.now() + margemMs
+  const filhos: ChildProcess[] = []
   const corridas = Array.from({ length: competidores }, () => {
     const { child, out, err } = nodeChild(RACER_SCRIPT, [baseDir, String(at)])
+    filhos.push(child)
     let stdout = ''
     let stderr = ''
     err.on('data', (chunk: unknown) => {
       stderr += String(chunk)
     })
-    out.on('data', (chunk: unknown) => {
-      stdout += String(chunk)
-    })
     return new Promise<string>((done, fail) => {
-      child.once('exit', (code: number | null) => {
+      const veredito = (): string | undefined => {
         const linha = stdout.trim().split('\n').at(-1) ?? ''
-        if (linha.startsWith('WIN') || linha.startsWith('LOSE')) return done(linha)
+        return linha.startsWith('WIN') || linha.startsWith('LOSE') ? linha : undefined
+      }
+      // O veredito vem do STDOUT, nao da saida do processo — a mesma disciplina de
+      // `raceEntrypointsForOwnership`, e pelo mesmo motivo. Esperar a SAIDA obrigaria o
+      // vencedor a soltar a posse para reportar, e sob carga um competidor que nasce tarde
+      // ganharia depois disso: a rodada acusaria dois vencedores que nunca coexistiram.
+      out.on('data', (chunk: unknown) => {
+        stdout += String(chunk)
+        const linha = veredito()
+        if (linha !== undefined) done(linha)
+      })
+      child.once('exit', (code: number | null) => {
+        const linha = veredito()
+        if (linha !== undefined) return done(linha)
         fail(new Error(`competidor saiu com ${code} sem veredito. stderr:\n${stderr}`))
       })
     })
   })
 
-  return Promise.all(corridas).then((linhas) => ({
-    winners: linhas.filter((linha) => linha.startsWith('WIN')),
-    losers: linhas.filter((linha) => linha.startsWith('LOSE')),
-  }))
+  return Promise.all(corridas)
+    .then((linhas) => ({
+      winners: linhas.filter((linha) => linha.startsWith('WIN')),
+      losers: linhas.filter((linha) => linha.startsWith('LOSE')),
+    }))
+    .finally(async () => {
+      // Fim da rodada: so agora o vencedor solta, com todos os oito ja tendo reportado.
+      for (const filho of filhos) filho.kill('SIGTERM')
+      for (const filho of filhos) await ended(filho)
+    })
 }
 
 export const CLI_SCRIPT = resolve(here, 'cli-process.ts')
