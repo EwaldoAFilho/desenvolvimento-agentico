@@ -178,6 +178,7 @@ export class GateRunner {
       signal: run.signal,
       timedOut: run.timedOut,
       groupTerminated: run.groupTerminated,
+      pid: run.pid,
       durationMs: run.durationMs,
       startedAt,
       finishedAt: new Date(this.#now()),
@@ -204,6 +205,7 @@ export class GateRunner {
     const finishedAt = new Date(this.#now())
     return {
       groupTerminated: true,
+      pid: null,
       index,
       command: command.run,
       cwd,

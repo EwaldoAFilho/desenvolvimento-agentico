@@ -40,6 +40,7 @@ export {
   profilesOf,
 } from './control-plane.js'
 export {
+  CancellationUnsettledError,
   CommandRefusedError,
   describeError,
   failureCodeOf,

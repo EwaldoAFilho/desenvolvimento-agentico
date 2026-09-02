@@ -39,6 +39,7 @@ import {
 import {
   EMPTY_SETUP_RESULT,
   runWorkspaceSetup,
+  type SetupProcessDeps,
   type WorkspaceSetup,
   type WorkspaceSetupResult,
 } from './setup.js'
@@ -54,6 +55,8 @@ export interface GitWorktreeProviderConfig {
   readonly missionBranchPrefix?: string
   readonly taskBranchPrefix?: string
   readonly workspaceSetup?: WorkspaceSetup
+  /** Sonda e teto do grupo de processos dos comandos de `workspaceSetup` (injetavel no teste). */
+  readonly setupProcessDeps?: SetupProcessDeps
   readonly denyPaths?: readonly PathScope[]
   /** Escopo usado quando o lease nao declara `touches`. */
   readonly touches?: readonly PathScope[]
@@ -378,7 +381,13 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
   async #setupOrCleanup(path: string, signal?: AbortSignal): Promise<WorkspaceSetupResult> {
     if (this.#config.workspaceSetup === undefined) return EMPTY_SETUP_RESULT
     try {
-      return await runWorkspaceSetup(path, this.#repoRoot, this.#config.workspaceSetup, signal)
+      return await runWorkspaceSetup(
+        path,
+        this.#repoRoot,
+        this.#config.workspaceSetup,
+        signal,
+        this.#config.setupProcessDeps,
+      )
     } catch (error) {
       await removeWorktree(this.#repoRoot, path).catch(() => undefined)
       throw error

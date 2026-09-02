@@ -106,6 +106,8 @@ interface ShellOutcome {
   readonly aborted: boolean
   /** O grupo de processos do comando deixou de existir, confirmado por sonda com teto. */
   readonly groupTerminated: boolean
+  /** Pid do shell (lider do grupo), para quem precisar sondar `-pid` de novo. */
+  readonly pid: number | undefined
   readonly durationMs: number
   readonly output: string
 }
@@ -201,6 +203,7 @@ function runShell(
           timedOut,
           aborted,
           groupTerminated,
+          pid,
           durationMs: Date.now() - startedAt,
           output,
         })
@@ -285,11 +288,16 @@ export async function runWorkspaceSetup(
       timedOut: outcome.timedOut,
     })
     if (!outcome.groupTerminated) {
-      // Nao e "falhou": e "nao consegui provar que parou". Quem encerra precisa saber.
+      // Nao e "falhou": e "nao consegui provar que parou". Quem encerra precisa saber — e
+      // precisa do grupo, para sondar de novo na proxima tentativa de encerrar (C3).
       throw new WorkspaceError(
         'setup',
         `grupo de processos do comando de workspaceSetup ainda vivo depois do teto: ${command.run}`,
-        { detail: outcome.output.trim(), residualProcess: true },
+        {
+          detail: outcome.output.trim(),
+          residualProcess: true,
+          ...(outcome.pid === undefined ? {} : { residualGroup: outcome.pid }),
+        },
       )
     }
     if (outcome.aborted) throw cancelado(command.run)

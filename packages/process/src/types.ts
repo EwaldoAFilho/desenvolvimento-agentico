@@ -32,8 +32,17 @@ export interface ExitStatus {
    * ainda existia quando o teto venceu: algum descendente sobreviveu ao SIGKILL alem do
    * prazo, e quem encerra nao pode presumir que ele parou. Em Windows nao ha grupo a sondar
    * e o valor e `true` por definicao (limite declarado).
+   *
+   * Vale para TODA forma de saida — cancel, abort, timeout, sinal ou saida natural do lider.
+   * Pode passar de `false` a `true` depois de um `cancel()` posterior provar a morte.
    */
   groupTerminated: boolean
+  /**
+   * Pid do lider; `null` quando o processo nunca existiu. Em POSIX o grupo e `-pid`: e o que
+   * quem guarda um residuo (`groupTerminated: false`) precisa para sondar de novo mais tarde,
+   * quando o handle ja nao esta a mao (gate, `workspaceSetup`).
+   */
+  pid: number | null
   durationMs: number
   /** Presente apenas quando o spawn falhou; o processo nunca rodou. */
   spawnError?: SpawnFailure
@@ -93,24 +102,32 @@ export type SpawnFn = (
   options: SpawnRequest,
 ) => ChildProcessLike
 
+/**
+ * O que a confirmacao da morte de um grupo de processos precisa. E o subconjunto de
+ * `RuntimeDeps` que tambem serve a quem NAO tem o processo a mao e so guardou o pgid — o
+ * orquestrador sondando um residuo numa tentativa seguinte de encerramento.
+ */
+export interface GroupProbeDeps {
+  readonly platform?: NodeJS.Platform
+  /**
+   * Espera maxima pela morte CONFIRMADA do grupo depois do SIGKILL. Sinal enviado nao e
+   * grupo morto: um descendente no meio de uma syscall termina depois do `kill` voltar.
+   */
+  readonly groupGraceMs?: number
+  /** `true` = o grupo (pgid negativo) ainda existe. Injetavel: grupo imortal nao se fabrica. */
+  readonly probeGroup?: (pgid: number) => boolean
+}
+
 /** Injecao para teste deterministico. Tudo opcional; o default e o sistema real. */
-export interface RuntimeDeps {
+export interface RuntimeDeps extends GroupProbeDeps {
   now?: () => number
   spawn?: SpawnFn
   newHandle?: () => string
-  platform?: NodeJS.Platform
   kill?: (pid: number, signal: NodeJS.Signals) => void
   /** Espera entre SIGTERM e SIGKILL. */
   killGraceMs?: number
   /** Espera maxima entre `exit` e `close` (descendente segurando o pipe). */
   closeGraceMs?: number
-  /**
-   * Espera maxima pela morte CONFIRMADA do grupo depois do SIGKILL. Sinal enviado nao e
-   * grupo morto: um descendente no meio de uma syscall termina depois do `kill` voltar.
-   */
-  groupGraceMs?: number
-  /** `true` = o grupo (pgid negativo) ainda existe. Injetavel: grupo imortal nao se fabrica. */
-  probeGroup?: (pgid: number) => boolean
 }
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024

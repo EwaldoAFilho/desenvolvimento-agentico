@@ -8,6 +8,7 @@ import { currentBranch, isGitRepo, tryRevParse } from './repo.js'
 import {
   EMPTY_SETUP_RESULT,
   runWorkspaceSetup,
+  type SetupProcessDeps,
   type WorkspaceSetup,
   type WorkspaceSetupResult,
 } from './setup.js'
@@ -21,6 +22,8 @@ export interface SharedProviderConfig {
   readonly onBusy?: BusyPolicy
   readonly waitTimeoutMs?: number
   readonly workspaceSetup?: WorkspaceSetup
+  /** Sonda e teto do grupo de processos dos comandos de `workspaceSetup` (injetavel no teste). */
+  readonly setupProcessDeps?: SetupProcessDeps
   readonly denyPaths?: readonly PathScope[]
   readonly touches?: readonly PathScope[]
 }
@@ -135,6 +138,7 @@ export class SharedWorkspaceProvider implements WorkspaceProvider {
             this.#repoRoot,
             this.#config.workspaceSetup,
             lease.signal,
+            this.#config.setupProcessDeps,
           )
     const workspace: Workspace = {
       id: `shared/${lease.attemptId}`,

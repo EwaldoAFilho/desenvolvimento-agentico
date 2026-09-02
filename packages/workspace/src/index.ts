@@ -19,6 +19,7 @@ export {
   isResidualProcessError,
   isWorkspaceBusyError,
   isWorkspaceError,
+  residualGroupOf,
   toFailureReason,
   WORKSPACE_STAGES,
   WorkspaceBusyError,

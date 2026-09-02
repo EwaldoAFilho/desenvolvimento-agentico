@@ -49,7 +49,8 @@ import {
   type WorkspaceRef,
 } from '@agentic/domain'
 import type { LockRow } from '@agentic/persistence'
-import { isResidualProcessError } from '@agentic/workspace'
+import { confirmProcessGroupGone } from '@agentic/process'
+import { isResidualProcessError, residualGroupOf } from '@agentic/workspace'
 import type {
   ActiveLock,
   PendingReview,
@@ -68,6 +69,7 @@ import {
 import { MISSION_GATE_ARTIFACT } from './artifacts.js'
 import { buildExecuteAssignment, buildReviewAssignment } from './assignment.js'
 import {
+  CancellationUnsettledError,
   CommandRefusedError,
   describeError,
   failureReasonOf,
@@ -118,7 +120,32 @@ interface Inflight {
   policy?: ReviewPolicy
   policyOutcome?: ReviewPolicyOutcome
   reviewStartedAt?: number
+  /**
+   * Cancelamento humano PEDIDO cuja prova de morte ainda nao chegou (C2). Enquanto existir,
+   * nenhuma mensagem desta tentativa avanca a task: o proximo desfecho sonda de novo e, provada
+   * a morte, cumpre a intencao; senao a task continua onde esta.
+   */
+  cancelRequested?: HumanCommand
 }
+
+/**
+ * Efeito que o encerramento NAO conseguiu provar morto — e COMO prova-lo de novo. Guardar so
+ * o nome (como antes) obrigava a tentativa seguinte de `stop` a escolher entre esquecer e
+ * fingir; guardar a sonda permite a unica coisa honesta: sondar outra vez (C3).
+ */
+interface ResidualEffect {
+  /** Task a que o efeito pertence, quando pertence a uma: `cancelTask` so cobra os dela. */
+  readonly taskId?: TaskId
+  /** O handle de agente por tras do residuo, quando ha um: um `cancel` dele ja e a sonda. */
+  readonly handle?: AgentHandle
+  /** Sonda de novo. `true` = agora provado morto. Nunca rejeita. */
+  settled(): Promise<boolean>
+}
+
+/** O desfecho do agente chegou, mas o grupo de processos dele nao assentou (B1). */
+const UNSETTLED_GROUP_DETAIL =
+  'o processo do agente saiu, mas o grupo de processos dele ainda existia depois do teto: o ' +
+  'desfecho nao esta assentado e a worktree nao foi medida (I15)'
 
 interface TickState {
   run: Run
@@ -298,10 +325,11 @@ export class Orchestrator {
   #abandoning: Promise<void> | undefined
   /**
    * Efeitos que o encerramento NAO conseguiu provar mortos: cancelamento que rejeitou, gate
-   * ou setup cujo grupo de processos sobreviveu ao teto. Enquanto houver um, `abandon`
-   * rejeita e a posse fica retida (I15). Reavaliado a cada tentativa.
+   * ou setup cujo grupo de processos sobreviveu ao teto, agente que saiu deixando descendente.
+   * Enquanto houver um, `abandon` rejeita e a posse fica retida (I15). Cada um carrega a
+   * propria sonda e e SONDADO DE NOVO a cada tentativa — nunca apagado sem prova (C3).
    */
-  readonly #residual = new Set<string>()
+  readonly #residual = new Map<string, ResidualEffect>()
 
   constructor(deps: EngineDeps, runId: RunId) {
     this.#deps = deps
@@ -392,21 +420,19 @@ export class Orchestrator {
         pendingJobs: this.#jobs.size,
         chainBusy: this.#chainBusy,
         inflightAttempts: [...this.#inflight.keys()],
-        residualProcesses: [...this.#residual],
+        residualProcesses: [...this.#residual.keys()],
       })
-    // Cada tentativa reavalia: o que sobrou viva da anterior pode ter morrido desde entao.
-    this.#residual.clear()
-    // Cancelamentos em paralelo e DENTRO do prazo: um handle cujo cancel nunca resolve nao
-    // pode pendurar o encerramento sem prazo — ele o faz falhar, com a posse retida. E um
-    // cancel que REJEITA (grupo de processos ainda vivo) e efeito nao provado morto.
-    const cancels = [...this.#inflight.entries()]
-      .filter(([, entry]) => entry.handle !== undefined)
-      .map(([attemptId, entry]) =>
-        entry.handle?.cancel('control plane encerrado').catch(() => {
-          this.#residual.add(`tentativa ${attemptId}`)
-        }),
-      )
-    if (!(await withDeadline(Promise.all(cancels), deadline))) throw timeout()
+    // Cada tentativa reavalia: o que sobrou vivo da anterior pode ter morrido desde entao —
+    // e a unica forma honesta de saber e SONDAR de novo cada residuo (C3). Nada e apagado
+    // antes da prova. Cancelamentos em paralelo e DENTRO do prazo: um handle cujo cancel
+    // nunca resolve nao pode pendurar o encerramento sem prazo — ele o faz falhar, com a
+    // posse retida. E um cancel que REJEITA (grupo de processos ainda vivo) e efeito nao
+    // provado morto. E o `cancel` de cada handle em voo ja e a sonda dele.
+    const naoProvados = this.#settleCancellation(
+      [...this.#inflight.values()],
+      'control plane encerrado',
+    )
+    if (!(await withDeadline(naoProvados, deadline))) throw timeout()
     if (!(await this.#settle(deadline))) throw timeout()
     if (this.#residual.size > 0) throw timeout()
     // Colher e gravar. Falha aqui NAO e engolida: a mensagem fica na caixa, o encerramento
@@ -419,6 +445,98 @@ export class Orchestrator {
     if (this.#residual.size > 0) throw timeout()
     this.#inflight.clear()
     this.#inbox = []
+  }
+
+  // ------------------------------------------------- residuos (efeitos nao provados mortos)
+
+  /** Um handle cujo `cancel` rejeitou: a sonda e o proprio `cancel`, que sonda de novo. */
+  #rememberHandle(key: string, handle: AgentHandle, taskId?: TaskId): void {
+    this.#residual.set(key, {
+      ...(taskId === undefined ? {} : { taskId }),
+      handle,
+      settled: () =>
+        handle.cancel('sonda de encerramento: o grupo de processos ainda existia').then(
+          () => true,
+          () => false,
+        ),
+    })
+  }
+
+  /** Um `cancel` deste handle resolveu: o grupo esta provado morto, sob qualquer chave. */
+  #forgetHandle(handle: AgentHandle): void {
+    for (const [key, effect] of [...this.#residual.entries()]) {
+      if (effect.handle === handle) this.#residual.delete(key)
+    }
+  }
+
+  /**
+   * Um grupo de processos (gate, `workspaceSetup`) sem handle: guarda o pgid e sonda o sistema.
+   * Sem pgid nao ha o que sondar — fica registrado como nao provado, e a posse nao sai por ele
+   * (fechar aberto e o lado certo de I15).
+   */
+  #rememberGroup(key: string, pid: number | undefined, taskId?: TaskId): void {
+    this.#residual.set(key, {
+      ...(taskId === undefined ? {} : { taskId }),
+      settled:
+        pid === undefined
+          ? () => Promise.resolve(false)
+          : () => confirmProcessGroupGone(pid, this.#deps.processProbe ?? {}),
+    })
+  }
+
+  /**
+   * Sonda de novo os residuos (todos, ou os que passam no filtro); o que se provou morto sai
+   * da lista. Devolve as chaves do que CONTINUA nao provado. Nunca rejeita.
+   */
+  async #reprobeResidual(filter?: (effect: ResidualEffect) => boolean): Promise<string[]> {
+    const entries = [...this.#residual.entries()].filter(
+      ([, effect]) => filter === undefined || filter(effect),
+    )
+    await Promise.all(
+      entries.map(async ([key, effect]) => {
+        if (await effect.settled()) this.#residual.delete(key)
+      }),
+    )
+    return entries.map(([key]) => key).filter((key) => this.#residual.has(key))
+  }
+
+  /**
+   * Cancela os handles em voo E sonda de novo os residuos ja conhecidos. Devolve o que
+   * continua NAO provado morto. Lista vazia = o cancelamento ASSENTOU. Senao, o estado oficial
+   * nao pode afirmar CANCELLED (C2) — e cada item ja ficou guardado para o encerramento.
+   */
+  async #settleCancellation(
+    inflights: readonly Inflight[],
+    reason: string,
+    filter?: (effect: ResidualEffect) => boolean,
+  ): Promise<string[]> {
+    const vivos = new Set<string>()
+    // Um handle em voo e cancelado UMA vez por chamada: o residuo que ja aponta para ele nao
+    // e sondado em separado — o proprio `cancel` e a sonda.
+    const emVoo = new Set<AgentHandle>()
+    for (const inflight of inflights) if (inflight.handle !== undefined) emVoo.add(inflight.handle)
+    await Promise.all([
+      ...inflights.map(async (inflight) => {
+        const handle = inflight.handle
+        if (handle === undefined) return
+        const key = `tentativa ${inflight.attempt.id}`
+        try {
+          await handle.cancel(reason)
+          this.#forgetHandle(handle)
+        } catch {
+          this.#rememberHandle(key, handle, inflight.spec.id)
+          vivos.add(key)
+        }
+      }),
+      this.#reprobeResidual(
+        (effect) =>
+          (filter === undefined || filter(effect)) &&
+          (effect.handle === undefined || !emVoo.has(effect.handle)),
+      ).then((keys) => {
+        for (const key of keys) vivos.add(key)
+      }),
+    ])
+    return [...vivos]
   }
 
   /**
@@ -777,6 +895,13 @@ export class Orchestrator {
     if (inflight === undefined) return
     const taskRun = state.tasks.get(inflight.spec.id)
     if (taskRun === undefined) return
+    // Um cancelamento humano ficou pendente sobre esta tentativa: a mensagem nao avanca a
+    // task — uma tentativa que o humano mandou cancelar nao vira gate, revisao nem retry por
+    // conta propria. O que ela faz e dar a chance de PROVAR a morte e cumprir a intencao.
+    const cancelRequested = inflight.cancelRequested
+    if (cancelRequested !== undefined) {
+      return this.#settleRequestedCancel(state, taskRun, inflight, cancelRequested)
+    }
     switch (message.kind) {
       case 'observed':
         return this.#onObserved(state, taskRun, inflight, message)
@@ -1746,7 +1871,12 @@ export class Orchestrator {
 
     // ADR-0007: arvore compartilhada tem um escritor. Enquanto uma tentativa nao encerra,
     // nem o gate nem a revisao dela liberaram a arvore — despachar seria colisao garantida.
-    if (state.run.policies.workspaceMode === 'shared' && this.#inflight.size > 0) return
+    if (state.run.policies.workspaceMode === 'shared') {
+      if (this.#inflight.size > 0) return
+      // E um grupo de processos nao provado morto tambem e um escritor em potencial sobre a
+      // UNICA arvore: sonda de novo; so despacha com a arvore comprovadamente quieta (B1).
+      if (this.#residual.size > 0 && (await this.#reprobeResidual()).length > 0) return
+    }
 
     const now = this.#deps.clock.now()
     // Workspace que acabou de falhar nao e tentado de novo no mesmo instante: sem isto o
@@ -1772,7 +1902,9 @@ export class Orchestrator {
       })
     } catch (error) {
       this.#dispatchCooldown.set(spec.id, now.getTime() + DISPATCH_COOLDOWN_MS)
-      if (isResidualProcessError(error)) this.#residual.add(`workspaceSetup ${attemptId}`)
+      if (isResidualProcessError(error)) {
+        this.#rememberGroup(`workspaceSetup ${attemptId}`, residualGroupOf(error), spec.id)
+      }
       // Sem workspace nao ha transicao 4: a guarda reprova e a task continua READY (P11).
       await this.#write({
         events: [
@@ -1913,7 +2045,7 @@ export class Orchestrator {
       // fica RUNNING no banco para o proximo dono reconciliar (I15).
       if (this.#closed) {
         await handle.cancel('control plane encerrando').catch(() => {
-          this.#residual.add(`tentativa ${attemptId}`)
+          this.#rememberHandle(`tentativa ${attemptId}`, handle, spec.id)
         })
         return
       }
@@ -2022,6 +2154,23 @@ export class Orchestrator {
     // `attempt.log_persisted` — nao o campo do outcome. Sobrescrever `outcome.logsRef`
     // aqui era codigo morto: ninguem lia o campo, e a revisao provou por mutacao.
     await this.#persistAgentLog(inflight, capture, 'execute')
+    // O lider saiu, mas o GRUPO nao assentou: um descendente pode ainda estar mutando a
+    // worktree. Medir agora (diff, commit) registraria como evidencia uma arvore em movimento.
+    // O desfecho nao esta assentado: a tentativa reprova sem medicao, e o residuo fica com
+    // quem encerra — a posse nao sai antes da prova de morte (B1, I15).
+    if (!outcome.groupTerminated) {
+      this.#rememberHandle(`tentativa ${inflight.attempt.id}`, handle, inflight.spec.id)
+      this.#push({
+        kind: 'observed',
+        attemptId: inflight.attempt.id,
+        outcome,
+        failure: {
+          code: 'AGENT_ERROR',
+          detail: `${UNSETTLED_GROUP_DETAIL}; status do agente: ${outcome.status}`,
+        },
+      })
+      return
+    }
     inflight.phase = 'observing'
     const observed = await observeAttempt({
       workspaces: this.#deps.workspaces,
@@ -2146,7 +2295,7 @@ export class Orchestrator {
       // observado. A task fica REVIEW no banco para o proximo dono reconciliar (I15).
       if (this.#closed) {
         await handle.cancel('control plane encerrando').catch(() => {
-          this.#residual.add(`revisor ${inflight.attempt.id}`)
+          this.#rememberHandle(`revisor ${inflight.attempt.id}`, handle, inflight.spec.id)
         })
         return
       }
@@ -2181,6 +2330,21 @@ export class Orchestrator {
       return
     }
     const logsRef = await this.#persistAgentLog(inflight, capture, 'review')
+    // Mesma regra do executor: revisor cujo grupo nao assentou nao emite veredito valido, e o
+    // residuo fica com quem encerra (B1).
+    if (!outcome.groupTerminated) {
+      this.#rememberHandle(`revisor ${inflight.attempt.id}`, handle, inflight.spec.id)
+      this.#push({
+        kind: 'review',
+        attemptId: inflight.attempt.id,
+        failure: {
+          code: 'AGENT_ERROR',
+          detail: `${UNSETTLED_GROUP_DETAIL}; status do revisor: ${outcome.status}`,
+        },
+        durationMs: elapsed(),
+      })
+      return
+    }
     this.#push({
       kind: 'review',
       attemptId: inflight.attempt.id,
@@ -2246,7 +2410,9 @@ export class Orchestrator {
           directory: attemptDirectory(inflight.spec.id, inflight.attempt.attemptNumber),
           signal: this.#abort.signal,
         })
-        if (outcome.residualProcess === true) this.#residual.add(`gate ${inflight.attempt.id}`)
+        for (const pgid of outcome.residualGroups ?? []) {
+          this.#rememberGroup(`gate ${inflight.attempt.id} (pgid ${pgid})`, pgid, inflight.spec.id)
+        }
         this.#push({
           kind: 'gate',
           attemptId: inflight.attempt.id,
@@ -2322,7 +2488,9 @@ export class Orchestrator {
             directory: 'mission',
             signal: this.#abort.signal,
           })
-          if (outcome.residualProcess === true) this.#residual.add('mission gate')
+          for (const pgid of outcome.residualGroups ?? []) {
+            this.#rememberGroup(`mission gate (pgid ${pgid})`, pgid)
+          }
           // Cancelado pelo encerramento: nao e medicao, nao vira resultado. Se virasse, o
           // `abandon` colheria um ERROR e o run terminaria FAILED por um gate que ninguem
           // reprovou. O proximo dono refaz o gate do zero (I12).
@@ -2333,7 +2501,9 @@ export class Orchestrator {
             failure: outcome.failure,
           })
         } catch (error) {
-          if (isResidualProcessError(error)) this.#residual.add('workspaceSetup do mission gate')
+          if (isResidualProcessError(error)) {
+            this.#rememberGroup('workspaceSetup do mission gate', residualGroupOf(error))
+          }
           if (this.#abort.signal.aborted) return
           // I12: adquirir a worktree da missao pode falhar (branch ja em check-out, disco,
           // setup). Sem esta mensagem a excecao morreria em `#errors` — memoria que nada le
@@ -2491,15 +2661,28 @@ export class Orchestrator {
     })
   }
 
-  /** Cancelamento: tentativa em voo e cancelada no provider e nada e presumido concluido. */
+  /**
+   * Cancelamento do run: tentativa em voo e cancelada no provider e nada e presumido concluido.
+   *
+   * Intencao e assentamento sao coisas distintas (C2). A intencao vale desde a primeira linha
+   * (`#closed`: nada novo e despachado, mesmo se o comando for recusado). O estado oficial so
+   * vira CANCELLED com TODO grupo de processos provado morto — os das tentativas em voo e os
+   * residuos ja conhecidos. Senao o comando rejeita com `CancellationUnsettledError`, o run e
+   * as tasks ficam como estao, o residuo fica com o encerramento, e o mesmo comando pode ser
+   * repetido: ele sonda de novo.
+   */
   cancel(command: HumanCommand): Promise<void> {
     return this.#enqueue(async () => {
       this.#closed = true
       const state = await this.#load()
-      const now = this.#deps.clock.now()
-      for (const inflight of [...this.#inflight.values()]) {
-        await inflight.handle?.cancel(command.reason ?? 'run cancelado').catch(() => undefined)
+      const naoProvados = await this.#settleCancellation(
+        [...this.#inflight.values()],
+        command.reason ?? 'run cancelado',
+      )
+      if (naoProvados.length > 0) {
+        throw new CancellationUnsettledError({ runId: this.#runId, residual: naoProvados })
       }
+      const now = this.#deps.clock.now()
       for (const taskId of [...state.tasks.keys()]) {
         const taskRun = state.tasks.get(taskId)
         if (taskRun === undefined || !CANCELLABLE.has(taskRun.status)) continue
@@ -2653,41 +2836,88 @@ export class Orchestrator {
       if (!CANCELLABLE.has(taskRun.status)) {
         throw new CommandRefusedError(`task ${command.taskId} ja esta ${taskRun.status}`)
       }
-      const now = this.#deps.clock.now()
       const inflight = [...this.#inflight.values()].find((item) => item.spec.id === command.taskId)
-      if (inflight !== undefined) {
-        await inflight.handle?.cancel(command.reason ?? 'task cancelada').catch(() => undefined)
-      }
-      const next = applyTransition(
-        taskRun,
-        { to: 'CANCELLED', trigger: 'CANCEL_REQUESTED' },
-        { now, reason: command.reason },
+      // Mesma regra do run (C2): CANCELLED so com a morte provada — da tentativa em voo e de
+      // qualquer residuo desta task. Recusado, a intencao fica na tentativa: o proximo desfecho
+      // dela sonda de novo, e o mesmo comando pode ser repetido.
+      const naoProvados = await this.#settleCancellation(
+        inflight === undefined ? [] : [inflight],
+        command.reason ?? 'task cancelada',
+        (effect) => effect.taskId === command.taskId,
       )
-      const closed = this.#closeAttempt(inflight, now, command.reason)
-      await this.#write({
-        taskRun: next,
-        attempt: closed,
-        events: [
-          ...this.#cancelledAttemptEvents(closed, command.taskId, now, command.reason),
-          this.#event(
-            now,
-            'task.cancelled',
-            { reason: command.reason },
-            {
-              taskId: command.taskId,
-              actor: humanActor(command.actor),
-            },
-          ),
-        ],
-        releaseLocks: this.#locks.get(command.taskId) ?? [],
-      })
-      state.tasks.set(next.taskId, next)
-      this.#locks.delete(command.taskId)
-      if (inflight !== undefined) {
-        this.#inflight.delete(inflight.attempt.id)
-        await this.#release(inflight, 'keep')
+      if (naoProvados.length > 0) {
+        if (inflight !== undefined) inflight.cancelRequested = command
+        throw new CancellationUnsettledError({
+          runId: this.#runId,
+          taskId: command.taskId,
+          residual: naoProvados,
+        })
       }
-      this.#requestTick()
+      await this.#cancelTaskNow(state, taskRun, inflight, command)
+    })
+  }
+
+  /** O corpo do cancelamento de UMA task, depois de provado que nada dela continua vivo. */
+  async #cancelTaskNow(
+    state: TickState,
+    taskRun: TaskRun,
+    inflight: Inflight | undefined,
+    command: TaskCommandInput,
+  ): Promise<void> {
+    const now = this.#deps.clock.now()
+    const next = applyTransition(
+      taskRun,
+      { to: 'CANCELLED', trigger: 'CANCEL_REQUESTED' },
+      { now, reason: command.reason },
+    )
+    const closed = this.#closeAttempt(inflight, now, command.reason)
+    await this.#write({
+      taskRun: next,
+      attempt: closed,
+      events: [
+        ...this.#cancelledAttemptEvents(closed, command.taskId, now, command.reason),
+        this.#event(
+          now,
+          'task.cancelled',
+          { reason: command.reason },
+          {
+            taskId: command.taskId,
+            actor: humanActor(command.actor),
+          },
+        ),
+      ],
+      releaseLocks: this.#locks.get(command.taskId) ?? [],
+    })
+    state.tasks.set(next.taskId, next)
+    this.#locks.delete(command.taskId)
+    if (inflight !== undefined) {
+      inflight.cancelRequested = undefined
+      this.#inflight.delete(inflight.attempt.id)
+      await this.#release(inflight, 'keep')
+    }
+    this.#requestTick()
+  }
+
+  /**
+   * Um desfecho chegou para uma tentativa com cancelamento humano pendente. Sonda de novo:
+   * provada a morte, a intencao e cumprida AGORA; senao a task continua RUNNING, o residuo
+   * continua com quem encerra, e o humano (ou o proximo desfecho) tenta de novo.
+   */
+  async #settleRequestedCancel(
+    state: TickState,
+    taskRun: TaskRun,
+    inflight: Inflight,
+    command: HumanCommand,
+  ): Promise<void> {
+    const naoProvados = await this.#settleCancellation(
+      [inflight],
+      command.reason ?? 'task cancelada',
+      (effect) => effect.taskId === inflight.spec.id,
+    )
+    if (naoProvados.length > 0) return
+    await this.#cancelTaskNow(state, taskRun, inflight, {
+      ...command,
+      taskId: inflight.spec.id,
     })
   }
 

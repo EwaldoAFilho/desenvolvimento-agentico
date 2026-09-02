@@ -85,6 +85,42 @@ export class ShutdownTimeoutError extends OrchestratorError {
   }
 }
 
+/**
+ * O cancelamento humano foi PEDIDO, mas nao ASSENTOU: o grupo de processos de alguma
+ * tentativa (ou um residuo de gate/setup da mesma task) continuava vivo depois do teto.
+ *
+ * Intencao de cancelar e cancelamento assentado sao coisas diferentes (C2). O estado oficial
+ * nao vira CANCELLED sem a prova de morte: a task e o run ficam como estavam, o residuo fica
+ * guardado para o encerramento (que tambem recusa devolver a posse enquanto ele durar), e o
+ * MESMO comando pode ser repetido — ele sonda de novo.
+ */
+export class CancellationUnsettledError extends OrchestratorError {
+  readonly runId: string
+  readonly taskId: string | undefined
+  /** O que continua nao provado morto, pelo nome que o encerramento tambem usa. */
+  readonly residual: readonly string[]
+
+  constructor(input: {
+    readonly runId: string
+    readonly taskId?: string
+    readonly residual: readonly string[]
+  }) {
+    const alvo =
+      input.taskId === undefined
+        ? `run ${input.runId}`
+        : `task ${input.taskId} do run ${input.runId}`
+    super(
+      'CANCELLATION_UNSETTLED',
+      `${alvo}: cancelamento pedido, mas NAO comprovado — grupo(s) de processos ainda vivo(s): ` +
+        `${input.residual.join(', ')}. Nada virou CANCELLED; repita o comando quando o processo ` +
+        'tiver parado (I15)',
+    )
+    this.runId = input.runId
+    this.taskId = input.taskId
+    this.residual = input.residual
+  }
+}
+
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

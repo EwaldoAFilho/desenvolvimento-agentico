@@ -16,6 +16,8 @@ export interface WorkspaceErrorOptions {
   readonly cause?: unknown
   /** O grupo de processos de um comando ainda existia quando o teto venceu (I15). */
   readonly residualProcess?: boolean
+  /** Pid do lider desse comando: o grupo (`-pid`) que quem encerra precisa sondar de novo. */
+  readonly residualGroup?: number
 }
 
 /**
@@ -27,6 +29,7 @@ export class WorkspaceError extends Error {
   readonly stage: WorkspaceStage
   readonly detail: string | undefined
   readonly residualProcess: boolean
+  readonly residualGroup: number | undefined
 
   constructor(stage: WorkspaceStage, message: string, options: WorkspaceErrorOptions = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause })
@@ -34,6 +37,7 @@ export class WorkspaceError extends Error {
     this.stage = stage
     this.detail = options.detail
     this.residualProcess = options.residualProcess === true
+    this.residualGroup = options.residualGroup
   }
 
   toFailureReason(): FailureReason {
@@ -56,6 +60,11 @@ export function isWorkspaceError(value: unknown): value is WorkspaceError {
 /** Falha que deixou processo vivo atras de si: quem encerra nao pode presumir que parou. */
 export function isResidualProcessError(value: unknown): boolean {
   return isWorkspaceError(value) && value.residualProcess
+}
+
+/** O pid do lider do grupo que ficou vivo, quando a falha e dessas; senao `undefined`. */
+export function residualGroupOf(value: unknown): number | undefined {
+  return isWorkspaceError(value) && value.residualProcess ? value.residualGroup : undefined
 }
 
 export function isWorkspaceBusyError(value: unknown): value is WorkspaceBusyError {

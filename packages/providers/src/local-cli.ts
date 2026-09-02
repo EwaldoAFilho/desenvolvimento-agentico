@@ -266,6 +266,9 @@ class LocalCliAgentHandle implements AgentHandle {
       status,
       claims: claimsFromOutput(this.#recorder.text('stdout'), this.#recorder.text('stderr'), exit),
       logsRef: logsRefFor(providerId, assignment),
+      // Reduzir `ExitStatus` a `AgentOutcome` nao pode descartar o assentamento do grupo: e o
+      // fato que separa "o agente terminou" de "nada do agente muta mais a worktree" (B1).
+      groupTerminated: exit.groupTerminated,
     }
   }
 }

@@ -41,6 +41,11 @@ export interface GateCommandRecord extends CommandResult {
   readonly finishedAt: Date
   /** `false` = o grupo de processos do comando ainda existia quando o runtime desistiu. */
   readonly groupTerminated: boolean
+  /**
+   * Pid do lider do comando (`null` quando nao chegou a existir). Com `groupTerminated:
+   * false`, e o que permite a quem encerra sondar o grupo (`-pid`) de novo mais tarde.
+   */
+  readonly pid: number | null
   readonly stdout: GateCommandOutput
   readonly stderr: GateCommandOutput
   /** Presente quando o processo nao chegou a rodar (recusa ou falha de spawn). */

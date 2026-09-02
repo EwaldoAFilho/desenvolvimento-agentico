@@ -3,6 +3,8 @@ export const PACKAGE_NAME = '@agentic/process'
 export { buildEnv } from './env.js'
 export { redactSecrets } from './redact.js'
 export {
+  confirmProcessGroupGone,
+  isProcessGroupAlive,
   isProcessGroupAliveError,
   ProcessGroupAliveError,
   runCaptured,
@@ -12,6 +14,7 @@ export type {
   CapturedRun,
   ChildProcessLike,
   ExitStatus,
+  GroupProbeDeps,
   RunningProcess,
   RunSpec,
   RuntimeDeps,

@@ -26,6 +26,11 @@ export const ALLOWED = {
     'gates',
     'workspace',
     'providers',
+    // ADR-0014 (004B): quem decide o encerramento precisa de UM fato de sistema operacional —
+    // "este grupo de processos ainda existe?" — para sondar de novo um residuo cujo handle ja
+    // nao esta a mao (gate, workspaceSetup). A sonda vive em `process`, o unico lugar com
+    // codigo de SO; o orquestrador a chama, nao a reimplementa.
+    'process',
   ],
   cli: [
     'domain',

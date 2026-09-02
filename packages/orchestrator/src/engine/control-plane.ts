@@ -28,6 +28,7 @@ import {
   type Persistence,
   runtimeDirOf,
 } from '@agentic/persistence'
+import type { GroupProbeDeps } from '@agentic/process'
 import {
   createProviderRegistryFromProject,
   type MockScript,
@@ -153,6 +154,12 @@ export interface ControlPlaneConfig {
   /** Substitui a construcao de um provider — usado pela suite para roteiros por tentativa. */
   readonly providerFactories?: Readonly<Record<string, ProviderFactory>>
   readonly gateRunner?: GateExecutor
+  /**
+   * Sonda do grupo de processos, compartilhada por gate runner, `workspaceSetup` e pela
+   * re-sonda de residuos do orquestrador. Default: a sonda real do sistema. Injetavel porque
+   * um grupo que sobrevive a SIGKILL nao se fabrica de forma portavel em teste.
+   */
+  readonly processProbe?: GroupProbeDeps
   readonly agentEnvAllow?: readonly string[]
   /** Teto, redacao e espera do log do agente gravado por tentativa (ARCHITECTURE 6.1). */
   readonly agentLog?: AgentLogConfig
@@ -391,7 +398,11 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
             : { factories: config.providerFactories }),
         }),
       gates: loadGateProfiles(config.gatesFile),
-      gateRunner: config.gateRunner ?? new GateRunner(),
+      gateRunner:
+        config.gateRunner ??
+        new GateRunner(
+          config.processProbe === undefined ? {} : { processDeps: config.processProbe },
+        ),
       profiles: profilesOf(config.project),
       agentEnv: envAllowlist(config.agentEnvAllow ?? DEFAULT_AGENT_ENV_ALLOW),
     }
@@ -470,6 +481,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   /** O `close` em curso: chamadas concorrentes compartilham a mesma drenagem. */
   let closing: Promise<void> | undefined
 
+  const setupProbe =
+    config.processProbe === undefined ? {} : { setupProcessDeps: config.processProbe }
   const wiringFor = (mission: MissionSpec): RunWiring => {
     const execution = config.project.execution
     if (execution.workspace === 'shared') {
@@ -480,6 +493,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
           // Fila silenciosa travaria o tick: com uma arvore so, o segundo lease e recusado.
           onBusy: 'fail',
           workspaceSetup: execution.workspaceSetup,
+          ...setupProbe,
         }),
         // Sem worktree nao ha segunda arvore: o gate da missao roda na unica que existe.
         missionWorkspaces: {
@@ -502,6 +516,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       missionBranchPrefix: config.project.integration.missionBranchPrefix,
       taskBranchPrefix: config.project.integration.taskBranchPrefix,
       workspaceSetup: execution.workspaceSetup,
+      ...setupProbe,
     })
     return {
       workspaces: provider,
@@ -561,6 +576,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       agentEnv,
       ...(config.agentLog === undefined ? {} : { agentLog: config.agentLog }),
       safetyIntervalMs: config.safetyIntervalMs,
+      processProbe: config.processProbe,
     }
     return new Orchestrator(engineDeps, runId)
   }

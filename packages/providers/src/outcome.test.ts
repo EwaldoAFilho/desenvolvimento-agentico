@@ -13,7 +13,15 @@ import {
 } from './outcome.js'
 
 function exit(overrides: Partial<ExitStatus> = {}): ExitStatus {
-  return { code: 0, signal: null, timedOut: false, cancelled: false, durationMs: 10, ...overrides }
+  return {
+    code: 0,
+    signal: null,
+    timedOut: false,
+    cancelled: false,
+    groupTerminated: true,
+    durationMs: 10,
+    ...overrides,
+  }
 }
 
 describe('outcomeStatusFromExit — o processo decide, nao o agente (P05)', () => {

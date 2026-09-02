@@ -30,8 +30,21 @@ export interface GateOutcome {
   readonly execution?: GateExecution
   readonly failure?: FailureReason
   readonly cwd: string
-  /** Um comando do gate deixou grupo de processos vivo: o encerramento nao pode presumir que parou. */
-  readonly residualProcess?: boolean
+  /**
+   * Pids dos comandos cujo grupo de processos ainda existia quando o teto venceu. Presente so
+   * quando ha algum: o encerramento nao pode presumir que pararam, e precisa do pid para
+   * sondar cada grupo (`-pid`) de novo na tentativa seguinte (C3).
+   */
+  readonly residualGroups?: readonly number[]
+}
+
+/** Grupos que o gate nao conseguiu provar mortos: um por comando com `groupTerminated: false`. */
+function residualGroupsOf(result: GateRunResult): number[] {
+  const groups: number[] = []
+  for (const record of result.results) {
+    if (!record.groupTerminated && record.pid !== null) groups.push(record.pid)
+  }
+  return groups
 }
 
 async function persistStream(
@@ -90,6 +103,8 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
       envAllow: gate.env,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     })
+    const residualGroups = residualGroupsOf(result)
+    const residual = residualGroups.length === 0 ? {} : { residualGroups }
     // Gate cancelado nao e medicao: nao vira artefato nem execucao. O proximo dono refaz.
     if (input.signal?.aborted === true) {
       return {
@@ -98,7 +113,7 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
           detail: `gate ${input.gateId} cancelado pelo encerramento do control plane`,
         },
         cwd: result.cwd,
-        ...(result.residualProcess ? { residualProcess: true } : {}),
+        ...residual,
       }
     }
     const execution: GateExecution = {
@@ -112,11 +127,7 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
       status: result.status,
       results: await toCommandResults(input, result),
     }
-    return {
-      execution,
-      cwd: result.cwd,
-      ...(result.residualProcess ? { residualProcess: true } : {}),
-    }
+    return { execution, cwd: result.cwd, ...residual }
   } catch (error) {
     return {
       failure: {

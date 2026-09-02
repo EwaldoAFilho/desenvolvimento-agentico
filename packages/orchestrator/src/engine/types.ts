@@ -26,6 +26,7 @@ import type {
   LockRow,
   TransactionalUnitOfWork,
 } from '@agentic/persistence'
+import type { GroupProbeDeps } from '@agentic/process'
 import type { AttemptCommit, AttemptLease } from '@agentic/workspace'
 import type { ProjectReviewPolicy } from '../scheduler/index.js'
 import type { AgentLogConfig } from './agent-log.js'
@@ -105,4 +106,9 @@ export interface EngineDeps {
   readonly agentLog?: AgentLogConfig
   /** Timer de seguranca do tick. `0` desliga (o teste dirige o loop). */
   readonly safetyIntervalMs?: number
+  /**
+   * Sonda do grupo de processos usada para provar, numa tentativa seguinte de encerramento,
+   * que um residuo (gate, `workspaceSetup`) morreu. Default: a sonda real do sistema.
+   */
+  readonly processProbe?: GroupProbeDeps
 }
