@@ -186,9 +186,30 @@ encontrou um furo novo em C3:
 | MAJOR — **FORA**, pré-existente, já registrado em J: cancel durante gate/integração em `#jobs` | — | não corrigido | — |
 | NOTA — **FORA**, pré-existente, já registrado em J: sonda injetada que lança no setup | — | não corrigido | — |
 
-Este foi o **segundo e último** ciclo de correção da micro-slice. O que se segue é uma
-leitura de **confirmação**, sem correção autorizada: um BLOCKER/MAJOR novo dentro do escopo
-leva a `HUMAN_DECISION_REQUIRED`.
+Este foi o **segundo e último** ciclo de correção da micro-slice.
+
+### Leitura de confirmação (terceira leitura, Codex fresh, somente leitura) — **PASS**
+
+Sem correção autorizada nesta leitura. O revisor confirmou, com arquivo:linha: o fecho do
+BLOCKER do ciclo 2 (chave = identidade do resíduo; `attemptId` por execução do mission gate;
+`#reprobeResidual` apaga só o efeito que sondou); os três fechos do ciclo 1; C1 (abort e
+timeout pela terminação interna não rejeitante; sonda que lança tratada como "possivelmente
+vivo"); B1-final (`groupTerminated` preservado pelo provider e checado antes da observação
+do executor e do revisor). Nenhum BLOCKER/MAJOR dentro do escopo congelado, nenhuma
+regressão direta da 004B. Permanecem os dois achados **FORA** já registrados em J (cancel
+durante gate/integração em `#jobs`; sonda injetada que lança no `setup.ts`).
+
+Respostas às oito perguntas (resumo): (1) nenhum `unhandledRejection` novo com dependências
+reais; (2) `CANCELLED` não esconde grupo vivo nos caminhos congelados; (3) retry não
+esquece resíduo — sem `clear()`, `#forgetHandle` por identidade do handle, sonda por
+identidade do efeito, resíduo sem pid nunca se autoresolve; (4) saída natural não esconde
+descendente; (5) posse não sai com resíduo — `abandon` → `closeAll` → `shutdownControlPlane`
+→ serviço; (6) `cancel()`/`exit()`/abort/`close()`/`abandon()`/`stop()` coerentes com a
+ADR-0014; (7) nenhum threat model novo; (8) nenhuma regressão nem teste enfraquecido
+(conclusão estática; a suíte foi executada por nós — seção H).
+
+Ciclos usados: **2** de 2 (revisão 1 → correção 1; revisão 2 → correção 2), mais a leitura de
+confirmação. Contagem própria da 004B, não herdada da 004.
 
 ## I. Windows
 
