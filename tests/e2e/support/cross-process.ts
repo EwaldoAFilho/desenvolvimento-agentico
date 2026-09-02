@@ -40,9 +40,19 @@ function nodeChild(script: string, args: readonly string[]): NodeChild {
   return { child, out: stdout, err: stderr }
 }
 
-function ended(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return new Promise<void>((done) => child.once('exit', () => done()))
+/** Quanto um dono pode levar para sair depois do sinal antes de o teste desistir dele. */
+const STOP_TIMEOUT_MS = 60_000
+
+/** `true` quando o filho saiu; `false` se o prazo (quando dado) venceu antes. */
+function ended(child: ChildProcess, timeoutMs?: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  return new Promise<boolean>((done) => {
+    const timer = timeoutMs === undefined ? undefined : setTimeout(() => done(false), timeoutMs)
+    child.once('exit', () => {
+      if (timer !== undefined) clearTimeout(timer)
+      done(true)
+    })
+  })
 }
 
 /**
@@ -126,30 +136,24 @@ export function spawnOwner(
   return new Promise<SpawnedOwner>((done, fail) => {
     const finish = (report: OwnerReport): void => {
       clearTimeout(timer)
-      // TRACE-TEMP
-      require('node:fs').appendFileSync(
-        '/tmp/agentic-trace.log',
-        `${new Date().toISOString()} [${process.pid}] spawnOwner(${options.label}) pid=${child.pid} reportou ok=${report.ok}\n`,
-      )
       done({
         label: options.label,
         report,
         pid: child.pid ?? -1,
         stop: async (signal = 'SIGTERM'): Promise<StopReport> => {
-          const trace = (msg: string): void => {
-            // TRACE-TEMP
-            require('node:fs').appendFileSync(
-              '/tmp/agentic-trace.log',
-              `${new Date().toISOString()} [${process.pid}] stop(${options.label}, pid=${child.pid}) ${msg} exitCode=${child.exitCode} signalCode=${child.signalCode} killed=${child.killed}\n`,
+          const sent = child.kill(signal)
+          // Com prazo, e nunca em silencio: um dono que nao sai depois do sinal e derrubado
+          // (SIGKILL) para nao virar orfao, e o teste falha dizendo o que viu — em vez de
+          // estourar o timeout do teste e deixar o processo para tras.
+          if (!(await ended(child, STOP_TIMEOUT_MS))) {
+            const estado = `kill(${signal})=${String(sent)} exitCode=${String(child.exitCode)} signalCode=${String(child.signalCode)}`
+            child.kill('SIGKILL')
+            await ended(child, 5_000)
+            throw new Error(
+              `processo ${options.label} (pid ${String(child.pid)}) nao saiu ${STOP_TIMEOUT_MS}ms apos ${signal}: ${estado}; stderr:\n${stderr}`,
             )
           }
-          trace('antes do kill')
-          const sent = child.kill(signal)
-          trace(`kill(${signal}) -> ${sent}`)
-          await ended(child)
-          trace('ended')
           await drained(out)
-          trace('drained')
           return ultimaLinha()
         },
         kill: async (): Promise<void> => {

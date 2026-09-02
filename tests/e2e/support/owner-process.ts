@@ -80,19 +80,9 @@ async function main(): Promise<void> {
   nodeProcess.removeAllListeners('SIGINT')
   await new Promise<void>((resolve) => {
     nodeProcess.once('SIGTERM', () => {
-      // TRACE-TEMP
-      require('node:fs').appendFileSync(
-        '/tmp/agentic-trace.log',
-        `${new Date().toISOString()} [${nodeProcess.pid}] owner ${label} recebeu SIGTERM\n`,
-      )
       resolve()
     })
     nodeProcess.once('SIGINT', () => {
-      // TRACE-TEMP
-      require('node:fs').appendFileSync(
-        '/tmp/agentic-trace.log',
-        `${new Date().toISOString()} [${nodeProcess.pid}] owner ${label} recebeu SIGINT\n`,
-      )
       resolve()
     })
   })
@@ -102,11 +92,6 @@ async function main(): Promise<void> {
   const closed = await running.close().then(
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error: String(error) }),
-  )
-  // TRACE-TEMP
-  require('node:fs').appendFileSync(
-    '/tmp/agentic-trace.log',
-    `${new Date().toISOString()} [${nodeProcess.pid}] owner ${label} close terminou ok=${closed.ok}\n`,
   )
   nodeProcess.stdout.write(`${JSON.stringify({ label, closedAt: Date.now(), ...closed })}\n`)
 }
