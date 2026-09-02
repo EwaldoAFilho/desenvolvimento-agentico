@@ -139,11 +139,21 @@ Veredito: **FAIL** de novo — dois BLOCKER e três MAJOR, todos reais, todos fe
 | **MAJOR** — o adaptador da worktree do mission gate descartava `signal` | passa `signal` a `acquireMissionWorkspace` | typecheck; caminho coberto por `service-lifecycle` (gate teimoso cancelado) |
 | **MAJOR** — na colheita, uma falha na derivação (ERROR do mission gate → `FAILED`) era engolida pelo `#guard`; a mensagem já tinha saído da caixa | a derivação da colheita propaga falha nova; um `close` repetido deriva de novo mesmo com a caixa vazia (`derivacaoPendente`) | `mission-gate-persisted.test.ts`: `saveRun(COMPLETED)` falha uma vez — `close` rejeita, posse fica, o `close` seguinte conclui o run com a execução |
 
-### Ciclo 3 — **em aberto** (limite de dois ciclos de correção atingido)
+### Ciclo 3 — fechado em ciclo excepcional autorizado pelo operador
 
-Veredito: **FAIL**, quatro BLOCKER e um MINOR. Nenhum foi corrigido: a regra da fatia é
-parar depois de dois ciclos, e a decisão passa a ser humana. Cada um com o tamanho estimado
-do fecho, para essa decisão:
+Veredito da terceira revisão: **FAIL**, quatro BLOCKER e um MINOR. O operador autorizou UM
+ciclo excepcional restrito a esses quatro (B1–B4). Cada um foi reproduzido por teste
+vermelho antes da correção (9 testes vermelhos medidos: 4 de B1, 2 de B2, 2 de B3, 1 de B4) e
+fechado:
+
+| Achado | Fecho | Prova |
+| --- | --- | --- |
+| **B1** — SIGKILL enviado sem confirmar a morte do grupo | o runtime sonda `kill(-pgid, 0)` até ESRCH com teto (`groupGraceMs` 2 s); `ExitStatus.groupTerminated`; `cancel()` rejeita com `ProcessGroupAliveError`; gates relatam `residualProcess`; `workspaceSetup` lança com `residualProcess`; o orquestrador guarda efeitos não provados mortos e `abandon` rejeita (posse retida) enquanto houver um, sondando de novo na tentativa seguinte | `group-confirmation.test.ts` (grupo confirmado espera; grupo imortal → rejeita no teto, sem loop); `shutdown-drain.test.ts` B1: handle cujo grupo sobrevive → `close` rejeita, lease retido, outro processo não adquire; morto o grupo, o `close` seguinte devolve |
+| **B2** — `mission start` adquiria a posse antes de assinar sinais | `waitForShutdown()` é assinado antes de `acquireControlPlaneOwnership`; o supervisor e o `--serve` usam a mesma promessa | `mission-start-serve.test.ts` B2: ordem `sinal-assinado` antes de `plane`; sinal durante o bootstrap → mesmo lifecycle, posse livre depois |
+| **B3** — tratadores `once`: segundo Ctrl+C matava o processo no drain | hub de sinais permanente em `deps.ts`: primeiro sinal resolve a espera; sinal durante o encerramento é absorvido e registrado; sinal pendente dispara a próxima espera na hora | `deps.test.ts` (tratador permanece; sinal absorvido dispara o retry; sem pendente, espera sinal novo); `foreground-signal.test.ts` B3 (CLI real, dois SIGINT, setup morto, posse livre, saída graciosa) |
+| **B4** — caminho excepcional de `mission start` descartava a falha do encerramento | o mesmo laço de nova tentativa cobre o caminho excepcional; o erro original só sobe depois de o projeto ser devolvido | `mission-start-serve.test.ts` B4: `startRun` quebra, `close` falha uma vez, espera o segundo sinal, encerra, e só então rejeita com o erro original |
+
+Tabela original da revisão, mantida para registro:
 
 | Achado | Onde | O que faltaria | Tamanho |
 | --- | --- | --- | --- |

@@ -49,6 +49,7 @@ import {
   type WorkspaceRef,
 } from '@agentic/domain'
 import type { LockRow } from '@agentic/persistence'
+import { isResidualProcessError } from '@agentic/workspace'
 import type {
   ActiveLock,
   PendingReview,
@@ -295,6 +296,12 @@ export class Orchestrator {
   /** Cancelamento cooperativo de gate, setup e processo: abortado UMA vez, no `abandon`. */
   readonly #abort = new AbortController()
   #abandoning: Promise<void> | undefined
+  /**
+   * Efeitos que o encerramento NAO conseguiu provar mortos: cancelamento que rejeitou, gate
+   * ou setup cujo grupo de processos sobreviveu ao teto. Enquanto houver um, `abandon`
+   * rejeita e a posse fica retida (I15). Reavaliado a cada tentativa.
+   */
+  readonly #residual = new Set<string>()
 
   constructor(deps: EngineDeps, runId: RunId) {
     this.#deps = deps
@@ -385,15 +392,23 @@ export class Orchestrator {
         pendingJobs: this.#jobs.size,
         chainBusy: this.#chainBusy,
         inflightAttempts: [...this.#inflight.keys()],
+        residualProcesses: [...this.#residual],
       })
+    // Cada tentativa reavalia: o que sobrou viva da anterior pode ter morrido desde entao.
+    this.#residual.clear()
     // Cancelamentos em paralelo e DENTRO do prazo: um handle cujo cancel nunca resolve nao
-    // pode pendurar o encerramento sem prazo — ele o faz falhar, com a posse retida.
-    const cancels = [...this.#inflight.values()]
-      .map((entry) => entry.handle)
-      .filter((handle) => handle !== undefined)
-      .map((handle) => handle.cancel('control plane encerrado').catch(() => undefined))
+    // pode pendurar o encerramento sem prazo — ele o faz falhar, com a posse retida. E um
+    // cancel que REJEITA (grupo de processos ainda vivo) e efeito nao provado morto.
+    const cancels = [...this.#inflight.entries()]
+      .filter(([, entry]) => entry.handle !== undefined)
+      .map(([attemptId, entry]) =>
+        entry.handle?.cancel('control plane encerrado').catch(() => {
+          this.#residual.add(`tentativa ${attemptId}`)
+        }),
+      )
     if (!(await withDeadline(Promise.all(cancels), deadline))) throw timeout()
     if (!(await this.#settle(deadline))) throw timeout()
+    if (this.#residual.size > 0) throw timeout()
     // Colher e gravar. Falha aqui NAO e engolida: a mensagem fica na caixa, o encerramento
     // rejeita, a posse fica retida e o proximo `abandon` tenta gravar de novo — nunca um
     // merge na branch com a task ainda INTEGRATING no banco.
@@ -401,6 +416,7 @@ export class Orchestrator {
     colheita.catch(() => undefined)
     if (!(await withDeadline(colheita, deadline))) throw timeout()
     await colheita
+    if (this.#residual.size > 0) throw timeout()
     this.#inflight.clear()
     this.#inbox = []
   }
@@ -1756,6 +1772,7 @@ export class Orchestrator {
       })
     } catch (error) {
       this.#dispatchCooldown.set(spec.id, now.getTime() + DISPATCH_COOLDOWN_MS)
+      if (isResidualProcessError(error)) this.#residual.add(`workspaceSetup ${attemptId}`)
       // Sem workspace nao ha transicao 4: a guarda reprova e a task continua READY (P11).
       await this.#write({
         events: [
@@ -1895,7 +1912,9 @@ export class Orchestrator {
       // cancelamento do `abandon`, entao e cancelado aqui — e nao observado. A tentativa
       // fica RUNNING no banco para o proximo dono reconciliar (I15).
       if (this.#closed) {
-        await handle.cancel('control plane encerrando').catch(() => undefined)
+        await handle.cancel('control plane encerrando').catch(() => {
+          this.#residual.add(`tentativa ${attemptId}`)
+        })
         return
       }
       // Responde "qual processo executou?" sem depender de log (DOMAIN-MODEL 5).
@@ -2126,7 +2145,9 @@ export class Orchestrator {
       // Mesma janela do executor: revisor nascido durante o encerramento e cancelado, nao
       // observado. A task fica REVIEW no banco para o proximo dono reconciliar (I15).
       if (this.#closed) {
-        await handle.cancel('control plane encerrando').catch(() => undefined)
+        await handle.cancel('control plane encerrando').catch(() => {
+          this.#residual.add(`revisor ${inflight.attempt.id}`)
+        })
         return
       }
       this.#track(this.#afterReviewer(inflight, handle))
@@ -2225,6 +2246,7 @@ export class Orchestrator {
           directory: attemptDirectory(inflight.spec.id, inflight.attempt.attemptNumber),
           signal: this.#abort.signal,
         })
+        if (outcome.residualProcess === true) this.#residual.add(`gate ${inflight.attempt.id}`)
         this.#push({
           kind: 'gate',
           attemptId: inflight.attempt.id,
@@ -2300,6 +2322,7 @@ export class Orchestrator {
             directory: 'mission',
             signal: this.#abort.signal,
           })
+          if (outcome.residualProcess === true) this.#residual.add('mission gate')
           // Cancelado pelo encerramento: nao e medicao, nao vira resultado. Se virasse, o
           // `abandon` colheria um ERROR e o run terminaria FAILED por um gate que ninguem
           // reprovou. O proximo dono refaz o gate do zero (I12).
@@ -2310,6 +2333,7 @@ export class Orchestrator {
             failure: outcome.failure,
           })
         } catch (error) {
+          if (isResidualProcessError(error)) this.#residual.add('workspaceSetup do mission gate')
           if (this.#abort.signal.aborted) return
           // I12: adquirir a worktree da missao pode falhar (branch ja em check-out, disco,
           // setup). Sem esta mensagem a excecao morreria em `#errors` — memoria que nada le

@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { ControlPlane } from '@agentic/orchestrator'
+import { acquireControlPlaneOwnership } from '@agentic/persistence'
 import { runtimeDirOf } from '@agentic/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -29,6 +30,8 @@ class FakeOrchestrator {
   drains = 0
   started = false
   stopped = false
+  /** `drain()` pendurado: um run com agente em voo. */
+  drainForever = false
   onDrain: ((self: FakeOrchestrator) => void) | undefined
 
   start(): void {
@@ -41,6 +44,7 @@ class FakeOrchestrator {
 
   drain(): Promise<void> {
     this.drains += 1
+    if (this.drainForever) return new Promise<void>(() => undefined)
     this.onDrain?.(this)
     return Promise.resolve()
   }
@@ -229,6 +233,109 @@ describe('mission start publica a API por padrao', () => {
     // O usuario nao passou `--no-serve`: mandar rodar "sem --no-serve" seria conselho falso.
     expect(captured.stdout()).not.toContain('sem `--no-serve`')
     expect(captured.stdout()).toContain('`--port <n>`')
+  })
+
+  it('B2. o sinal e assinado ANTES de a posse ser adquirida e de qualquer recurso abrir', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.onDrain = (self) => {
+      self.status = 'COMPLETED'
+    }
+    const ordem: string[] = []
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => {
+        ordem.push('plane')
+        return planeOf(specHash, orchestrator)
+      },
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        ordem.push('sinal-assinado')
+        return new Promise<void>(() => undefined)
+      },
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    // O tratador do encerramento existe antes do primeiro recurso cuja devolucao depende dele.
+    expect(ordem[0]).toBe('sinal-assinado')
+    expect(ordem).toContain('plane')
+  })
+
+  it('B2. sinal que chega DURANTE o bootstrap entra no mesmo lifecycle e devolve a posse', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    orchestrator.drainForever = true
+    let chegou: (() => void) | undefined
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => {
+        // A posse ja foi adquirida; o sinal chega aqui, antes de abrir o orquestrador.
+        chegou?.()
+        return planeOf(specHash, orchestrator)
+      },
+      servePlane: spy.serve,
+      waitForShutdown: () =>
+        new Promise<void>((resolve) => {
+          chegou = resolve
+        }),
+    })
+
+    const result = await missionStartCommand(
+      { file: workspace.missionPath, acceptWarnings: true },
+      captured.deps,
+    )
+
+    expect(result.exitCode).toBe(EXIT_OK)
+    expect(orchestrator.stopped).toBe(true)
+    // A posse nao ficou abandonada: outro dono consegue o projeto depois do comando.
+    const posse = acquireControlPlaneOwnership({ baseDir: join(workspace.dir, '.agentic') })
+    expect(posse.ok).toBe(true)
+    if (posse.ok) posse.lease.release()
+  })
+
+  it('B4. falha DENTRO da orquestracao + encerramento que nao devolve a posse: nada e engolido', async () => {
+    workspace = await createWorkspace()
+    const specHash = await approvedRun(workspace.dir, workspace.missionPath)
+    const orchestrator = new FakeOrchestrator()
+    let closes = 0
+    let sinais = 0
+    const plane = planeOf(specHash, orchestrator)
+    const base = plane.close
+    ;(plane as { close: ControlPlane['close'] }).close = (options) => {
+      closes += 1
+      return closes === 1
+        ? Promise.reject(new Error('run X: encerramento excedeu 30000ms com efeito ainda em voo'))
+        : base(options)
+    }
+    // A orquestracao QUEBRA (banco, tick): o caminho excepcional.
+    ;(plane as { startRun: ControlPlane['startRun'] }).startRun = () =>
+      Promise.reject(new Error('banco indisponivel no meio do start'))
+    const spy = servePlaneSpy()
+    const captured = captureDeps({
+      cwd: workspace.dir,
+      controlPlane: () => plane,
+      servePlane: spy.serve,
+      waitForShutdown: () => {
+        sinais += 1
+        return sinais === 1 ? new Promise<void>(() => undefined) : Promise.resolve()
+      },
+    })
+
+    await expect(
+      missionStartCommand({ file: workspace.missionPath, acceptWarnings: true }, captured.deps),
+    ).rejects.toThrow('banco indisponivel')
+    // O encerramento que falhou nao foi descartado: esperou outro sinal e tentou de novo.
+    expect(closes).toBe(2)
+    expect(captured.stdout()).toContain('nao encerrou limpo')
   })
 
   it('encerramento que nao devolve a posse NAO sai: espera outro sinal e tenta de novo (I15)', async () => {

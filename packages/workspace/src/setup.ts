@@ -104,8 +104,40 @@ interface ShellOutcome {
   readonly timedOut: boolean
   /** O chamador cancelou (sinal de abort): a arvore do comando foi encerrada. */
   readonly aborted: boolean
+  /** O grupo de processos do comando deixou de existir, confirmado por sonda com teto. */
+  readonly groupTerminated: boolean
   readonly durationMs: number
   readonly output: string
+}
+
+/** Sonda injetavel para o teste: `true` = o grupo (pgid negativo) ainda existe. */
+export interface SetupProcessDeps {
+  readonly probeGroup?: (pgid: number) => boolean
+  readonly groupGraceMs?: number
+}
+
+const DEFAULT_GROUP_GRACE_MS = 2_000
+const GROUP_PROBE_INTERVAL_MS = 10
+
+function defaultProbeGroup(pgid: number): boolean {
+  try {
+    nodeProcess.kill(pgid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Sinal enviado nao e grupo morto: sonda ate ESRCH ou ate o teto. */
+async function confirmGroupGone(pid: number, deps: SetupProcessDeps): Promise<boolean> {
+  if (nodeProcess.platform === 'win32') return true
+  const probe = deps.probeGroup ?? defaultProbeGroup
+  const deadline = Date.now() + (deps.groupGraceMs ?? DEFAULT_GROUP_GRACE_MS)
+  for (;;) {
+    if (!probe(-pid)) return true
+    if (Date.now() >= deadline) return false
+    await new Promise((resolve) => setTimeout(resolve, GROUP_PROBE_INTERVAL_MS))
+  }
 }
 
 function tail(text: string): string {
@@ -117,6 +149,7 @@ function runShell(
   cwd: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  deps: SetupProcessDeps = {},
 ): Promise<ShellOutcome> {
   return new Promise<ShellOutcome>((resolvePromise) => {
     const startedAt = Date.now()
@@ -158,7 +191,20 @@ function runShell(
       if (timer !== undefined) clearTimeout(timer)
       if (derrubada !== undefined) clearTimeout(derrubada)
       signal?.removeEventListener('abort', onAbort)
-      resolvePromise({ exitCode, timedOut, aborted, durationMs: Date.now() - startedAt, output })
+      // Antes de responder, a morte do grupo e CONFIRMADA (com teto): responder ao `kill`
+      // deixaria o chamador seguir com um descendente ainda terminando uma escrita.
+      const pid = child.pid
+      const confirmacao = pid === undefined ? Promise.resolve(true) : confirmGroupGone(pid, deps)
+      void confirmacao.then((groupTerminated) => {
+        resolvePromise({
+          exitCode,
+          timedOut,
+          aborted,
+          groupTerminated,
+          durationMs: Date.now() - startedAt,
+          output,
+        })
+      })
     }
     /**
      * Derrubar a arvore e ESPERAR o `close` do shell antes de responder: resolver na hora
@@ -203,6 +249,7 @@ export async function runWorkspaceSetup(
   repoRoot: string,
   setup: WorkspaceSetup | undefined,
   signal?: AbortSignal,
+  deps: SetupProcessDeps = {},
 ): Promise<WorkspaceSetupResult> {
   if (setup === undefined) return EMPTY_SETUP_RESULT
   const cancelado = (command: string): WorkspaceError =>
@@ -224,13 +271,27 @@ export async function runWorkspaceSetup(
     const command = normalizeSetupCommand(raw)
     if (signal?.aborted === true) throw cancelado(command.run)
     const cwd = command.cwd === undefined ? target : resolve(target, command.cwd)
-    const outcome = await runShell(command.run, cwd, command.timeoutMs ?? defaultTimeout, signal)
+    const outcome = await runShell(
+      command.run,
+      cwd,
+      command.timeoutMs ?? defaultTimeout,
+      signal,
+      deps,
+    )
     commands.push({
       run: command.run,
       exitCode: outcome.exitCode,
       durationMs: outcome.durationMs,
       timedOut: outcome.timedOut,
     })
+    if (!outcome.groupTerminated) {
+      // Nao e "falhou": e "nao consegui provar que parou". Quem encerra precisa saber.
+      throw new WorkspaceError(
+        'setup',
+        `grupo de processos do comando de workspaceSetup ainda vivo depois do teto: ${command.run}`,
+        { detail: outcome.output.trim(), residualProcess: true },
+      )
+    }
     if (outcome.aborted) throw cancelado(command.run)
     if (outcome.timedOut) {
       throw new WorkspaceError(

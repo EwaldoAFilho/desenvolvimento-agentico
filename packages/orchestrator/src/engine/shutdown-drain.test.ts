@@ -353,6 +353,64 @@ describe('I15 — close so resolve quando nenhum efeito do dono pode mutar o pro
     }).toEqual({ status: 'COMPLETED', execucao: 'string', gates: 1 })
   }, 90_000)
 
+  it('B1. grupo de processos ainda vivo depois do cancel: a posse fica retida ate a morte confirmada', async () => {
+    // O provider cancela o agente, mas o grupo dele sobrevive ao SIGKILL alem do teto: a
+    // primeira tentativa de encerrar tem de FALHAR (posse retida); quando o grupo morre, a
+    // seguinte devolve o projeto.
+    let cancelamentos = 0
+    const grupoVivo: ProviderFactory = (input) => {
+      const provider = scriptedFactory(defaultStep)(input)
+      return {
+        id: provider.id,
+        capabilities: () => provider.capabilities(),
+        health: () => provider.health(),
+        start: async (assignment: Assignment, ctx: DispatchContext) => {
+          const handle = await provider.start(assignment, ctx)
+          return {
+            ...handle,
+            ref: handle.ref,
+            status: () => handle.status(),
+            result: () => handle.result(),
+            logs: () => handle.logs(),
+            cancel: async (reason: string): Promise<void> => {
+              cancelamentos += 1
+              await handle.cancel(reason)
+              if (cancelamentos === 1) {
+                throw Object.assign(new Error('grupo de processos ainda vivo apos SIGKILL'), {
+                  code: 'PROCESS_GROUP_ALIVE',
+                })
+              }
+            },
+          }
+        },
+      }
+    }
+    h = await createHarness({
+      mission: MISSION,
+      gates: { unit: [GATE_ALWAYS_PASS] },
+      factory: grupoVivo,
+      safetyIntervalMs: 0,
+      step: (context) =>
+        context.kind === 'review'
+          ? defaultStep(context)
+          : { ...defaultStep(context), delayMs: 60_000 },
+    })
+    const harness = h
+    await harness.orchestrator.tick()
+    expect((await harness.task('T01')).status).toBe('RUNNING')
+
+    await expect(harness.plane.close()).rejects.toThrow(/vivo|SHUTDOWN_TIMEOUT|prazo/)
+    expect(harness.lease.held).toBe(true)
+    expect(harness.plane.lifecycle).toBe('closing')
+    const outro = acquireControlPlaneOwnership({ baseDir: join(harness.root, '.agentic') })
+    expect(outro.ok).toBe(false)
+
+    // O grupo morreu: o proximo close confirma e termina.
+    await harness.plane.close()
+    expect(harness.plane.lifecycle).toBe('closed')
+    expect(cancelamentos).toBe(2)
+  }, 60_000)
+
   it('quiesce: o plane recusa trabalho novo antes mesmo de comecar a drenar', async () => {
     h = await createHarness({
       mission: MISSION,

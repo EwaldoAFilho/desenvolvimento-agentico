@@ -14,6 +14,8 @@ export type WorkspaceStage = (typeof WORKSPACE_STAGES)[number]
 export interface WorkspaceErrorOptions {
   readonly detail?: string
   readonly cause?: unknown
+  /** O grupo de processos de um comando ainda existia quando o teto venceu (I15). */
+  readonly residualProcess?: boolean
 }
 
 /**
@@ -24,12 +26,14 @@ export class WorkspaceError extends Error {
   readonly code: FailureCode = 'WORKSPACE_ERROR'
   readonly stage: WorkspaceStage
   readonly detail: string | undefined
+  readonly residualProcess: boolean
 
   constructor(stage: WorkspaceStage, message: string, options: WorkspaceErrorOptions = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause })
     this.name = new.target.name
     this.stage = stage
     this.detail = options.detail
+    this.residualProcess = options.residualProcess === true
   }
 
   toFailureReason(): FailureReason {
@@ -47,6 +51,11 @@ export class WorkspaceBusyError extends WorkspaceError {
 
 export function isWorkspaceError(value: unknown): value is WorkspaceError {
   return value instanceof WorkspaceError
+}
+
+/** Falha que deixou processo vivo atras de si: quem encerra nao pode presumir que parou. */
+export function isResidualProcessError(value: unknown): boolean {
+  return isWorkspaceError(value) && value.residualProcess
 }
 
 export function isWorkspaceBusyError(value: unknown): value is WorkspaceBusyError {

@@ -12,7 +12,13 @@ import type {
   SpawnFailure,
   SpawnFn,
 } from './types.js'
-import { DEFAULT_CLOSE_GRACE_MS, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_OUTPUT_BYTES } from './types.js'
+import {
+  DEFAULT_CLOSE_GRACE_MS,
+  DEFAULT_GROUP_GRACE_MS,
+  DEFAULT_KILL_GRACE_MS,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  GROUP_PROBE_INTERVAL_MS,
+} from './types.js'
 
 const defaultSpawn: SpawnFn = (command, args, options) =>
   nodeSpawn(command, [...args], {
@@ -45,6 +51,47 @@ function abortReasonOf(signal: AbortSignal): string {
   return 'cancelado por sinal de abort'
 }
 
+/**
+ * O grupo de processos ainda existia quando o teto da confirmacao venceu. Quem pediu o
+ * cancelamento nao pode tratar isso como "parou": e o oposto — um efeito que o dono nao
+ * conseguiu provar morto, e a posse nao pode sair enquanto ele durar (I15).
+ */
+export class ProcessGroupAliveError extends Error {
+  readonly code = 'PROCESS_GROUP_ALIVE'
+  readonly pgid: number
+  readonly graceMs: number
+
+  constructor(pgid: number, graceMs: number) {
+    super(
+      `grupo de processos ${pgid} ainda existe ${graceMs}ms depois do SIGKILL: algum descendente ` +
+        'nao morreu, e o encerramento nao pode presumir que ele parou (I15)',
+    )
+    this.name = 'ProcessGroupAliveError'
+    this.pgid = pgid
+    this.graceMs = graceMs
+  }
+}
+
+export function isProcessGroupAliveError(value: unknown): value is ProcessGroupAliveError {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { readonly code?: unknown }).code === 'PROCESS_GROUP_ALIVE'
+  )
+}
+
+/** Sonda padrao: `kill(pgid, 0)` nao entrega sinal; EPERM significa que existe e nao e nosso. */
+function defaultProbeGroup(pgid: number): boolean {
+  try {
+    nodeProcess.kill(pgid, 0)
+    return true
+  } catch (error) {
+    return errorCode(error) === 'EPERM'
+  }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
 }
@@ -59,6 +106,9 @@ class ManagedProcess implements RunningProcess {
   readonly #kill: (pid: number, signal: NodeJS.Signals) => void
   readonly #killGraceMs: number
   readonly #closeGraceMs: number
+  readonly #groupGraceMs: number
+  readonly #probeGroup: (pgid: number) => boolean
+  #finishing = false
   readonly #startedAtMs: number
   readonly #out: StreamSink
   readonly #err: StreamSink
@@ -83,6 +133,8 @@ class ManagedProcess implements RunningProcess {
     this.#kill = deps.kill ?? ((pid, signal) => nodeProcess.kill(pid, signal))
     this.#killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.#closeGraceMs = deps.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS
+    this.#groupGraceMs = deps.groupGraceMs ?? DEFAULT_GROUP_GRACE_MS
+    this.#probeGroup = deps.probeGroup ?? defaultProbeGroup
     this.handle = (deps.newHandle ?? (() => `proc_${randomUUID()}`))()
     this.cwd = spec.cwd
     this.#startedAtMs = this.#now()
@@ -147,13 +199,26 @@ class ManagedProcess implements RunningProcess {
     })
   }
 
+  /**
+   * Cancela e so resolve com o grupo de processos CONFIRMADO morto. Se o grupo ainda existir
+   * depois do teto, rejeita com `ProcessGroupAliveError`: sinal enviado nao e processo morto.
+   * Chamado de novo mais tarde, sonda outra vez — o grupo pode ter morrido nesse meio tempo.
+   */
   async cancel(reason: string): Promise<void> {
     if (this.#status === null && !this.#cancelled) {
       this.#cancelled = true
       this.#cancelReason = reason
       await this.#terminate()
     }
-    await this.exit()
+    const status = await this.exit()
+    if (status.groupTerminated) return
+    const pid = this.#pid
+    if (pid === null) return
+    if (await this.#confirmGroupGone(pid)) {
+      this.#status = Object.freeze({ ...status, groupTerminated: true })
+      return
+    }
+    throw new ProcessGroupAliveError(-pid, this.#groupGraceMs)
   }
 
   captured(): CapturedRun {
@@ -210,7 +275,7 @@ class ManagedProcess implements RunningProcess {
     })
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.#settle(code ?? this.#observedCode, signal ?? this.#observedSignal)
+      void this.#finish(code ?? this.#observedCode, signal ?? this.#observedSignal)
     })
 
     const timeoutMs = spec.timeoutMs
@@ -227,11 +292,41 @@ class ManagedProcess implements RunningProcess {
   #armCloseGuard(): void {
     if (this.#closeTimer !== null || this.#status !== null) return
     this.#closeTimer = setTimeout(() => {
-      this.#settle(this.#observedCode, this.#observedSignal)
+      void this.#finish(this.#observedCode, this.#observedSignal)
       // solta os pipes que sobreviveram ao filho, senao o processo pai fica preso
       this.#child?.stdout?.destroy()
       this.#child?.stderr?.destroy()
     }, this.#closeGraceMs)
+  }
+
+  /**
+   * O lider assentou. Antes de o processo ser dado por encerrado: o resto do grupo recebe
+   * SIGKILL e a morte do grupo e CONFIRMADA por sonda, com teto. So entao `exit()` resolve —
+   * com `groupTerminated` dizendo se a confirmacao veio ou se o teto venceu.
+   */
+  async #finish(code: number | null, signal: string | null): Promise<void> {
+    if (this.#finishing || this.#status !== null) return
+    this.#finishing = true
+    const pid = this.#pid
+    let terminated = true
+    if (pid !== null) {
+      this.#killGroupRemainder(pid)
+      terminated = await this.#confirmGroupGone(pid)
+    }
+    this.#settle(code, signal, terminated)
+  }
+
+  /** `true` quando o grupo deixou de existir dentro do teto; `false` se ainda existia. */
+  async #confirmGroupGone(pid: number): Promise<boolean> {
+    if (this.#platform === 'win32') return true
+    // Relogio REAL, nao o injetado: o teto e espera de parede, e o relogio injetado serve
+    // para medir duracao — sonda-lo a cada volta contaminaria a `durationMs` do relato.
+    const deadline = Date.now() + this.#groupGraceMs
+    for (;;) {
+      if (!this.#probeGroup(-pid)) return true
+      if (Date.now() >= deadline) return false
+      await sleep(GROUP_PROBE_INTERVAL_MS)
+    }
   }
 
   async #terminate(): Promise<void> {
@@ -317,14 +412,12 @@ class ManagedProcess implements RunningProcess {
     })
   }
 
-  #settle(code: number | null, signal: string | null): void {
+  #settle(code: number | null, signal: string | null, groupTerminated = true): void {
     if (this.#status !== null) return
     if (this.#timeoutTimer !== null) clearTimeout(this.#timeoutTimer)
     if (this.#closeTimer !== null) clearTimeout(this.#closeTimer)
     this.#desligarAbort?.()
     this.#desligarAbort = null
-    // O grupo termina com o lider — em toda saida, nao so no cancelamento.
-    if (this.#pid !== null) this.#killGroupRemainder(this.#pid)
     this.#timeoutTimer = null
     this.#closeTimer = null
     this.#out.end()
@@ -335,6 +428,7 @@ class ManagedProcess implements RunningProcess {
       signal,
       timedOut: this.#timedOut,
       cancelled: this.#cancelled,
+      groupTerminated,
       durationMs: Math.max(0, this.#now() - this.#startedAtMs),
     }
     if (this.#spawnError !== null) status.spawnError = this.#spawnError

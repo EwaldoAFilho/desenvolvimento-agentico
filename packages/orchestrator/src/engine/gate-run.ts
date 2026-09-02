@@ -30,6 +30,8 @@ export interface GateOutcome {
   readonly execution?: GateExecution
   readonly failure?: FailureReason
   readonly cwd: string
+  /** Um comando do gate deixou grupo de processos vivo: o encerramento nao pode presumir que parou. */
+  readonly residualProcess?: boolean
 }
 
 async function persistStream(
@@ -96,6 +98,7 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
           detail: `gate ${input.gateId} cancelado pelo encerramento do control plane`,
         },
         cwd: result.cwd,
+        ...(result.residualProcess ? { residualProcess: true } : {}),
       }
     }
     const execution: GateExecution = {
@@ -109,7 +112,11 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
       status: result.status,
       results: await toCommandResults(input, result),
     }
-    return { execution, cwd: result.cwd }
+    return {
+      execution,
+      cwd: result.cwd,
+      ...(result.residualProcess ? { residualProcess: true } : {}),
+    }
   } catch (error) {
     return {
       failure: {

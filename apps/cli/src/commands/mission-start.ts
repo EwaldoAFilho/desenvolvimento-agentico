@@ -151,6 +151,14 @@ export async function missionStartCommand(
    * pelo endereco tentado (o caso classico e `--port` divergente). Entao a descoberta e
    * consultada SEM a flag e o START vai para o dono de verdade.
    */
+  /**
+   * O tratador do encerramento existe ANTES do primeiro recurso cuja devolucao depende dele:
+   * a posse. Entre adquiri-la e o supervisor comecar ha `open`, `startRun` e `plane.open()`
+   * (que roda git), e um sinal nessa janela caia no tratador padrao do Node — processo morto,
+   * lock solto pelo SO, git ainda rodando. O sinal que chegar durante o bootstrap e atendido
+   * pelo mesmo lifecycle, logo que o supervisor o ve.
+   */
+  const shutdown = deps.waitForShutdown()
   const posse = acquireControlPlaneOwnership({ baseDir: context.runtimeDir })
   if (!posse.ok) {
     const dono = await discoverRuntime(context)
@@ -192,32 +200,38 @@ export async function missionStartCommand(
         releaseOwnership: () => lease.release(),
       })
 
+    /**
+     * Encerrou sem devolver o projeto (efeito em voo dentro do prazo)? Entao NAO sair: sair
+     * soltaria o lock pelo sistema operacional com o efeito vivo (I15). O processo fica, diz o
+     * que houve, e o proximo sinal tenta de novo. Vale para o caminho normal E para o
+     * excepcional: uma falha da orquestracao nao autoriza descartar a falha do encerramento.
+     */
+    const encerrarAteConseguir = async (): Promise<void> => {
+      for (;;) {
+        try {
+          await encerrar()
+          return
+        } catch (error) {
+          out.line()
+          out.line(`o control plane nao encerrou limpo: ${messageOf(error)}`)
+          out.line('a posse do projeto continua com este processo; Ctrl+C de novo tenta outra vez.')
+          await deps.waitForShutdown()
+        }
+      }
+    }
+
     let result: CommandResult
     try {
       result = await orquestrar(plane, (server) => {
         published = server
       })
     } catch (error) {
-      // O erro original e o que importa; o encerramento e melhor esforco.
-      await encerrar().catch(() => undefined)
+      // O erro original e o que o chamador ve — mas so DEPOIS de o projeto ser devolvido.
+      await encerrarAteConseguir()
       throw error
     }
-    /**
-     * Encerrou sem devolver o projeto (efeito em voo dentro do prazo)? Entao NAO sair: sair
-     * soltaria o lock pelo sistema operacional com o efeito vivo (I15). O processo fica, diz o
-     * que houve, e o proximo sinal tenta de novo.
-     */
-    for (;;) {
-      try {
-        await encerrar()
-        return result
-      } catch (error) {
-        out.line()
-        out.line(`o control plane nao encerrou limpo: ${messageOf(error)}`)
-        out.line('a posse do projeto continua com este processo; Ctrl+C de novo tenta outra vez.')
-        await deps.waitForShutdown()
-      }
-    }
+    await encerrarAteConseguir()
+    return result
   }
 
   async function orquestrar(
@@ -308,12 +322,12 @@ export async function missionStartCommand(
         // `--serve` e "fica em primeiro plano ate Ctrl+C", com ou sem porta: nao encerra
         // sozinho quando o run termina.
         orchestrator.start()
-        await deps.waitForShutdown()
+        await shutdown
         orchestrator.stop()
       } else {
         // Pausado NAO e fim: o processo segue no ar para que `resume` tenha a quem falar.
         await superviseForeground(orchestrator, {
-          waitForShutdown: () => deps.waitForShutdown(),
+          waitForShutdown: () => shutdown,
           ...(deps.pausePollMs === undefined ? {} : { pollMs: deps.pausePollMs }),
           onPaused: () => {
             out.line('run PAUSED: nada novo sera despachado; o control plane continua no ar.')

@@ -47,6 +47,8 @@ export class ShutdownTimeoutError extends OrchestratorError {
   readonly pendingJobs: number
   readonly chainBusy: boolean
   readonly inflightAttempts: readonly string[]
+  /** Processos cujo grupo NAO foi confirmado morto: sinal enviado nao e processo morto. */
+  readonly residualProcesses: readonly string[]
 
   constructor(input: {
     readonly runId: string
@@ -54,12 +56,17 @@ export class ShutdownTimeoutError extends OrchestratorError {
     readonly pendingJobs: number
     readonly chainBusy: boolean
     readonly inflightAttempts: readonly string[]
+    readonly residualProcesses?: readonly string[]
   }) {
+    const residual = input.residualProcesses ?? []
     const what = [
       input.chainBusy ? 'tick em execucao' : undefined,
       input.pendingJobs > 0 ? `${input.pendingJobs} efeito(s) assincrono(s)` : undefined,
       input.inflightAttempts.length > 0
         ? `tentativas ${input.inflightAttempts.join(', ')}`
+        : undefined,
+      residual.length > 0
+        ? `grupo(s) de processos ainda vivo(s): ${residual.join(', ')}`
         : undefined,
     ]
       .filter((part) => part !== undefined)
@@ -74,6 +81,7 @@ export class ShutdownTimeoutError extends OrchestratorError {
     this.pendingJobs = input.pendingJobs
     this.chainBusy = input.chainBusy
     this.inflightAttempts = input.inflightAttempts
+    this.residualProcesses = residual
   }
 }
 

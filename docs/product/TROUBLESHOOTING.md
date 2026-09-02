@@ -490,6 +490,11 @@ projeto, e o próximo Ctrl+C tenta o encerramento outra vez — sair soltaria a 
 efeito vivo, que é o que a regra proíbe. Quando o efeito termina (a integração acaba, o gate
 morre), o Ctrl+C seguinte devolve o projeto e o processo sai.
 
+**Um segundo Ctrl+C durante o encerramento não mata o processo.** Ele é registrado (a CLI
+avisa em stderr) e, se o encerramento em curso falhar, dispara a nova tentativa sozinho. Isso
+é deliberado: o tratador padrão do Node mataria o processo no meio da drenagem e a posse
+sairia com efeito vivo.
+
 **Derrubar à força é `kill -9`.** Nada é drenado, a posse morre com o processo e um comando
 de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar sozinho — sem
 alcançar o banco. Funciona, mas é queda, não encerramento; o próximo `agentic serve` adota

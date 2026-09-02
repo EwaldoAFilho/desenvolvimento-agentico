@@ -82,6 +82,45 @@ afterAll(async () => {
   await fixture?.cleanup().catch(() => undefined)
 })
 
+describe.skipIf(nodeProcess.platform === 'win32')('B3. dois Ctrl+C durante o drain', () => {
+  it('o segundo sinal e absorvido: o encerramento gracioso termina, o setup morre, a posse fica livre', async () => {
+    await rm(marker, { force: true })
+    fixture = await materializeFixture({ project: projetoComSetupLento })
+    const missionPath = '.agentic/missions/EXEMPLO-001.mission.yaml'
+    const aprovado = await runCli(fixture.root, [
+      'mission',
+      'approve',
+      missionPath,
+      '--actor',
+      'e2e',
+    ])
+    expect(aprovado.code).toBe(0)
+    const cli = await spawnCli(
+      fixture.root,
+      ['mission', 'start', missionPath, '--accept-warnings', '--no-serve'],
+      /run \S+ iniciado/,
+    )
+    await esperar('o workspaceSetup entrar em execucao', () => existe(marker))
+    const setupPid = Number(await readFile(marker, 'utf8'))
+
+    // Primeiro Ctrl+C inicia o drain; o segundo chega 150ms depois, com o drain em curso.
+    nodeProcess.kill(cli.pid, 'SIGINT')
+    await sleep(150)
+    await cli.stop('SIGINT')
+
+    const posse = acquireControlPlaneOwnership({ baseDir: join(fixture.root, '.agentic') })
+    if (posse.ok) posse.lease.release()
+    expect({
+      setupVivo: vivo(setupPid),
+      posseLivre: posse.ok,
+      // Encerrou pelo caminho gracioso, nao pelo tratador padrao do Node.
+      saida: cli.output().includes('status final'),
+    }).toEqual({ setupVivo: false, posseLivre: true, saida: true })
+    await fixture.cleanup()
+    fixture = undefined
+  }, 180_000)
+})
+
 describe.skipIf(nodeProcess.platform === 'win32')(
   'Ctrl+C em `mission start` com setup em voo',
   () => {

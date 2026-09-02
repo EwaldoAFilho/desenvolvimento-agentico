@@ -58,9 +58,27 @@ jeito, e entregar o projeto com efeito vivo é o dano de D4 voltando por um cami
 Um `close` seguinte tenta de novo.
 
 E **o processo não sai** nesse caso — nem `agentic serve`, nem `agentic-server`, nem
-`mission start`. Sair soltaria o lock pelo sistema operacional com o efeito vivo, que é
-exatamente o que a regra proíbe. Os três dizem o que houve e esperam o **próximo sinal**, que
-tenta o `stop` de novo. `kill -9` continua sendo a saída de quem sabe o que faz.
+`mission start`, inclusive quando a própria orquestração quebrou antes (o caminho
+excepcional não descarta a falha do encerramento). Sair soltaria o lock pelo sistema
+operacional com o efeito vivo, que é exatamente o que a regra proíbe. Os três dizem o que
+houve e esperam o **próximo sinal**, que tenta o `stop` de novo. `kill -9` continua sendo a
+saída de quem sabe o que faz.
+
+**Sinal enviado não é processo morto.** Depois do SIGKILL ao grupo, o runtime de processo
+**sonda** o grupo (`kill(-pgid, 0)`) até ele deixar de existir, com teto
+(`groupGraceMs`, 2 s); só então o processo assenta. `ExitStatus.groupTerminated` diz se a
+confirmação veio; vencido o teto, `cancel()` rejeita com `ProcessGroupAliveError`, o gate
+relata `residualProcess` e o `workspaceSetup` lança com `residualProcess`. O orquestrador
+guarda cada um desses como efeito **não provado morto** e o `abandon` rejeita enquanto houver
+um — a posse fica retida, e a tentativa seguinte sonda de novo. Em Windows não há grupo a
+sondar: `groupTerminated` é `true` por definição (limite declarado).
+
+**Política do segundo sinal.** Os tratadores da CLI são permanentes, nunca `once`. O
+primeiro SIGINT/SIGTERM inicia o encerramento; um sinal que chega **durante** o encerramento
+é absorvido e registrado (mensagem em stderr com o `kill -9` explícito), nunca cai no
+tratador padrão do Node; se o encerramento falhar e o comando voltar a esperar, o sinal
+absorvido dispara a nova tentativa na hora. Em `mission start` o sinal é assinado **antes** de
+a posse ser adquirida — antes do primeiro recurso cuja devolução depende dele.
 
 Os sinais são assinados **antes** do boot, não depois: a adoção dos runs recuperáveis já
 despacha agente, e um `SIGTERM` nessa janela caía no tratador padrão do Node. Um sinal que

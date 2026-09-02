@@ -303,7 +303,9 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   sistema operacional com o efeito vivo. `serve`, `agentic-server` e `mission start` esperam
   o próximo sinal e tentam de novo. É o mal menor: a posse morre com o processo de qualquer
   jeito. A unidade de um processo filho é o **grupo**: quando o líder assenta, o resto do
-  grupo recebe SIGKILL, por isso um daemon deixado por agente ou setup não sobrevive ao dono.
+  grupo recebe SIGKILL e a morte do grupo é **confirmada** por sonda com teto antes de o
+  processo ser dado por encerrado — sinal enviado não é processo morto. Grupo que sobrevive
+  ao teto é efeito não provado morto: o encerramento rejeita e a posse fica.
 
   A tentativa cujo desfecho foi descartado continua `RUNNING`/`REVIEW` no banco de
   propósito: é exatamente o que a reconciliação do próximo dono encerra como `INTERRUPTED`

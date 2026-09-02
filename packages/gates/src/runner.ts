@@ -114,6 +114,7 @@ export class GateRunner {
       status: gateStatusFromResults(request.gate.commands, results),
       results,
       skipped,
+      residualProcess: results.some((record) => !record.groupTerminated),
       cwd: workspace,
       envAllow,
     }
@@ -176,6 +177,7 @@ export class GateRunner {
       exitCode: run.code,
       signal: run.signal,
       timedOut: run.timedOut,
+      groupTerminated: run.groupTerminated,
       durationMs: run.durationMs,
       startedAt,
       finishedAt: new Date(this.#now()),
@@ -201,6 +203,7 @@ export class GateRunner {
     const message = describeUnknownError(error)
     const finishedAt = new Date(this.#now())
     return {
+      groupTerminated: true,
       index,
       command: command.run,
       cwd,

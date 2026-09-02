@@ -16,6 +16,7 @@ export {
 } from './diff.js'
 export type { WorkspaceErrorOptions, WorkspaceStage } from './errors.js'
 export {
+  isResidualProcessError,
   isWorkspaceBusyError,
   isWorkspaceError,
   toFailureReason,
@@ -82,6 +83,7 @@ export {
 export type {
   SetupCommandResult,
   SetupLinkSkip,
+  SetupProcessDeps,
   SetupSkipReason,
   WorkspaceSetup,
   WorkspaceSetupCommand,

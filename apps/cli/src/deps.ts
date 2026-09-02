@@ -101,15 +101,44 @@ async function defaultGitProbe(cwd: string): Promise<GitProbe> {
   }
 }
 
+/**
+ * Politica de sinais do processo da CLI (ADR-0014):
+ *
+ * - o primeiro SIGINT/SIGTERM resolve a espera em curso e inicia o encerramento gracioso;
+ * - um sinal que chega DURANTE o encerramento (ninguem esperando) e ABSORVIDO e registrado —
+ *   nunca cai no tratador padrao do Node, que mataria o processo no meio da drenagem e
+ *   soltaria a posse pelo SO com efeito em voo (I15);
+ * - se o encerramento falhar e o comando voltar a esperar, um sinal absorvido dispara a nova
+ *   tentativa na hora.
+ *
+ * Os tratadores sao permanentes: nunca `once`. Derrubar sem drenar e `kill -9`, de proposito.
+ */
+const hub = { pending: 0, waiter: undefined as (() => void) | undefined }
+
+function onSignal(): void {
+  const waiter = hub.waiter
+  if (waiter !== undefined) {
+    hub.waiter = undefined
+    waiter()
+    return
+  }
+  hub.pending += 1
+  nodeProcess.stderr.write(
+    'encerramento em andamento: o sinal foi registrado e vai disparar uma nova tentativa se ' +
+      `esta falhar. Para derrubar sem drenar: kill -9 ${nodeProcess.pid}\n`,
+  )
+}
+
 function defaultShutdown(): Promise<void> {
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    if (!nodeProcess.listeners(signal).includes(onSignal)) nodeProcess.on(signal, onSignal)
+  }
+  if (hub.pending > 0) {
+    hub.pending -= 1
+    return Promise.resolve()
+  }
   return new Promise<void>((resolve) => {
-    const finish = (): void => {
-      nodeProcess.off('SIGINT', finish)
-      nodeProcess.off('SIGTERM', finish)
-      resolve()
-    }
-    nodeProcess.once('SIGINT', finish)
-    nodeProcess.once('SIGTERM', finish)
+    hub.waiter = resolve
   })
 }
 

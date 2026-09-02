@@ -39,6 +39,8 @@ export interface GateCommandRecord extends CommandResult {
   readonly truncated: boolean
   readonly startedAt: Date
   readonly finishedAt: Date
+  /** `false` = o grupo de processos do comando ainda existia quando o runtime desistiu. */
+  readonly groupTerminated: boolean
   readonly stdout: GateCommandOutput
   readonly stderr: GateCommandOutput
   /** Presente quando o processo nao chegou a rodar (recusa ou falha de spawn). */
@@ -81,6 +83,8 @@ export interface GateRunRequest {
 export interface GateRunResult extends GateExecution {
   readonly results: readonly GateCommandRecord[]
   readonly skipped: readonly SkippedGateCommand[]
+  /** Algum comando deixou grupo de processos vivo alem do teto: efeito nao provado morto (I15). */
+  readonly residualProcess: boolean
   readonly finishedAt: Date
   /** Workspace resolvido em que o gate rodou. */
   readonly cwd: string
