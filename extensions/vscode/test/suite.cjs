@@ -11,12 +11,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function until(label, predicate, timeoutMs) {
+async function until(label, predicate, timeoutMs, ctx) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const value = await predicate()
     if (value) return value
-    if (Date.now() > deadline) throw new Error(`timeout: ${label}`)
+    if (Date.now() > deadline) {
+      const view = ctx?.api?.host?.view()
+      throw new Error(
+        `timeout: ${label}${view === undefined ? '' : ` — estado: ${JSON.stringify(view)}`}`,
+      )
+    }
     await sleep(250)
   }
 }
@@ -68,6 +73,7 @@ step('Start Agentic: control plane no ar sem terminal', async (ctx) => {
     'RUNNING',
     () => (ctx.api.host.view()?.state === 'RUNNING' ? ctx.api.host.view() : undefined),
     90_000,
+    ctx,
   )
   assert.ok(view.live?.url.startsWith('http://'), 'endereco descoberto')
   ctx.firstPid = view.live?.pid
@@ -106,6 +112,7 @@ step('Restart Agentic: novo dono, nunca dois', async (ctx) => {
     'RUNNING apos restart',
     () => (ctx.api.host.view()?.state === 'RUNNING' ? ctx.api.host.view() : undefined),
     120_000,
+    ctx,
   )
   if (ctx.firstPid !== undefined && view.live?.pid !== undefined) {
     assert.notEqual(view.live.pid, ctx.firstPid, 'restart trocou o processo')
@@ -118,6 +125,7 @@ step('Stop Agentic: Stopped so com prova', async (ctx) => {
     'STOPPED',
     () => (ctx.api.host.view()?.state === 'STOPPED' ? ctx.api.host.view() : undefined),
     120_000,
+    ctx,
   )
   assert.equal(view.live, undefined)
 })

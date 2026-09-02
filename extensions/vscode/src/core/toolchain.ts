@@ -39,6 +39,14 @@ export interface ToolchainSettings {
   readonly cliPath?: string
 }
 
+/**
+ * O driver nativo que o control plane carrega. Versao certa de Node nao basta: um modulo
+ * nativo e compilado para UMA ABI, e um `node` mais novo que o usado no `npm install` falha
+ * ao carrega-lo. O candidato so vale se carregar o driver do projeto — quando o projeto o
+ * tem; sem `node_modules` do projeto (CLI instalada em outro lugar) nao ha o que provar.
+ */
+export const NATIVE_DRIVER = 'better-sqlite3'
+
 export interface Toolchain {
   readonly node: NodeBinary
   readonly cli: CliLocation
@@ -47,7 +55,7 @@ export interface Toolchain {
 }
 
 export class ToolchainError extends Error {
-  readonly code: 'NODE_NOT_FOUND' | 'NODE_TOO_OLD' | 'CLI_NOT_FOUND'
+  readonly code: 'NODE_NOT_FOUND' | 'NODE_TOO_OLD' | 'NODE_ABI_MISMATCH' | 'CLI_NOT_FOUND'
 
   constructor(code: ToolchainError['code'], message: string) {
     super(message)
@@ -98,9 +106,36 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
+/**
+ * `ok` = carregou; `fail` = este node nao serve para este projeto; `unknown` = o projeto nao
+ * tem o driver instalado, entao nao ha prova a fazer.
+ */
+export async function probeNativeDriver(
+  io: ToolchainIo,
+  nodePath: string,
+  repoRoot: string,
+): Promise<{ readonly result: 'ok' | 'fail' | 'unknown'; readonly detail?: string }> {
+  const driver = join(repoRoot, 'node_modules', NATIVE_DRIVER)
+  if (!(await io.exists(driver))) return { result: 'unknown' }
+  try {
+    // `require` do pacote nao basta: o driver carrega o binario nativo de forma preguicosa,
+    // na PRIMEIRA abertura de banco. A prova e abrir um banco em memoria.
+    const script = `const D = require(${JSON.stringify(driver)}); new D(':memory:').close()`
+    const probe = await io.exec(nodePath, ['-e', script], repoRoot)
+    if (probe.code === 0) return { result: 'ok' }
+    const detail =
+      (probe.stderr || probe.stdout).split('\n').find((l) => l.includes('NODE_MODULE_VERSION')) ??
+      probe.stderr.trim()
+    return { result: 'fail', detail: detail.slice(0, 200) }
+  } catch (error) {
+    return { result: 'fail', detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export async function resolveNode(
   io: ToolchainIo,
   settings: ToolchainSettings = {},
+  repoRoot?: string,
 ): Promise<NodeBinary> {
   const tried: string[] = []
   const candidates: string[] = []
@@ -110,6 +145,7 @@ export async function resolveNode(
   candidates.push('node')
   candidates.push(...(await nvmCandidates(io)))
   let tooOld: NodeBinary | undefined
+  let mismatched: { readonly node: NodeBinary; readonly detail?: string } | undefined
   for (const candidate of candidates) {
     const version = await versionOf(io, candidate)
     if (version === undefined) {
@@ -117,9 +153,32 @@ export async function resolveNode(
       continue
     }
     const major = majorOf(version)
-    if (major !== undefined && major >= MIN_NODE_MAJOR) return { path: candidate, version }
-    tried.push(`${candidate} (${version})`)
-    tooOld ??= { path: candidate, version }
+    if (major === undefined || major < MIN_NODE_MAJOR) {
+      tried.push(`${candidate} (${version})`)
+      tooOld ??= { path: candidate, version }
+      continue
+    }
+    if (repoRoot !== undefined) {
+      const probe = await probeNativeDriver(io, candidate, repoRoot)
+      if (probe.result === 'fail') {
+        tried.push(`${candidate} (${version}: nao carrega ${NATIVE_DRIVER} do projeto)`)
+        mismatched ??= {
+          node: { path: candidate, version },
+          ...(probe.detail === undefined ? {} : { detail: probe.detail }),
+        }
+        continue
+      }
+    }
+    return { path: candidate, version }
+  }
+  if (mismatched !== undefined) {
+    throw new ToolchainError(
+      'NODE_ABI_MISMATCH',
+      `nenhum node carrega o driver nativo do projeto (${NATIVE_DRIVER}); ${mismatched.node.path} (${mismatched.node.version}) ` +
+        `falhou${mismatched.detail === undefined ? '' : `: ${mismatched.detail}`}. ` +
+        'Use o mesmo node com que rodou `npm install` (ex.: `nvm use 22`, ou aponte-o em `agentic.nodePath`) ' +
+        `ou recompile o driver com esse node (\`npm rebuild ${NATIVE_DRIVER}\`). Tentei: ${tried.join(', ')}.`,
+    )
   }
   if (tooOld !== undefined) {
     throw new ToolchainError(
@@ -191,7 +250,7 @@ export async function resolveToolchain(
   settings: ToolchainSettings = {},
 ): Promise<Toolchain> {
   const cli = await resolveCli(io, repoRoot, settings)
-  const node = await resolveNode(io, settings)
+  const node = await resolveNode(io, settings, repoRoot)
   return {
     node,
     cli,

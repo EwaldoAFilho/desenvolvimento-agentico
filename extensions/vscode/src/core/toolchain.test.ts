@@ -91,6 +91,71 @@ describe('resolveNode', () => {
   })
 })
 
+describe('resolveNode com o driver nativo do projeto', () => {
+  const fs: FakeFs = {
+    files: new Set([
+      '/repo/node_modules/better-sqlite3',
+      '/home/u/.nvm/versions/node',
+      '/home/u/.nvm/versions/node/v22.23.1/bin/node',
+      '/home/u/.nvm/versions/node/v24.19.0/bin/node',
+    ]),
+    versions: {
+      node: 'v20.19.0',
+      '/home/u/.nvm/versions/node/v24.19.0/bin/node': 'v24.19.0',
+      '/home/u/.nvm/versions/node/v22.23.1/bin/node': 'v22.23.1',
+    },
+  }
+  /** `node -e require(driver)` falha no v24 (ABI 137) e passa no v22 (ABI 127). */
+  function ioComDriver(abiOk: (node: string) => boolean): ToolchainIo {
+    const base = io(fs)
+    return {
+      ...base,
+      exec: (command, args, cwd) => {
+        if (args[0] === '-e') {
+          return abiOk(command)
+            ? Promise.resolve({ code: 0, stdout: '', stderr: '' })
+            : Promise.resolve({
+                code: 1,
+                stdout: '',
+                stderr:
+                  'Error: The module was compiled against a different Node.js version using\nNODE_MODULE_VERSION 127. This version of Node.js requires\nNODE_MODULE_VERSION 137.',
+              })
+        }
+        return base.exec(command, args, cwd)
+      },
+    }
+  }
+
+  it('o node mais novo que NAO carrega o driver e pulado; o que carrega vence', async () => {
+    const node = await resolveNode(
+      ioComDriver((n) => n.includes('v22')),
+      {},
+      '/repo',
+    )
+    expect(node.path).toBe('/home/u/.nvm/versions/node/v22.23.1/bin/node')
+  })
+
+  it('nenhum node carrega o driver: NODE_ABI_MISMATCH com o caminho de volta', async () => {
+    const error = await resolveNode(
+      ioComDriver(() => false),
+      {},
+      '/repo',
+    ).catch((e: unknown) => e)
+    expect((error as ToolchainError).code).toBe('NODE_ABI_MISMATCH')
+    expect((error as Error).message).toContain('npm rebuild better-sqlite3')
+    expect((error as Error).message).toContain('NODE_MODULE_VERSION')
+  })
+
+  it('projeto sem o driver instalado nao tem o que provar: primeiro node >= 22 vence', async () => {
+    const semDriver: FakeFs = {
+      files: new Set([...fs.files].filter((f) => !f.includes('better-sqlite3'))),
+      versions: fs.versions,
+    }
+    const node = await resolveNode(io(semDriver), {}, '/repo')
+    expect(node.version).toBe('v24.19.0')
+  })
+})
+
 describe('resolveCli', () => {
   it('no monorepo, a CLI do proprio repositorio e um script para o node escolhido', async () => {
     const cli = await resolveCli(
