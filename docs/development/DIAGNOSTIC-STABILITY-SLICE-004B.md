@@ -174,6 +174,22 @@ toda a cadeia; (5) posse não sai com resíduo conhecido — `abandon` → `clos
 serviço; (6) contratos coerentes no caminho normal; (7) nenhum achado exige novo threat
 model; (8) nenhum teste enfraquecido, sem regressão nos caminhos felizes.
 
+### Ciclo 2 — veredito **FAIL**: 1 BLOCKER dentro do escopo, real, fechado; os três fechos do ciclo 1 confirmados
+
+O revisor confirmou, com arquivo:linha, os três fechos do ciclo 1 (resíduo sobrevive à falha
+de artefato; `pid=null` falha fechado; intenção por task) e a nota da sonda que lança. E
+encontrou um furo novo em C3:
+
+| Achado | Onde estava | Fecho | Prova |
+| --- | --- | --- | --- |
+| **BLOCKER (C3)** — o resíduo do `workspaceSetup` do mission gate usava a chave **fixa** `workspaceSetup do mission gate`; se o gate executa duas vezes (a escrita do desfecho falha uma vez, a trava cai, o tick seguinte repete o gate), o resíduo B **sobrescreve** A no `Map`; B morre, A continua vivo, `#reprobeResidual` prova só B e apaga a única entrada; `abandon` encontra o mapa vazio e a posse sai com A capaz de mutar o projeto. Variante concorrente: uma sonda antiga que resolve `true` apagava por chave, inclusive um resíduo novo que ocupou a mesma chave | `orchestrator.ts` `#rememberGroup`, `#startMissionGate`, `#reprobeResidual` | a **chave é a identidade do resíduo**: `… (pgid N)` — o mesmo pid é o mesmo grupo — ou `… (sem pid #seq)` com sequência própria; o setup do mission gate inclui o `attemptId` da execução; `#reprobeResidual` só apaga se `#residual.get(key) === effect` (a prova é do resíduo que sondou) | `cancellation-contract.test.ts`: mission gate cujo setup deixa grupo vivo, com a escrita de `gate.finished` ERROR falhando uma vez → dois setups, dois pids (A, B); `mortos.add(B)` → `close` rejeita citando `pgid A` e não `pgid B`; `mortos.add(A)` → `close` resolve |
+| MAJOR — **FORA**, pré-existente, já registrado em J: cancel durante gate/integração em `#jobs` | — | não corrigido | — |
+| NOTA — **FORA**, pré-existente, já registrado em J: sonda injetada que lança no setup | — | não corrigido | — |
+
+Este foi o **segundo e último** ciclo de correção da micro-slice. O que se segue é uma
+leitura de **confirmação**, sem correção autorizada: um BLOCKER/MAJOR novo dentro do escopo
+leva a `HUMAN_DECISION_REQUIRED`.
+
 ## I. Windows
 
 O contrato (`cancel()`/`exit()`/`AgentOutcome.groupTerminated`) é portável: em Windows não há

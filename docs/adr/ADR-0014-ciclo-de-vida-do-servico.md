@@ -220,7 +220,10 @@ anterior; só o que se prova morto sai da lista; "não lembro mais" não existe 
 sem pid (não deveria existir por construção) falha fechado: fica não provado — em gate e em
 setup. O resíduo é um **fato observado quando o comando rodou**: uma falha posterior no mesmo
 caminho (persistir a saída do gate) não o apaga. E uma sonda que **lança** não provou nada:
-`confirmProcessGroupGone` conta como "ainda existe".
+`confirmProcessGroupGone` conta como "ainda existe". Cada resíduo tem **identidade própria**
+— o pid do grupo, ou um número de sequência quando não há pid —, nunca o nome do lugar que
+o deixou: o setup do mission gate executado duas vezes guarda dois resíduos, e uma sonda só
+apaga o resíduo que ela mesma provou.
 
 **Cancelamento humano: intenção ≠ assentamento.** `cancel run` e `cancel task` só gravam
 `CANCELLED` com **todo** grupo relevante provado morto — as tentativas em voo **e** os resíduos
