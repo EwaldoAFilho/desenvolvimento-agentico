@@ -138,18 +138,41 @@ Depois: ver seção H.
 
 Ver seção H (três execuções completas de E2E, números exatos).
 
-## H. Números finais (cabeça da correção, Node v22.23.1)
+## H. Números finais (Node v22.23.1)
 
-| Gate | Resultado |
-| --- | --- |
-| suítes direcionadas (process, agent-runtime, providers, orchestrator, workspace, gates, server, cli) | **120 arquivos, 1351 testes, PASS** (antes da produção: 116/1320 PASS; vermelho medido: 20) |
-| `npm run build` | PASS |
-| `npm run verify` (lint + fronteiras + typecheck + test) | PASS — **191 arquivos, 2286 testes** |
-| `npm run test:e2e` ×3 | **3 de 3** PASS — 98 passaram, 4 pulados (`smoke-real`, sem CLI real) em cada execução; **D14 não recorreu**, nenhum órfão |
-| `npm run test:browser` | PASS — 10 de 10 (Chromium) |
+Cabeça da correção inicial (`b2978a5`) e cabeça depois do ciclo 1 da revisão:
 
-D14: três execuções completas consecutivas sem a intermitência de `control-plane-ownership`.
-Continua registrado como dívida da suíte (harness), não como defeito de produto.
+| Gate | Correção inicial | Depois do ciclo 1 |
+| --- | --- | --- |
+| suítes direcionadas (process, agent-runtime, providers, orchestrator, workspace, gates, server, cli) | 120 arquivos, 1351 testes, PASS (antes da produção: 116/1320; vermelho medido: 20) | **121 arquivos, 1357 testes, PASS** (vermelho do ciclo 1: 5) |
+| `npm run build` | PASS | PASS |
+| `npm run verify` (lint + fronteiras + typecheck + test) | PASS — 191 arquivos, 2286 testes | PASS — **192 arquivos, 2292 testes** |
+| `npm run test:e2e` ×3 | 3 de 3 PASS — 98 passaram, 4 pulados (`smoke-real`, sem CLI real) | **3 de 3** PASS — 98 + 4 pulados em cada execução |
+| `npm run test:browser` | PASS — 10 de 10 (Chromium) | PASS — 10 de 10 |
+
+D14: **seis** execuções completas consecutivas de E2E sem a intermitência de
+`control-plane-ownership`, nenhum órfão. Continua registrado como dívida da suíte (harness),
+não como defeito de produto.
+
+## K. Revisão independente (Codex, somente leitura)
+
+### Ciclo 1 — veredito **FAIL**: 1 BLOCKER e 2 MAJOR dentro do escopo, todos reais, todos fechados
+
+| Achado | Onde estava | Fecho | Prova |
+| --- | --- | --- | --- |
+| **BLOCKER (C3)** — o gate rodou deixando grupo vivo (pid conhecido) e a persistência do artefato de saída falhou: o `catch` de `runGate` devolvia só `failure` e os pids sumiam; `abandon` encontrava `#residual` vazio e a posse podia sair | `gate-run.ts` | o resíduo é calculado e guardado **fora** do `try`, e o `catch` o devolve junto da falha: é um fato observado quando o comando rodou, não algo que a persistência possa apagar | `gate-run.test.ts`: artefato que rejeita → `failure: POLICY_VIOLATION` **e** `residualGroups: [4242]` |
+| **MAJOR (C3)** — registro com `groupTerminated=false` e `pid=null` (permitido pelo tipo) era ignorado por `residualGroupsOf`, enquanto a ADR prometia falha fechada e o setup já fazia isso | `gate-run.ts` | `residualGroups: (number \| null)[]`; `null` vira resíduo não sondável (`#rememberGroup` com `settled: false`), nomeado `sem pid` | `gate-run.test.ts` (`[null]`); `cancellation-contract.test.ts`: `GateExecutor` falso sem pid → `close` recusa com `gate … (sem pid)` e continua recusando |
+| **MAJOR (C2)** — a intenção de `cancel task` só vivia em `Inflight.cancelRequested`; com resíduo de `workspaceSetup` (nunca houve tentativa) ou de tentativa já encerrada, o comando era recusado mas a intenção se perdia e, passado o cooldown, a task `READY` era despachada de novo | `orchestrator.ts` `cancelTask` | `#cancelIntent: Map<TaskId, TaskCommandInput>` — por task, independente de tentativa em voo; `#dispatchExecutor` não despacha task com intenção pendente; `#settlePendingCancels` (fase do tick) sonda os resíduos da task e, provada a morte, cumpre o cancelamento sem novo comando; o caminho com tentativa em voo continua no desfecho dela | `cancellation-contract.test.ts`: setup com grupo vivo → `cancelTask` recusado → passado o cooldown, dois ticks não geram novo `GUARD_FAILED` nem tentativa → `mata()` → um tick → `CANCELLED` com `task.cancelled` |
+| MAJOR — **FORA** do escopo, pré-existente: `cancel run`/`cancel task` durante um gate (de task ou de missão) em execução grava `CANCELLED` com o processo do gate vivo; o `close` seguinte ainda espera o job e retém a posse, mas o estado esconde o processo temporariamente | `orchestrator.ts` `cancel`/`cancelTask` | **não corrigido** (não é regressão da 004B; gates nunca foram cancelados por comando humano). Registrado em J | — |
+| NOTA — **FORA**: uma sonda injetada que **lança** virava rejeição órfã via `void #finish()` (runtime) e via `.then()` sem `catch` (setup) | `process/runtime.ts`, `workspace/setup.ts` | `confirmProcessGroupGone` (função **nova** da 004B) trata sonda que lança como "ainda existe" (falha fechado, sem rejeição). A cópia local do setup é código da 004, fora do escopo: registrada em J | `cancel-contract.test.ts`: sonda que lança → `false`, zero órfãs |
+
+Respostas do revisor às oito perguntas obrigatórias (resumo): (1) nenhum `unhandledRejection`
+com as dependências reais; (2) `CANCELLED` não esconde grupo vivo com handle ou resíduo
+conhecido — as duas exceções eram os achados 3 e 4; (3) resíduos que entram no mapa
+sobrevivem aos retries — os achados 1 e 2 impediam alguns de entrar; (4) B1-final fechado em
+toda a cadeia; (5) posse não sai com resíduo conhecido — `abandon` → `close` → `shutdown` →
+serviço; (6) contratos coerentes no caminho normal; (7) nenhum achado exige novo threat
+model; (8) nenhum teste enfraquecido, sem regressão nos caminhos felizes.
 
 ## I. Windows
 
@@ -163,6 +186,7 @@ não pôde ser testado neste ambiente; não há PASS inventado — fica registra
 | | Descrição |
 | --- | --- |
 | **pid reaproveitado** | a re-sonda por pid pode ler "vivo" para um grupo novo com o mesmo id; conservador (retém a posse até o próximo `stop`), nunca o inverso |
-| **cancel task durante gate/integração** | sem handle de agente não há grupo a provar no comando; um gate em voo da task cancelada continua até o fim (comportamento anterior, inalterado) |
+| **cancel run / cancel task durante gate ou integração** | sem handle de agente não há grupo a provar no comando; um gate (de task ou de missão) em voo continua até o fim e o estado `CANCELLED` o esconde temporariamente — o `close` ainda espera o job e retém a posse (comportamento anterior, inalterado; classificado MAJOR/FORA pelo revisor) |
+| **sonda que lança no setup** | `workspace/setup.ts` sonda o grupo com `.then()` sem `catch`: uma `probeGroup` injetada que lance viraria rejeição órfã. A sonda real não lança; código da 004, fora do escopo (NOTA do revisor). A função nova `confirmProcessGroupGone` falha fechado |
 | **intenção após `SIGKILL`** | um `cancel run` recusado é intenção **em memória** (`#closed`); se o processo cair, o próximo dono reconcilia a tentativa como `INTERRUPTED` e o run segue `RUNNING`. Persistir a intenção exigiria estado novo — fora desta fatia |
 | **D6 parcial, D13, D14** | inalterados (ver DIAGNOSTIC-STABILITY-SLICE-004) |

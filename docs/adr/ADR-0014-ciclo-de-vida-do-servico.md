@@ -217,7 +217,10 @@ morto, a **sonda** que o prova: o `cancel()` do handle (tentativa, revisor) ou o
 grupo (comando de gate, `workspaceSetup` — `GateCommandRecord.pid`,
 `WorkspaceError.residualGroup`). Cada `abandon` **sonda de novo** o que sobrou da tentativa
 anterior; só o que se prova morto sai da lista; "não lembro mais" não existe (C3). Um resíduo
-sem pid (não deveria existir por construção) falha fechado: fica não provado.
+sem pid (não deveria existir por construção) falha fechado: fica não provado — em gate e em
+setup. O resíduo é um **fato observado quando o comando rodou**: uma falha posterior no mesmo
+caminho (persistir a saída do gate) não o apaga. E uma sonda que **lança** não provou nada:
+`confirmProcessGroupGone` conta como "ainda existe".
 
 **Cancelamento humano: intenção ≠ assentamento.** `cancel run` e `cancel task` só gravam
 `CANCELLED` com **todo** grupo relevante provado morto — as tentativas em voo **e** os resíduos
@@ -225,9 +228,11 @@ já conhecidos (do run inteiro; da task, no `cancel task`). Senão o comando é 
 `CancellationUnsettledError` (`CANCELLATION_UNSETTLED`, HTTP 409): run e tasks ficam como
 estavam, nenhum evento de cancelamento é gravado, o resíduo fica com o encerramento, e o
 **mesmo comando pode ser repetido** — ele sonda de novo. A intenção não se perde: no `cancel
-run`, o orquestrador já parou de despachar (`#closed`); no `cancel task`, a tentativa guarda o
-pedido e o próximo desfecho dela **não** vira gate, revisão nem retry — ele sonda de novo e,
-provada a morte, cumpre o cancelamento (C2).
+run`, o orquestrador já parou de despachar (`#closed`); no `cancel task`, a intenção fica
+guardada **por task**, com ou sem tentativa em voo (um resíduo de `workspaceSetup` ou de uma
+tentativa já encerrada também a segura): a task não é despachada de novo, nenhuma mensagem
+dela avança, e cada tick e cada desfecho sondam de novo — provada a morte, o cancelamento é
+cumprido sem novo comando (C2).
 
 **Fronteira.** `orchestrator` passa a poder importar `process` — uma função, `confirmProcessGroupGone`
 — porque a autoridade que decide o encerramento precisa de um fato de sistema operacional
