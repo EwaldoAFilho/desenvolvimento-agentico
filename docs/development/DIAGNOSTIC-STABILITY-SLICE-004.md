@@ -153,6 +153,36 @@ fechado:
 | **B3** — tratadores `once`: segundo Ctrl+C matava o processo no drain | hub de sinais permanente em `deps.ts`: primeiro sinal resolve a espera; sinal durante o encerramento é absorvido e registrado; sinal pendente dispara a próxima espera na hora | `deps.test.ts` (tratador permanece; sinal absorvido dispara o retry; sem pendente, espera sinal novo); `foreground-signal.test.ts` B3 (CLI real, dois SIGINT, setup morto, posse livre, saída graciosa) |
 | **B4** — caminho excepcional de `mission start` descartava a falha do encerramento | o mesmo laço de nova tentativa cobre o caminho excepcional; o erro original só sobe depois de o projeto ser devolvido | `mission-start-serve.test.ts` B4: `startRun` quebra, `close` falha uma vez, espera o segundo sinal, encerra, e só então rejeita com o erro original |
 
+### Revisão de confirmação (quarta leitura) — **FAIL**, sem quarto ciclo
+
+Gates na cabeça `22dfad6`: build PASS; verify PASS (187 arquivos, 2255 testes); E2E PASS em
+**4 de 4** execuções completas consecutivas (98 passaram, 4 pulados cada; D14 não recorreu,
+nenhum órfão); browser PASS (10). Suítes direcionadas: 19 arquivos, 172 testes.
+
+A revisão de confirmação, classificada como o operador pediu:
+
+| Classe | Achado | Avaliação |
+| --- | --- | --- |
+| A | **B2, B3, B4 fechados** (com arquivo:linha e teste citados pelo revisor) | confirmado |
+| A | **B1 não fechado de ponta a ponta**: `groupTerminated=false` na saída **natural** de um agente é descartado pelo adapter (o contrato do domínio não carrega o campo; `local-cli` só traduz código, timeout e cancelamento); e a prova de orquestração usa um handle falso, não cobre gate, setup nem saída natural | legítimo; caso estreito (descendente sobrevive a SIGKILL além do teto após saída normal), mas o contrato exige |
+| C1 | **BLOCKER novo** — o listener de abort faz `void this.cancel(...)` sem `catch`; com `cancel()` agora rejeitando quando o grupo sobrevive, vira `unhandledRejection` — em Node ≥ 22 pode terminar o processo e soltar a posse pelo SO com o grupo vivo | legítimo e **regressão** introduzida por este ciclo |
+| C2 | **BLOCKER novo** — `cancel run` e `cancel task` (comandos humanos) mantêm `.catch(() => undefined)`: grupo vivo, estado oficial `CANCELLED`, worktree liberada para reutilização | legítimo |
+| C3 | **BLOCKER novo** — `#residual.clear()` no início de cada `abandon()` apaga resíduos de gate/setup sem guardar pgid nem função de nova sonda; o segundo Stop pode devolver a posse sem prova de morte | legítimo |
+| D | D6 pós-crash, D13, D14 | não se tornaram alcançáveis automaticamente; não bloqueiam |
+| E | Windows e `setsid`: limites declarados. A prova E2E de B3 usa o `waitForShutdown` injetado do harness (`cli-process.ts`), não o hub de produção, e o segundo sinal é enviado a 150 ms sem prova de que o drain estava ativo | lacuna de evidência, não defeito |
+
+Nada foi corrigido depois desta leitura: a autorização era de UM ciclo. Duas saídas
+possíveis, ambas pequenas, para a decisão humana:
+
+1. **Ciclo restrito a C1–C3 e ao ramo de saída natural de B1.** `catch` no listener de abort
+   (registrando o resíduo); propagar `ProcessGroupAliveError` nos cancelamentos humanos (a
+   task não vira `CANCELLED` sem prova de morte); guardar, por resíduo, o pgid e a sonda para
+   o `abandon` seguinte revalidar em vez de apagar; levar `groupTerminated` pelo adapter até
+   o orquestrador (campo no contrato de `LocalAgentProcess`/`AgentOutcome`) e registrá-lo
+   como resíduo. Estimativa: uma sessão curta, mais uma leitura de confirmação.
+2. **Reverter `22dfad6`** (a cabeça volta a `1973691`): sem as regressões C1–C3, com os
+   quatro blockers B1–B4 em aberto como registrados acima.
+
 Tabela original da revisão, mantida para registro:
 
 | Achado | Onde | O que faltaria | Tamanho |
