@@ -10,12 +10,17 @@ import { GATE_ALWAYS_PASS, gatesYaml, missionYaml, projectYaml } from './__fixtu
 import { type ControlPlane, createControlPlane } from './control-plane.js'
 
 /**
- * I14, o lado que faltava: mutar NAO pode acontecer num plane que nao PROVOU posse.
+ * I14 pela FACHADA: mutar nao pode acontecer num plane que nao PROVOU posse.
  *
- * O guard anterior cobrava a posse so quando ela existia (`lease !== undefined && !held`).
- * Com isso, um plane construido sem lease — `mission approve` pelo caminho local, um
- * harness, uma composicao esquecida — mutava o `state.db` de um projeto que pertence a
- * OUTRO processo. Ausencia de posse nao e permissao: e recusa.
+ * Este arquivo cobre a camada de cima — a recusa que o usuario LE. A camada de baixo, onde a
+ * conexao readonly torna a escrita impossivel mesmo por referencia capturada ou reflexao,
+ * vive em `ownership-connection.test.ts`. As duas provas sao diferentes de proposito:
+ *
+ * - a persistencia garante que NADA persiste sem posse (a invariante);
+ * - a fachada garante que quem tenta recebe uma FRASE que explica o que fazer, em vez de um
+ *   `SQLITE_READONLY` vazando do driver (o produto).
+ *
+ * Guardar so a segunda foi o erro da 003B: a mensagem certa nao e a barreira.
  */
 
 const MISSION = missionYaml({ id: 'DA-OWN-001', tasks: [{ id: 'T01' }], defaultGate: 'unit' })
@@ -33,26 +38,40 @@ interface Cenario {
 
 const abertos: Cenario[] = []
 
-async function cenario(options: { readonly comPosse: boolean }): Promise<Cenario> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'agentic-posse-')))
-  const baseDir = join(root, '.agentic')
+function arquivos(): { project: never; gatesFile: never } {
   const project = parseProjectFile(PROJECT)
   if (!project.ok) throw new Error('fixture: project.yaml invalido')
   const gates = parseGatesFile(GATES)
   if (!gates.ok) throw new Error('fixture: gates.yaml invalido')
+  return { project: project.value as never, gatesFile: gates.value as never }
+}
 
-  let lease: ControlPlaneLease | undefined
-  if (options.comPosse) {
-    const outcome = acquireControlPlaneOwnership({ baseDir })
-    if (!outcome.ok) throw new Error(`fixture: posse recusada (${outcome.detail})`)
-    lease = outcome.lease
-  }
+function possuir(root: string): ControlPlaneLease {
+  const outcome = acquireControlPlaneOwnership({ baseDir: join(root, '.agentic') })
+  if (!outcome.ok) throw new Error(`fixture: posse recusada (${outcome.detail})`)
+  return outcome.lease
+}
+
+/**
+ * Um plane de LEITURA precisa de banco: leitura nao inicializa projeto (Fase 10). O dono
+ * temporario cria o `state.db` e devolve o projeto, que e exatamente o que `mission approve`
+ * faz na producao.
+ */
+async function inicializar(root: string): Promise<void> {
+  const lease = possuir(root)
+  const plane = createControlPlane({ ...arquivos(), repoRoot: root, lease })
+  await plane.close()
+  lease.release()
+}
+
+async function cenario(options: { readonly comPosse: boolean }): Promise<Cenario> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'agentic-posse-')))
+  if (!options.comPosse) await inicializar(root)
+  const lease = options.comPosse ? possuir(root) : undefined
 
   const plane = createControlPlane({
-    project: project.value,
-    gatesFile: gates.value,
+    ...arquivos(),
     repoRoot: root,
-    baseDir,
     ...(lease === undefined ? {} : { lease }),
   })
   const cenarioAberto: Cenario = {
@@ -86,6 +105,13 @@ afterEach(async () => {
 })
 
 describe('plane sem posse declarada nao muta (I14)', () => {
+  it('declara-se de LEITURA: a semantica nao e implicita', async () => {
+    const { plane } = await cenario({ comPosse: false })
+    expect(plane.access).toBe('readonly')
+    expect(plane.persistence.mode).toBe('readonly')
+    expect(plane.instanceId).toBeUndefined()
+  })
+
   it('createRun e recusado', async () => {
     const { plane } = await cenario({ comPosse: false })
     const { spec, compiled } = missaoCompilada()
@@ -118,77 +144,34 @@ describe('plane sem posse declarada nao muta (I14)', () => {
     await expect(plane.adoptRecoverableRuns()).rejects.toThrow(/sem posse do projeto/i)
   })
 
-  it('a persistencia publica tambem nao escreve: nao ha atalho por fora da fachada', async () => {
-    const { plane } = await cenario({ comPosse: false })
-    const { spec, compiled } = missaoCompilada()
-
-    // `plane.createRun` recusar nao basta se `plane.persistence.runs.createRun` escrever: o
-    // objeto e publico, e a invariante nao pode depender de ninguem lembrar de nao usa-lo.
-    await expect(
-      plane.persistence.runs.createRun({ id: RUN_INEXISTENTE } as never, []),
-    ).rejects.toThrow(/sem posse do projeto/i)
-    await expect(plane.persistence.runs.withTransaction(async () => undefined)).rejects.toThrow(
-      /sem posse do projeto/i,
-    )
-    // `commit` e `withRecoveryTransaction` escrevem tanto quanto `withTransaction`. Uma
-    // lista de BLOQUEIOS os teria deixado passar por omissao — e e exatamente por isso que
-    // a lista e de LEITURAS: o default e recusa.
-    await expect(plane.persistence.runs.commit(async () => undefined)).rejects.toThrow(
-      /sem posse do projeto/i,
-    )
-    await expect(
-      plane.persistence.runs.withRecoveryTransaction(async () => undefined),
-    ).rejects.toThrow(/sem posse do projeto/i)
-    await expect(
-      plane.persistence.events.append({ runId: RUN_INEXISTENTE } as never),
-    ).rejects.toThrow(/sem posse do projeto/i)
-    await expect(
-      plane.persistence.artifacts.write({ runId: RUN_INEXISTENTE } as never),
-    ).rejects.toThrow(/sem posse do projeto/i)
-
-    // E a LEITURA continua inteira: e ela que sustenta status, report e inspect.
-    expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
-    expect(await plane.persistence.runs.loadRun(RUN_INEXISTENTE)).toBeUndefined()
-    expect(await plane.persistence.events.list(RUN_INEXISTENTE)).toEqual([])
-    expect(await plane.persistence.runs.listRuns()).toEqual([])
-    expect(await plane.persistence.runs.loadTaskRuns(RUN_INEXISTENTE)).toEqual([])
-    expect(await plane.persistence.runs.loadAttempts(RUN_INEXISTENTE)).toEqual([])
-    expect(plane.persistence.artifacts.list(RUN_INEXISTENTE)).toEqual([])
-    expect(plane.persistence.events.latestSeq()).toBe(0)
-    void spec
-    void compiled
-  })
-
-  it('a conexao crua nao passa: nao ha porta dos fundos para SQL sem posse', async () => {
-    const { plane } = await cenario({ comPosse: false })
-
-    // Bloquear METODOS e deixar o handle aberto nao e somente-leitura: e uma afirmacao
-    // falsa. O mesmo handle sai por cinco portas, e todas precisam estar fechadas.
-    expect(() => plane.persistence.database).toThrow(/sem posse do projeto/i)
-    expect(() => plane.persistence.runs.db).toThrow(/sem posse do projeto/i)
-    expect(() => plane.persistence.events.db).toThrow(/sem posse do projeto/i)
-    expect(() => plane.persistence.artifacts.db).toThrow(/sem posse do projeto/i)
-    expect(() => plane.persistence.queries.db).toThrow(/sem posse do projeto/i)
-
-    // E as CONSULTAS continuam respondendo: e por elas que status e report existem.
-    expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
-  })
-
   it('a recusa acontece ANTES de escrever: nenhum run entra no banco', async () => {
     const { plane } = await cenario({ comPosse: false })
     const { spec, compiled } = missaoCompilada()
     await plane.createRun({ mission: spec, compiled, missionText: MISSION }).catch(() => undefined)
     expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
   })
+
+  it('a LEITURA continua inteira: e ela que sustenta status, report e inspect', async () => {
+    const { plane } = await cenario({ comPosse: false })
+    expect(plane.persistence.queries.listRuns({ limit: 10 })).toEqual([])
+    expect(await plane.persistence.runs.loadRun(RUN_INEXISTENTE)).toBeUndefined()
+    expect(await plane.persistence.events.list(RUN_INEXISTENTE)).toEqual([])
+    expect(plane.persistence.artifacts.list(RUN_INEXISTENTE)).toEqual([])
+  })
 })
 
 describe('plane COM posse continua funcionando', () => {
-  it('a persistencia volta a escrever quando ha posse', async () => {
+  it('declara-se dono, e a conexao e mutavel', async () => {
+    const { plane, lease } = await cenario({ comPosse: true })
+    expect(plane.access).toBe('owned')
+    expect(plane.persistence.mode).toBe('readwrite')
+    expect(plane.instanceId).toBe(lease?.instanceId)
+  })
+
+  it('a persistencia escreve quando ha posse', async () => {
     const { plane } = await cenario({ comPosse: true })
     const { spec, compiled } = missaoCompilada()
     const run = await plane.createRun({ mission: spec, compiled, missionText: MISSION })
-    // Pela persistencia publica, com posse, a escrita passa: o espelho some junto com a
-    // duvida sobre quem manda no projeto.
     await plane.persistence.events.append({
       runId: run.id,
       ts: new Date('2026-01-01T00:00:00.000Z'),
@@ -208,54 +191,20 @@ describe('plane COM posse continua funcionando', () => {
     expect(aprovado.status).toBe('APPROVED')
   })
 
-  it('posse SOLTA revoga tambem a persistencia, nao so a fachada', async () => {
-    const aberto = await cenario({ comPosse: true })
-    const { spec, compiled } = missaoCompilada()
-    const run = await aberto.plane.createRun({ mission: spec, compiled, missionText: MISSION })
-
-    // Ate aqui e dono: escreve pela persistencia publica.
-    await aberto.plane.persistence.events.append({
-      runId: run.id,
-      ts: new Date('2026-01-01T00:00:00.000Z'),
-      type: 'run.created',
-      actor: { kind: 'human', id: 'teste' },
-      payload: {},
-    } as never)
-
-    // Devolveu o projeto. Dali em diante OUTRO processo pode ser o dono legitimo — e este
-    // plane nao pode continuar escrevendo o mesmo banco so porque ja teve posse um dia.
-    aberto.lease?.release()
-
-    await expect(
-      aberto.plane.persistence.events.append({ runId: run.id } as never),
-    ).rejects.toThrow(/sem posse do projeto/i)
-    await expect(
-      aberto.plane.persistence.runs.withTransaction(async () => undefined),
-    ).rejects.toThrow(/sem posse do projeto/i)
-    expect(() => aberto.plane.persistence.database).toThrow(/sem posse do projeto/i)
-    // Leitura continua: perder a posse tira o direito de escrever, nao o de olhar.
-    expect(await aberto.plane.persistence.runs.loadRun(run.id)).toBeDefined()
-  })
-
   it('lease de OUTRO projeto nao autoriza este: o plane nem chega a abrir', async () => {
     const dono = await cenario({ comPosse: true })
-    const alheio = await cenario({ comPosse: true })
-    const project = parseProjectFile(PROJECT)
-    if (!project.ok) throw new Error('fixture: project.yaml invalido')
-    const gates = parseGatesFile(GATES)
-    if (!gates.ok) throw new Error('fixture: gates.yaml invalido')
+    const alheio = await realpath(await mkdtemp(join(tmpdir(), 'agentic-alheio-')))
 
     // Um lease legitimo — do projeto ERRADO. "Ter algum lease" nao prova posse deste
     // projeto, e sem esta conferencia o dono legitimo ganharia um segundo escritor.
     expect(() =>
       createControlPlane({
-        project: project.value,
-        gatesFile: gates.value,
-        repoRoot: alheio.root,
-        baseDir: join(alheio.root, '.agentic'),
+        ...arquivos(),
+        repoRoot: alheio,
         lease: dono.lease as never,
       }),
     ).toThrow(/nao autoriza operar/i)
+    await rm(alheio, { recursive: true, force: true })
   })
 
   it('posse SOLTA no meio do caminho volta a recusar', async () => {
@@ -270,5 +219,34 @@ describe('plane COM posse continua funcionando', () => {
     await expect(
       cenarioAberto.plane.approveMission({ runId: run.id, actor: 'humano@teste' }),
     ).rejects.toThrow(/sem posse do projeto/i)
+  })
+
+  it('posse SOLTA fecha a conexao: nao ha plane meio-vivo sobre projeto alheio', async () => {
+    const aberto = await cenario({ comPosse: true })
+    const { spec, compiled } = missaoCompilada()
+    await aberto.plane.createRun({ mission: spec, compiled, missionText: MISSION })
+
+    aberto.lease?.release()
+
+    /**
+     * Depois do `release`, este plane nao le NEM escreve — e a leitura parar tambem e
+     * deliberado, nao um efeito colateral aceito de mau grado.
+     *
+     * A 003B mantinha a leitura viva ("perder a posse tira o direito de escrever, nao o de
+     * olhar"), e para isso a conexao mutavel tinha de continuar aberta: era exatamente ela
+     * que a funcao capturada reencontrava. Ou a conexao fecha junto com a posse, ou a
+     * capacidade sobrevive a ela; nao da para ter as duas.
+     *
+     * O custo e nenhum na producao, porque a ordem ja e essa: `withPlane` fecha o plane no
+     * `finally` ANTES do `release`, e `shutdownControlPlane` para os efeitos antes de
+     * devolver o projeto. Quem quiser ler depois abre um plane de leitura — que e mais
+     * honesto, porque a essa altura o dono do banco pode ser outro processo.
+     */
+    expect(() => aberto.plane.persistence.runs.loadRun(RUN_INEXISTENTE)).toThrow(
+      /connection is not open/i,
+    )
+    expect(() => aberto.plane.persistence.queries.listRuns({ limit: 1 })).toThrow(
+      /connection is not open/i,
+    )
   })
 })

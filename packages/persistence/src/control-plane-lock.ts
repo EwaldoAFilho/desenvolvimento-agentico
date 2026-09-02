@@ -58,6 +58,23 @@ export interface ControlPlaneLease {
   readonly ownedDir: string
   readonly lockPath: string
   readonly held: boolean
+  /**
+   * Amarra o tempo de vida de um ESCRITOR ao tempo de vida da posse.
+   *
+   * Este e o mecanismo que fecha o blocker mais duro da 003B: uma funcao capturada enquanto
+   * havia posse continuava escrevendo depois do `release`. Toda tentativa de resolver isso
+   * ESCONDENDO a funcao — Proxy, allowlist, trap de propriedade — perde por construcao,
+   * porque o chamador ja tem a referencia na mao; nao ha o que esconder. O que funciona e
+   * tirar o BANCO de baixo dela.
+   *
+   * Quem abre uma conexao mutavel sobre este projeto registra aqui como fecha-la. `release`
+   * chama os ganchos ANTES de soltar o lock do arquivo, entao no instante em que outro
+   * processo pode virar dono, o escritor deste ja esta fechado — nunca dois escritores.
+   *
+   * Devolve o cancelamento, para um plane que fecha sozinho nao deixar gancho acumulado
+   * numa posse que atravessa varios planes (o `reopen` do harness e o caso real).
+   */
+  onRelease(hook: () => void): () => void
   /** Idempotente. Falhar aqui nao tranca o projeto: o SO solta o lock no fim do processo. */
   release(): void
 }
@@ -225,6 +242,7 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
   }
 
   let held = true
+  const ganchos = new Set<() => void>()
   return {
     ok: true,
     lease: {
@@ -234,6 +252,18 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
       get held(): boolean {
         return held
       },
+      onRelease: (hook: () => void): (() => void) => {
+        // Registrar depois de soltar seria prometer uma revogacao que nunca vem: o gancho
+        // roda na hora, e o escritor que chegou tarde morre imediatamente.
+        if (!held) {
+          hook()
+          return () => undefined
+        }
+        ganchos.add(hook)
+        return () => {
+          ganchos.delete(hook)
+        }
+      },
       /**
        * `held` e `db.open` sao coisas diferentes, e confundi-las custa caro.
        *
@@ -241,9 +271,27 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
        * control plane nao pode agir, tenha o arquivo sido solto ou nao. Ja a CONEXAO so
        * para de ser tentada quando fecha de verdade — se `close` falhar, a proxima chamada
        * tenta outra vez em vez de virar no-op sobre um lock ainda segurado.
+       *
+       * A ORDEM dos tres passos e a garantia, e nao ha outra que sirva:
+       *
+       * 1. `held = false` primeiro, para nenhuma chamada nova comecar durante a saida.
+       * 2. Fechar os escritores, para que a capacidade morra JUNTO com a posse — e nao
+       *    depois dela, que e a janela onde o dono seguinte encontra dois escritores.
+       * 3. Soltar o lock do arquivo por ultimo, quando ja nao ha o que escrever.
+       *
+       * Um gancho que falha nao pode impedir os outros nem segurar o lock: o que ele
+       * protege e o banco DESTE processo, e o processo inteiro esta indo embora.
        */
       release: (): void => {
         held = false
+        for (const hook of ganchos) {
+          try {
+            hook()
+          } catch {
+            /* fechar e devolver recurso; falhar aqui nao pode trancar o projeto */
+          }
+        }
+        ganchos.clear()
         if (!db.open) return
         // Fechar ja desfaz a transacao; o ROLLBACK explicito so torna a intencao legivel.
         try {

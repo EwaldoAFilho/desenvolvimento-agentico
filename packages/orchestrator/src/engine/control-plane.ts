@@ -21,7 +21,13 @@ import {
   providerId as toProviderId,
 } from '@agentic/domain'
 import { type GateProfiles, GateRunner, loadGateProfiles } from '@agentic/gates'
-import { canonicalIfPresent, openPersistence, type Persistence } from '@agentic/persistence'
+import {
+  canonicalIfPresent,
+  type DatabaseMode,
+  openPersistence,
+  type Persistence,
+  runtimeDirOf,
+} from '@agentic/persistence'
 import {
   createProviderRegistryFromProject,
   type MockScript,
@@ -114,15 +120,30 @@ export interface OwnershipLease {
   /** Diretorio de estado que este lease protege — o `.agentic` canonico do projeto. */
   readonly ownedDir: string
   readonly held: boolean
+  /**
+   * Como ESTE lease revoga um escritor que ele autorizou. Obrigatorio de proposito.
+   *
+   * Um lease sem revogacao nao pode autorizar escrita: seria prometer que a capacidade morre
+   * com a posse sem ter como cumprir, e foi assim que a funcao capturada antes do `release`
+   * continuou escrevendo. Exigi-lo no TIPO faz o compilador cobrar de todo produtor de lease
+   * — inclusive de um dublê de teste — em vez de deixar a garantia depender de lembrar.
+   */
+  onRelease(hook: () => void): () => void
 }
 
 export interface ControlPlaneConfig {
   readonly project: ProjectFile
   readonly gatesFile: GatesFile
-  /** Raiz do repositorio alvo. Default: `project.project.repoRoot`. */
+  /**
+   * Raiz do repositorio alvo. Default: `project.project.repoRoot`.
+   *
+   * E a UNICA entrada de identidade desta composicao. NAO existe `baseDir` nem
+   * `databasePath`: `<repoRoot>/.agentic` e derivado por `runtimeDirOf`, a mesma conta de
+   * `projectIdentityOf`. Enquanto o chamador podia escolher o diretorio de estado, ele podia
+   * escolher um SEGUNDO estado para o mesmo projeto — e nenhum lock protege um caminho que
+   * ninguem previu (I14).
+   */
   readonly repoRoot?: string
-  readonly baseDir?: string
-  readonly databasePath?: string
   readonly clock?: Clock
   readonly ids?: IdGenerator
   readonly registry?: ProviderRegistry
@@ -136,18 +157,27 @@ export interface ControlPlaneConfig {
   readonly agentLog?: AgentLogConfig
   readonly safetyIntervalMs?: number
   /**
-   * Posse do projeto (I14). Presente = este plane pode MUTAR, enquanto for o dono.
+   * Posse do projeto (I14). E ela que escolhe o MODO DA CONEXAO, e o modo e a fronteira.
    *
-   * Ausente = plane de LEITURA. Ele abre o banco e responde consultas, mas `createRun`,
-   * `approveMission`, `startRun`, `open` e `adoptRecoverableRuns` recusam — a ausencia e
-   * recusa, nunca permissao. Quem precisa mutar (`startServer`, `mission start`,
-   * `mission approve`) disputa a posse ANTES e passa o lease aqui.
+   * Com lease vivo deste projeto: conexao `readwrite`, e o plane e o dono. Sem lease, ou com
+   * um lease ja solto: conexao `readonly`, aberta pelo SQLite em modo que o proprio driver
+   * recusa escrever. Nao ha terceira possibilidade — `createControlPlane` nunca produz um
+   * plane mutavel sem posse.
+   *
+   * A diferenca em relacao a 003B nao e de rigor, e de LUGAR. Antes a recusa vinha de um
+   * espelho de JavaScript, e quem tivesse a referencia por baixo dele escrevia. Agora nao ha
+   * nada por baixo: a conexao nao sabe escrever.
    */
   readonly lease?: OwnershipLease
 }
 
 export interface ControlPlane {
   readonly persistence: Persistence
+  /**
+   * O que este plane e: `owned` escreve, `readonly` so le. Nao ha semantica implicita —
+   * quem recebe um plane pronto pode PERGUNTAR em vez de deduzir da presenca de um lease.
+   */
+  readonly access: ControlPlaneAccess
   /** Identidade do dono, quando este plane tem posse. Liga a posse a descoberta. */
   readonly instanceId?: string
   readonly registry: ProviderRegistry
@@ -176,108 +206,14 @@ export interface ControlPlane {
 }
 
 /**
- * O que uma leitura pode chamar em cada store da persistencia.
+ * O que este plane e — declarado, nunca deduzido.
  *
- * Recusar so na fachada (`plane.createRun`) nao bastava: `plane.persistence` e publico, e
- * `plane.persistence.runs.createRun(...)` chegava ao banco sem passar por guarda nenhuma.
- * Nenhum handler de producao fazia isso hoje — e "hoje" e exatamente a palavra de que uma
- * invariante nao pode depender.
- *
- * A lista e de LEITURAS, nao de escritas, e a inversao e o ponto. Uma lista de bloqueios
- * envelhece em silencio — `runs.commit` e `runs.withRecoveryTransaction` escrevem tanto
- * quanto `withTransaction` e passariam por omissao. Com allowlist, o default e RECUSA, a
- * mesma regra que 003B aplicou a posse; uma leitura nova esquecida falha alto, no teste.
+ * A Fase 15 da missao pede isto por escrito: `createControlPlane` constroi um plane
+ * `owned` (posse provada, conexao mutavel) ou um plane `readonly` (consulta, conexao que o
+ * SQLite recusa escrever). O terceiro caso — mutavel sem posse — nao existe como valor,
+ * porque nao existe como estado alcancavel.
  */
-const LEITURAS_DA_PERSISTENCIA = {
-  runs: ['loadRun', 'listRuns', 'loadTaskRuns', 'loadAttempts', 'loadAttempt', 'listLocks'],
-  events: ['list', 'listSync', 'latestSeq', 'count', 'subscribe', 'close'],
-  artifacts: [
-    'read',
-    'readText',
-    'readById',
-    'get',
-    'getByPath',
-    'list',
-    'toRecord',
-    'runDirectory',
-    'resolvePath',
-  ],
-} as const satisfies Readonly<Record<string, readonly string[]>>
-
-/**
- * As portas que entregam a CONEXAO crua, por onde qualquer SQL passa sem allowlist nenhuma.
- *
- * Bloquear so metodos deixava `plane.persistence.database.db.prepare('UPDATE runs ...')`
- * — e o mesmo handle sai por `runs.db`, `events.db`, `artifacts.db` e `queries.db`. Um
- * espelho que fecha os metodos e deixa a porta dos fundos aberta nao e somente-leitura: e
- * uma afirmacao falsa, que e pior que a ausencia dela.
- */
-const PORTAS_DA_CONEXAO = ['db'] as const
-const PORTA_DA_PERSISTENCIA = ['database'] as const
-
-interface RegrasDeAcesso {
-  /** Metodos permitidos sem posse. `undefined` = todos os metodos deste alvo sao leitura. */
-  readonly leituras?: readonly string[]
-  /** Propriedades que entregam a conexao crua: exigem posse, sempre. */
-  readonly handles: readonly string[]
-}
-
-/**
- * Espelho que segue a posse EM TEMPO DE CHAMADA.
- *
- * Decidir na construcao era o defeito: o plane escolhia "persistencia inteira" porque havia
- * lease, e continuava com ela depois de `lease.release()` — enquanto outro processo, ja dono
- * legitimo, escrevia o mesmo banco. A fachada consultava `held` a cada chamada; a
- * persistencia publica, nao. Agora as duas perguntam a mesma coisa, na mesma hora.
- *
- * `Proxy` em vez de copia porque os stores sao classes com campo privado (`#handle`): um
- * objeto derivado por `Object.create` perderia o `this` e quebraria na primeira leitura.
- */
-function comPosse<T extends object>(
-  alvo: T,
-  regras: RegrasDeAcesso,
-  podeEscrever: () => boolean,
-): T {
-  const recusa = (acao: string): CommandRefusedError =>
-    new CommandRefusedError(`control plane sem posse do projeto: ${acao} recusado (I14)`)
-  return new Proxy(alvo, {
-    get(target, prop, _receiver): unknown {
-      if (typeof prop === 'string' && regras.handles.includes(prop)) {
-        // Lancado, nao rejeitado: `database` e `db` sao propriedades, e devolver uma promessa
-        // aqui seria devolver um objeto que o chamador usaria como se fosse a conexao.
-        if (!podeEscrever()) throw recusa(`acesso a conexao por \`${prop}\``)
-        return Reflect.get(target, prop, target)
-      }
-      const value: unknown = Reflect.get(target, prop, target)
-      if (typeof value !== 'function') return value
-      const leitura =
-        regras.leituras === undefined ||
-        (typeof prop === 'string' && regras.leituras.includes(prop))
-      if (leitura || podeEscrever()) return value.bind(target)
-      return (): Promise<never> => Promise.reject(recusa(String(prop)))
-    },
-  })
-}
-
-/**
- * A persistencia como o plane pode expo-la: escreve enquanto for dono, le sempre.
- *
- * Envolver TAMBEM o plane com posse e proposital — e o que faz a capacidade morrer junto com
- * o lease, em vez de sobreviver a ele.
- */
-function persistenciaSobPosse(persistence: Persistence, podeEscrever: () => boolean): Persistence {
-  const store = <T extends object>(alvo: T, leituras: readonly string[]): T =>
-    comPosse(alvo, { leituras, handles: PORTAS_DA_CONEXAO }, podeEscrever)
-  const espelho: Persistence = {
-    ...persistence,
-    runs: store(persistence.runs, LEITURAS_DA_PERSISTENCIA.runs),
-    events: store(persistence.events, LEITURAS_DA_PERSISTENCIA.events),
-    artifacts: store(persistence.artifacts, LEITURAS_DA_PERSISTENCIA.artifacts),
-    // `queries` so tem SELECT; o que precisa de guarda ali e a conexao crua.
-    queries: comPosse(persistence.queries, { handles: PORTAS_DA_CONEXAO }, podeEscrever),
-  }
-  return comPosse(espelho, { handles: PORTA_DA_PERSISTENCIA }, podeEscrever)
-}
+export type ControlPlaneAccess = 'owned' | 'readonly'
 
 /** Perfis declarados no projeto; sem declaracao, um por papel suportado pelo provider. */
 export function profilesOf(project: ProjectFile): AgentProfile[] {
@@ -331,8 +267,17 @@ interface RunWiring {
  * E o que a CLI e o servidor usam — nenhum deles monta pecas por conta propria.
  */
 export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
-  const repoRoot = resolve(config.repoRoot ?? config.project.project.repoRoot)
-  const baseDir = config.baseDir ?? resolve(repoRoot, '.agentic')
+  const repoRoot = canonicalIfPresent(resolve(config.repoRoot ?? config.project.project.repoRoot))
+  /**
+   * A identidade e DERIVADA, e essa e a correcao estrutural da fatia.
+   *
+   * `runtimeDirOf` e a mesma conta que `projectIdentityOf` faz para a CLI e para o servidor —
+   * literalmente a mesma funcao, agora em `@agentic/persistence` para que o orquestrador possa
+   * chama-la sem cruzar a fronteira de camadas. Enquanto o chamador entregava `baseDir`, o
+   * plane comparava o lease contra o diretorio que o CHAMADOR escolheu em vez do diretorio que
+   * o REPOSITORIO determina: a chave errada, conferida com rigor.
+   */
+  const runtimeDir = runtimeDirOf(repoRoot)
   const lease = config.lease
   /**
    * O lease tem de proteger ESTE projeto, nao um qualquer.
@@ -342,26 +287,39 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * corretamente — ganharia um segundo escritor sem nunca saber. A conferencia e por caminho
    * REAL, a mesma da posse, entao alias e link simbolico continuam sendo o mesmo projeto.
    */
-  if (lease !== undefined && canonicalIfPresent(lease.ownedDir) !== canonicalIfPresent(baseDir)) {
+  if (lease !== undefined && canonicalIfPresent(lease.ownedDir) !== runtimeDir) {
     throw new CommandRefusedError(
-      `posse de ${lease.ownedDir} nao autoriza operar ${baseDir}: um lease vale para o ` +
+      `posse de ${lease.ownedDir} nao autoriza operar ${runtimeDir}: um lease vale para o ` +
         'projeto que ele protege, e so para ele (I14)',
     )
   }
-  const aberta = openPersistence({
-    baseDir,
-    ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
-  })
   /**
-   * A capacidade de escrever segue a posse EM TEMPO DE CHAMADA, e nao e escolhida aqui.
+   * AQUI esta a fronteira inteira, em duas linhas.
    *
-   * Decidir na construcao deixava o plane com a persistencia inteira depois de
-   * `lease.release()` — enquanto outro processo, ja dono legitimo, escrevia o mesmo banco.
+   * Posse viva -> `readwrite`. Qualquer outra coisa -> `readonly`, e readonly nao e uma
+   * convencao: e `better-sqlite3` abrindo o arquivo com `SQLITE_OPEN_READONLY`, com o kernel
+   * e o proprio SQLite recusando `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE` e transacao de
+   * escrita. Nao existe referencia, descriptor ou funcao capturada capaz de contornar isso,
+   * porque nao ha capacidade escondida — ha uma conexao que nao escreve.
+   *
+   * `=== true` de proposito: `lease?.held` devolveria `undefined` sem lease, e um `undefined`
+   * circulando como "talvez" e a forma exata do defeito que a 003B fechou.
    */
-  // `=== true` de proposito: `lease?.held` devolveria `undefined` sem lease, e um
-  // `undefined` circulando como "talvez" e a forma exata do defeito que esta fatia fechou.
-  const podeEscrever = (): boolean => lease?.held === true
-  const persistence = persistenciaSobPosse(aberta, podeEscrever)
+  const posseViva = lease?.held === true
+  const mode: DatabaseMode = posseViva ? 'readwrite' : 'readonly'
+  const access: ControlPlaneAccess = posseViva ? 'owned' : 'readonly'
+  const persistence = openPersistence({ baseDir: runtimeDir, mode })
+  /**
+   * A capacidade de escrever morre COM a posse, nao depois dela.
+   *
+   * Este registro e o que fecha o blocker da funcao capturada. Enquanto a revogacao dependia
+   * de perguntar `held` no caminho de chamada, quem tivesse a referencia por baixo do espelho
+   * escrevia; agora `release()` fecha esta conexao antes de soltar o lock do arquivo, e
+   * qualquer referencia — capturada, refletida, guardada no construtor de outro objeto —
+   * passa a falhar no driver. O cancelamento evita acumular gancho quando varios planes
+   * atravessam a mesma posse (o `reopen` do harness).
+   */
+  const desregistrar = lease?.onRelease(() => persistence.close())
   const clock = config.clock ?? systemClock()
   const ids = config.ids ?? ulidGenerator({ clock })
   const registry =
@@ -620,6 +578,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
 
   return {
     persistence,
+    access,
     ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,
     gates,
@@ -663,8 +622,10 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       opening.clear()
       for (const orchestrator of orchestrators.values()) await orchestrator.abandon()
       orchestrators.clear()
-      // A conexao REAL, nao o espelho: fechar e devolver recurso, nao escrever estado.
-      aberta.close()
+      // Fechar e devolver recurso, nao escrever estado — e depois de fechar nao ha mais o
+      // que o lease precise revogar, entao o gancho sai junto em vez de envelhecer nele.
+      desregistrar?.()
+      persistence.close()
     },
   }
 }

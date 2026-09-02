@@ -138,7 +138,6 @@ export async function createMissionHarness(options: HarnessOptions = {}): Promis
       project: projectParsed.value,
       gatesFile: gatesParsed.value,
       repoRoot: fixture.root,
-      baseDir: join(fixture.root, '.agentic'),
       lease,
       providerFactories: factoriesOf(projectParsed.value, activeStep, options.probe),
       ...(options.safetyIntervalMs === undefined

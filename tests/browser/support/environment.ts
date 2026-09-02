@@ -219,7 +219,6 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
     project: sources.project,
     gatesFile: sources.gatesFile,
     repoRoot: sources.repoRoot,
-    baseDir: lease.ownedDir,
     lease,
     providerFactories: Object.fromEntries(
       Object.keys(sources.project.providers.registry).map((id) => [id, factory]),

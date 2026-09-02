@@ -10,13 +10,14 @@ import { CliError, usageError } from './result.js'
 /**
  * Abre o control plane local a partir do projeto ja validado.
  *
- * `baseDir` e o diretorio de ESTADO (`context.runtimeDir`), nao o de configuracao: e ele que
- * a posse protege, e abrir o banco em outro lugar era abrir um SEGUNDO `state.db` para o
- * mesmo projeto (I14).
+ * O diretorio de ESTADO nao viaja mais daqui: `createControlPlane` o deriva de `repoRoot`
+ * pela mesma conta que `projectIdentityOf` — enquanto dois lugares faziam a conta, dois
+ * lugares podiam divergir, e um `state.db` fora da posse e um segundo estado para o mesmo
+ * projeto (I14).
  *
- * Com `lease`, o plane pode MUTAR, porque provou ser o dono. Sem `lease`, ele so le: as
- * operacoes de escrita recusam por conta propria, entao um comando de leitura nao precisa
- * disputar posse e um comando de mutacao nao consegue esquecer de disputar.
+ * Com `lease`, a conexao abre `readwrite`, porque este processo provou ser o dono. Sem
+ * `lease`, ela abre `readonly` — um comando de leitura nao precisa disputar posse, e um
+ * comando de mutacao nao consegue esquecer de disputar: nao ha conexao que o atenda.
  */
 export function openPlane(
   deps: CommandDeps,
@@ -27,7 +28,6 @@ export function openPlane(
     project: context.project,
     gatesFile: context.gatesFile,
     repoRoot: context.repoRoot,
-    baseDir: context.runtimeDir,
     registry: deps.registry(context.project),
     ...(lease === undefined ? {} : { lease }),
   })

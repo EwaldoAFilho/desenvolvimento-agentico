@@ -42,6 +42,7 @@ export type {
 export {
   ArtifactNotFoundError,
   ArtifactPathError,
+  DatabaseNotInitializedError,
   MigrationError,
   PersistenceError,
   ReadOnlyDatabaseError,
@@ -99,6 +100,7 @@ export {
   type RunStoreOptions,
   SqliteRunStore,
 } from './run-store.js'
+export { RUNTIME_DIR_NAME, runtimeDirOf } from './runtime-dir.js'
 export {
   BufferedUnitOfWork,
   type LockWriter,

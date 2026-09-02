@@ -113,6 +113,23 @@ function missaoCompilada(): { spec: ReturnType<typeof toMissionSpec>; compiled: 
   return { spec: toMissionSpec(parsed.value), compiled: result.graph as never }
 }
 
+/**
+ * A recusa vale seja ela sincrona ou assincrona.
+ *
+ * Depois que a fronteira desceu para a conexao, o modo de falhar deixou de ser uniforme —
+ * `ReadOnlyDatabaseError` sai de um `throw` sincrono, "database connection is not open" sai
+ * do driver, um `Promise.reject` sai da fachada. Distinguir os tres seria voltar a testar
+ * implementacao; o que a invariante afirma e que a chamada NAO conclui.
+ */
+async function recusa(chamada: () => unknown): Promise<boolean> {
+  try {
+    await chamada()
+    return false
+  } catch {
+    return true
+  }
+}
+
 /** Quantos runs o banco REALMENTE tem, lido por uma conexao independente deste plane. */
 function runsNoDisco(runtimeDir: string): number {
   const frio = openPersistence({ baseDir: runtimeDir, mode: 'readonly' })
@@ -143,15 +160,17 @@ describe('A. capacidade capturada nao sobrevive a posse', () => {
 
     aberto.lease?.release()
 
-    await expect(
-      append({
-        runId: run.id,
-        ts: new Date('2026-01-01T00:00:00.000Z'),
-        type: 'run.created',
-        actor: { kind: 'human', id: 'capturado' },
-        payload: {},
-      } as never),
-    ).rejects.toThrow()
+    expect(
+      await recusa(() =>
+        append({
+          runId: run.id,
+          ts: new Date('2026-01-01T00:00:00.000Z'),
+          type: 'run.created',
+          actor: { kind: 'human', id: 'capturado' },
+          payload: {},
+        } as never),
+      ),
+    ).toBe(true)
 
     // A prova nao e a excecao: e o disco. Nenhum evento novo entrou.
     const frio = await cenario({ comPosse: false, root: aberto.root, criarBanco: false })
@@ -167,7 +186,21 @@ describe('A. capacidade capturada nao sobrevive a posse', () => {
 
     aberto.lease?.release()
 
-    await expect(withTransaction(async () => undefined)).rejects.toThrow()
+    // Uma transacao que tenta ESCREVER de verdade. A vazia nao serve de prova: ela nao
+    // toca o banco, entao concluir sem erro nao afirma nada sobre a capacidade.
+    expect(
+      await recusa(() =>
+        withTransaction(async (uow) => {
+          await uow.appendEvent({
+            runId: RUN_INEXISTENTE,
+            ts: new Date('2026-01-01T00:00:00.000Z'),
+            type: 'run.created',
+            actor: { kind: 'human', id: 'capturado' },
+            payload: {},
+          } as never)
+        }),
+      ),
+    ).toBe(true)
     expect(runsNoDisco(aberto.runtimeDir)).toBe(1)
   })
 })
@@ -213,9 +246,10 @@ describe('B. reflexao nao produz escritor', () => {
       (fn): fn is (input: unknown) => Promise<unknown> => typeof fn === 'function',
     )
 
+    expect(candidatos.length).toBeGreaterThan(0)
     for (const append of candidatos) {
-      await expect(
-        Promise.resolve(
+      expect(
+        await recusa(() =>
           append.call(alvo, {
             runId: RUN_INEXISTENTE,
             ts: new Date(),
@@ -224,7 +258,7 @@ describe('B. reflexao nao produz escritor', () => {
             payload: {},
           }),
         ),
-      ).rejects.toThrow()
+      ).toBe(true)
     }
     expect(runsNoDisco(aberto.runtimeDir)).toBe(0)
   })
@@ -261,9 +295,9 @@ describe('C. a identidade sai do repoRoot, nunca do chamador', () => {
     const posseA = acquireControlPlaneOwnership({ baseDir: join(a, '.agentic') })
     if (!posseA.ok) throw new Error('fixture: posse recusada')
 
-    expect(() =>
-      createControlPlane({ ...configBase(), repoRoot: b, lease: posseA.lease }),
-    ).toThrow(/nao autoriza operar/i)
+    expect(() => createControlPlane({ ...configBase(), repoRoot: b, lease: posseA.lease })).toThrow(
+      /nao autoriza operar/i,
+    )
 
     posseA.lease.release()
     expect(existsSync(join(b, '.agentic', 'state.db'))).toBe(false)
@@ -317,7 +351,7 @@ describe('a propriedade central: sem posse, nada persiste', () => {
     ]
 
     for (const tentativa of tentativas) {
-      await expect(Promise.resolve().then(tentativa)).rejects.toThrow()
+      expect(await recusa(tentativa)).toBe(true)
     }
     expect(runsNoDisco(aberto.runtimeDir)).toBe(0)
   })

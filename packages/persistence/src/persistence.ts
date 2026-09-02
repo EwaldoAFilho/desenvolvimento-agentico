@@ -10,9 +10,19 @@ export const DEFAULT_BASE_DIR = '.agentic'
 export const DEFAULT_DATABASE_FILE = 'state.db'
 
 export interface OpenPersistenceOptions {
-  /** Diretorio base; por padrao `.agentic` (ADR-0003). */
+  /** Diretorio de estado do projeto; por padrao `.agentic` (ADR-0003). */
   readonly baseDir?: string
-  readonly databasePath?: string
+  /**
+   * NAO existe opcao de caminho do banco.
+   *
+   * `databasePath` existiu como conveniencia e virou um escape de posse: o lock protegia
+   * `<baseDir>/control-plane.lock.db` enquanto o `state.db` mutavel podia ser apontado para
+   * QUALQUER lugar — inclusive o diretorio de um projeto que pertence a outro processo. Duas
+   * identidades para um projeto so e a forma exata do defeito que I14 existe para impedir.
+   *
+   * A regra agora e uma linha: UM PROJETO -> UM runtimeDir -> UM lock -> UM `state.db`. Quem
+   * precisa de outro banco usa outro `baseDir`, e ai leva o lock junto.
+   */
   readonly mode?: DatabaseMode
   readonly busyTimeoutMs?: number
   readonly pollIntervalMs?: number
@@ -20,6 +30,8 @@ export interface OpenPersistenceOptions {
 
 export interface Persistence {
   readonly database: DatabaseHandle
+  /** `readonly` = esta conexao nao escreve, e quem recusa e o SQLite. */
+  readonly mode: DatabaseMode
   readonly runs: SqliteRunStore
   readonly events: SqliteEventStore
   readonly artifacts: FileArtifactStore
@@ -34,10 +46,11 @@ export interface Persistence {
  */
 export function openPersistence(options: OpenPersistenceOptions = {}): Persistence {
   const baseDir = resolve(options.baseDir ?? DEFAULT_BASE_DIR)
-  const databasePath = options.databasePath ?? join(baseDir, DEFAULT_DATABASE_FILE)
+  const mode = options.mode ?? 'readwrite'
   const database = openDatabase({
-    path: databasePath,
-    mode: options.mode ?? 'readwrite',
+    // Derivado, nunca recebido: o banco mora ao lado do lock que o protege.
+    path: join(baseDir, DEFAULT_DATABASE_FILE),
+    mode,
     ...(options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs }),
   })
   const notifier = new ChangeNotifier()
@@ -53,6 +66,7 @@ export function openPersistence(options: OpenPersistenceOptions = {}): Persisten
     artifacts: createArtifactStore(database, baseDir),
     queries: createQueries(database),
     baseDir,
+    mode,
     close: (): void => {
       events.close()
       database.close()

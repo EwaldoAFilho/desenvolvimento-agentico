@@ -1,7 +1,7 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { type SqliteDatabase, sqliteDriver } from './driver.js'
-import { SchemaVersionError } from './errors.js'
+import { DatabaseNotInitializedError, SchemaVersionError } from './errors.js'
 import { applyMigrations, LATEST_SCHEMA_VERSION, schemaVersion } from './migrations.js'
 
 export type DatabaseMode = 'readwrite' | 'readonly'
@@ -26,8 +26,18 @@ export interface DatabaseHandle {
 export const DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 /**
- * I7 na pratica: `readwrite` e a conexao do orquestrador (WAL, escritor unico); `readonly`
- * e o que dashboard e CLI usam para ler sem nunca disputar a escrita.
+ * I7 e I14 na pratica, e o modo NAO e cosmetico: e a fronteira.
+ *
+ * `readwrite` e a conexao do DONO do projeto — WAL, escritor unico, migracoes aplicadas.
+ * `readonly` e uma conexao que o proprio SQLite recusa escrever: `INSERT`, `UPDATE`,
+ * `DELETE`, `CREATE TABLE` e transacao de escrita falham no DRIVER, nao num espelho de
+ * JavaScript. E por isso que a capacidade nao pode ser recuperada por reflexao, descriptor
+ * ou funcao capturada: nao ha nada escondido para reencontrar — a conexao simplesmente nao
+ * sabe escrever.
+ *
+ * Em `readonly` o arquivo tambem precisa JA existir: criar `state.db` e rodar migracao sao
+ * escritas, e escrita pertence a quem possui o projeto. Um `status` num projeto novo tem de
+ * dizer "nao inicializado", nao inicializar.
  */
 export function openDatabase(options: OpenDatabaseOptions): DatabaseHandle {
   const mode: DatabaseMode = options.mode ?? 'readwrite'
@@ -36,6 +46,9 @@ export function openDatabase(options: OpenDatabaseOptions): DatabaseHandle {
 
   // Unica escrita em disco fora do ArtifactStore: o diretorio do proprio arquivo do banco.
   if (mode === 'readwrite') mkdirSync(dirname(path), { recursive: true })
+  // `fileMustExist` do driver ja recusaria, mas com `SQLITE_CANTOPEN` cru. Perguntar antes
+  // troca um erro de biblioteca por um fato do produto — e e o fato que a CLI sabe explicar.
+  if (mode === 'readonly' && !existsSync(path)) throw new DatabaseNotInitializedError(path)
 
   const Driver = sqliteDriver()
   const db = new Driver(path, {

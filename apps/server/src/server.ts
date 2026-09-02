@@ -230,10 +230,9 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
       project: sources.project,
       gatesFile: sources.gatesFile,
       repoRoot: sources.repoRoot,
-      // O banco mora onde a posse foi disputada: o lock protege ESTE `state.db`, nao outro.
-      baseDir: lease.ownedDir,
+      // O banco mora onde a posse foi disputada, e ninguem escolhe isso: `createControlPlane`
+      // deriva `<repoRoot>/.agentic` e recusa se o lease proteger outro diretorio.
       lease,
-      ...(config.databasePath === undefined ? {} : { databasePath: config.databasePath }),
     })
   } catch (error) {
     lease.release()

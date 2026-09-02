@@ -67,9 +67,8 @@ export interface ServerConfig {
   readonly webDist?: string
   readonly heartbeatMs?: number
   readonly logger?: boolean
-  readonly databasePath?: string
   /**
-   * NAO existe opcao de diretorio de estado.
+   * NAO existe opcao de diretorio de estado NEM de caminho do banco.
    *
    * Ela existiu enquanto `runtimeDir` era so o lugar do `control-plane.json`. Depois que ele
    * passou a ser tambem a CHAVE DE POSSE, aceitar um valor do chamador era abrir de volta o

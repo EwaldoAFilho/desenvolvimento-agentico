@@ -167,7 +167,6 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       project: projectParsed.value,
       gatesFile: gatesParsed.value,
       repoRoot: root,
-      baseDir: join(root, '.agentic'),
       lease,
       providerFactories: factoriesOf(
         projectParsed.value,

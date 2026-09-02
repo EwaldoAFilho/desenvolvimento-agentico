@@ -1,5 +1,5 @@
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { canonicalIfPresent } from '@agentic/persistence'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
+import { canonicalIfPresent, RUNTIME_DIR_NAME, runtimeDirOf } from '@agentic/persistence'
 
 /**
  * UMA conta de identidade do projeto, para TODOS os entrypoints (I14).
@@ -28,8 +28,17 @@ import { canonicalIfPresent } from '@agentic/persistence'
  * quem fecha a porta contra alias e a canonicalizacao feita na hora de POSSUIR, sobre o
  * diretorio ja criado.
  */
-/** Diretorio local do projeto; o mesmo que guarda `state.db`, `runs/` e a descoberta. */
-export const RUNTIME_DIR_NAME = '.agentic'
+/**
+ * A regra de "onde mora o estado" mora em `@agentic/persistence`, junto do lock que a cobra,
+ * e daqui e so REEXPORTADA.
+ *
+ * Ter a definicao aqui funcionava enquanto os unicos interessados eram a CLI e o servidor.
+ * Nao funcionava para `createControlPlane`, que abre o banco de dentro de `@agentic/
+ * orchestrator` e nao pode importar um app — e foi por nao alcanca-la que a composicao
+ * passou a aceitar um `baseDir` do chamador, ou seja, uma segunda identidade de projeto.
+ * Duas contas para a mesma pergunta e como I14 se perde.
+ */
+export { RUNTIME_DIR_NAME, runtimeDirOf }
 
 /**
  * Cabecalho em que o CLIENTE declara por qual projeto ele acha que esta falando.
@@ -81,11 +90,6 @@ export function projectIdentityOf(input: ProjectIdentityInput): ProjectIdentity 
   const projectDir = projectDirOf(input.projectFile)
   const repoRoot = canonicalIfPresent(resolve(projectDir, input.declaredRepoRoot))
   return { projectDir, repoRoot, runtimeDir: runtimeDirOf(repoRoot) }
-}
-
-/** `<repoRoot>/.agentic`, canonico. A CHAVE DE POSSE do projeto (I14). */
-export function runtimeDirOf(repoRoot: string): string {
-  return canonicalIfPresent(join(resolve(repoRoot), RUNTIME_DIR_NAME))
 }
 
 /** Caminho declarado no `project.yaml`, resolvido contra a ancora de CONFIGURACAO. */

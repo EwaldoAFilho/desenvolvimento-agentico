@@ -140,7 +140,6 @@ export async function createServerHarness(
     project: project.value,
     gatesFile: gates.value,
     repoRoot: root,
-    baseDir: join(root, '.agentic'),
     lease,
     safetyIntervalMs: 0,
     scripts: mockScripts([...taskIds]),
