@@ -130,7 +130,12 @@ export class SharedWorkspaceProvider implements WorkspaceProvider {
     const setup =
       this.#config.workspaceSetup === undefined
         ? EMPTY_SETUP_RESULT
-        : await runWorkspaceSetup(this.#root, this.#repoRoot, this.#config.workspaceSetup)
+        : await runWorkspaceSetup(
+            this.#root,
+            this.#repoRoot,
+            this.#config.workspaceSetup,
+            lease.signal,
+          )
     const workspace: Workspace = {
       id: `shared/${lease.attemptId}`,
       kind: 'shared',

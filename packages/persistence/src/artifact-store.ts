@@ -49,6 +49,8 @@ export class FileArtifactStore {
   readonly #baseDir: string
   readonly #mkdir: NonNullable<ArtifactStoreDeps['mkdir']>
   readonly #writeFile: NonNullable<ArtifactStoreDeps['writeFile']>
+  /** Escritas que passaram pela guarda e ainda nao terminaram — arquivo E linha. */
+  readonly #pending = new Set<Promise<unknown>>()
 
   constructor(handle: DatabaseHandle, baseDir: string, deps: ArtifactStoreDeps = {}) {
     this.#handle = handle
@@ -69,6 +71,20 @@ export class FileArtifactStore {
     return join(this.#baseDir, RUNS_DIRECTORY, runId)
   }
 
+  /** Quantas escritas ja comecaram e ainda nao terminaram. Zero e a unica resposta que fecha. */
+  get pending(): number {
+    return this.#pending.size
+  }
+
+  /**
+   * Resolve quando nenhuma escrita iniciada ate aqui esta em voo. Escritas que comecem
+   * DEPOIS da chamada nao entram na conta: quem quer que nada mais comece fecha a conexao
+   * (ou solta a posse) logo em seguida — e ai `writable` recusa no primeiro passo.
+   */
+  async settle(): Promise<void> {
+    while (this.#pending.size > 0) await Promise.allSettled([...this.#pending])
+  }
+
   /** Resolve e prova a contencao: nada escapa de `<base>/runs/<runId>/`. */
   resolvePath(runId: RunId, relativePath: string): string {
     if (relativePath.trim().length === 0) throw new ArtifactPathError(relativePath, 'caminho vazio')
@@ -82,7 +98,7 @@ export class FileArtifactStore {
     return absolute
   }
 
-  async write(input: ArtifactWrite): Promise<ArtifactRecord> {
+  write(input: ArtifactWrite): Promise<ArtifactRecord> {
     /**
      * A pergunta e `writable`, nao `mode`, e a diferenca custa um arquivo.
      *
@@ -92,8 +108,25 @@ export class FileArtifactStore {
      * criava ou SOBRESCREVIA o arquivo e so entao falhava no banco. Artefato e evidencia:
      * sobrescrever um arquivo ja referenciado deixa digest e metadados mentindo sobre o
      * conteudo, que e pior que a escrita recusada.
+     *
+     * A recusa e SINCRONA, antes de registrar a escrita como pendente: uma escrita que nem
+     * comeca nao segura a posse de ninguem.
      */
-    if (!this.#handle.writable) throw new ReadOnlyDatabaseError('artifact.write')
+    if (!this.#handle.writable) {
+      return Promise.reject(new ReadOnlyDatabaseError('artifact.write'))
+    }
+    // Registrada como pendente do primeiro `await` ate a linha no banco: e o que `settle()`
+    // espera e o que impede a posse de ser devolvida com o arquivo pela metade (I15).
+    const work = this.#write(input)
+    this.#pending.add(work)
+    void work.then(
+      () => this.#pending.delete(work),
+      () => this.#pending.delete(work),
+    )
+    return work
+  }
+
+  async #write(input: ArtifactWrite): Promise<ArtifactRecord> {
     const absolute = this.resolvePath(input.runId, input.relativePath)
     const bytes =
       typeof input.content === 'string' ? Buffer.from(input.content, 'utf8') : input.content

@@ -63,6 +63,8 @@ export interface MissionWorkspaceRequest {
   readonly runId: RunId
   readonly attemptId: AttemptId
   readonly missionId?: MissionId
+  /** Cancelamento cooperativo do `workspaceSetup` (encerramento do control plane). */
+  readonly signal?: AbortSignal
 }
 
 interface LeaseState {
@@ -213,7 +215,7 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
       baseCommit,
       leasedBy: lease.attemptId,
     }
-    const setup = await this.#setupOrCleanup(path)
+    const setup = await this.#setupOrCleanup(path, lease.signal)
     this.#leases.set(id, {
       workspace,
       scope: this.#scopeOf(lease),
@@ -276,7 +278,7 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
       baseCommit,
       leasedBy: request.attemptId,
     }
-    const setup = await this.#setupOrCleanup(path)
+    const setup = await this.#setupOrCleanup(path, request.signal)
     this.#leases.set(id, {
       workspace,
       scope: { touches: [], denyPaths: this.#config.denyPaths ?? [] },
@@ -373,10 +375,10 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
    * Worktree sem setup e worktree inutil: se o setup falhar, ela sai do disco para que a
    * proxima tentativa possa recriar, e o erro sobe como WORKSPACE_ERROR.
    */
-  async #setupOrCleanup(path: string): Promise<WorkspaceSetupResult> {
+  async #setupOrCleanup(path: string, signal?: AbortSignal): Promise<WorkspaceSetupResult> {
     if (this.#config.workspaceSetup === undefined) return EMPTY_SETUP_RESULT
     try {
-      return await runWorkspaceSetup(path, this.#repoRoot, this.#config.workspaceSetup)
+      return await runWorkspaceSetup(path, this.#repoRoot, this.#config.workspaceSetup, signal)
     } catch (error) {
       await removeWorktree(this.#repoRoot, path).catch(() => undefined)
       throw error

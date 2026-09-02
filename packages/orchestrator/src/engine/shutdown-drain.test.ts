@@ -127,7 +127,8 @@ let pidFile: string | undefined
 
 afterEach(async () => {
   // Um processo que o produto deixou orfao nao pode sobreviver ao teste.
-  if (pidFile !== undefined && existsSync(pidFile)) matarArvore(Number(readFileSync(pidFile, 'utf8')))
+  if (pidFile !== undefined && existsSync(pidFile))
+    matarArvore(Number(readFileSync(pidFile, 'utf8')))
   pidFile = undefined
   await h?.cleanup().catch(() => undefined)
   h = undefined
@@ -164,7 +165,9 @@ async function efeitosDepoisDoClose(harness: Harness): Promise<{
 }> {
   return {
     commitsNaTentativa: await harness.git('rev-list', '--count', `${MISSION_BRANCH}..${BRANCH_A1}`),
-    artefatosDaTentativa: existsSync(join(harness.root, '.agentic', 'runs', harness.runId, 'attempts')),
+    artefatosDaTentativa: existsSync(
+      join(harness.root, '.agentic', 'runs', harness.runId, 'attempts'),
+    ),
     errosDeBancoFechado: harness.orchestrator.errors.filter((error) =>
       /not open|readonly|READ_ONLY/i.test(String(error)),
     ).length,
@@ -273,8 +276,10 @@ describe('I15 — close so resolve quando nenhum efeito do dono pode mutar o pro
     await tick.catch(() => undefined)
 
     const arquivoPid = pidFile
-    // O processo chegou a nascer (start() rodou de verdade depois do close pedido)...
-    await esperar('o processo do agente nascer', () => existsSync(arquivoPid), 10_000).catch(
+    // O processo pode ter chegado a nascer (start() rodou depois do close pedido) — ou ter
+    // sido morto antes mesmo de escrever o pid. Os dois desfechos sao aceitaveis; o que nao
+    // e aceitavel e um processo vivo.
+    await esperar('o processo do agente nascer', () => existsSync(arquivoPid), 3_000).catch(
       () => undefined,
     )
     await delay(2_000)
@@ -341,8 +346,11 @@ describe('I15 — close so resolve quando nenhum efeito do dono pode mutar o pro
     const missionGates = (await h.events()).filter(
       (event) => event.type === 'gate.started' && event.payload.scope === 'mission',
     )
-    expect({ status: final.status, execucao: typeof final.missionGateExecutionId, gates: missionGates.length })
-      .toEqual({ status: 'COMPLETED', execucao: 'string', gates: 1 })
+    expect({
+      status: final.status,
+      execucao: typeof final.missionGateExecutionId,
+      gates: missionGates.length,
+    }).toEqual({ status: 'COMPLETED', execucao: 'string', gates: 1 })
   }, 90_000)
 
   it('posse: outro dono so entra depois que o close resolveu', async () => {

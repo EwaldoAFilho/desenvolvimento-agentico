@@ -251,6 +251,40 @@ O usuário clica **uma vez**. A descoberta do que pode rodar agora é do orquest
 exatamente o produto. O dashboard **não** vira editor de missão: o YAML continua sendo o
 contrato versionado, e aprovar/iniciar não altera uma linha dele.
 
+### 4.2 Ciclo de vida do serviço
+
+O processo que possui o projeto tem uma máquina de estados própria — **não** é `RunStatus`;
+o run vive no banco e sobrevive ao processo (ADR-0014):
+
+```text
+STOPPED ──start()──▶ STARTING ──ok──▶ RUNNING ──stop()──▶ STOPPING ──ok──▶ STOPPED
+                        │ falha                              │ falha
+                        ▼                                    ▼
+                     STOPPED (nada ficou de pé)           FAILED (efeito vivo, posse retida)
+```
+
+`createControlPlaneService` (`@agentic/server`) expõe `start`, `stop`, `restart` e `status`.
+`start` é idempotente e nunca cria um segundo dono (I14); `stop` é idempotente e só devolve
+a posse quando nenhum efeito deste processo pode mais mutar o projeto (I15); `restart` é
+`stop` seguido de `start`, serializados, com adoção dos runs recuperáveis (I13). `SIGINT` e
+`SIGTERM` em `agentic serve` e em `agentic-server` chamam o mesmo `stop`.
+
+A ordem do encerramento é a garantia:
+
+```text
+parar de aceitar ──▶ cancelar/drenar (prazo) ──▶ colher ──▶ fechar banco ──▶ devolver posse
+     plane recusa       handles de agente         integração    settle das      release() ==
+     trabalho novo;     cancelados; gate e        e mission     escritas de     false segura
+     SSE encerrado;     setup abortados por       gate gravados artefato        o lock
+     porta fechada;     sinal; cadeia do tick
+     descoberta sai     e jobs esperados
+```
+
+Efeito que não para dentro do prazo faz o `stop` **falhar** (`FAILED`) com a posse retida —
+nunca a devolve em silêncio. `SIGKILL` não drena: o próximo dono adota e reconcilia
+(STATE-MACHINES 1.4), e um comando de gate ou setup do processo morto fica órfão até
+terminar sozinho, sem alcançar o banco.
+
 ## 5. Isolamento de trabalho
 
 ### 5.1 Por que worktree não é opcional para paralelismo real

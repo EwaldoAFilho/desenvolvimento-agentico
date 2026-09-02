@@ -132,7 +132,12 @@ describe('artefato em voo segura a posse (I15)', () => {
     expect(lease.release()).toBe(true)
 
     await expect(
-      write({ runId: RUN, kind: 'patch', relativePath: 'attempts/T01-a1/patch.diff', content: 'x' }),
+      write({
+        runId: RUN,
+        kind: 'patch',
+        relativePath: 'attempts/T01-a1/patch.diff',
+        content: 'x',
+      }),
     ).rejects.toMatchObject({ code: 'READ_ONLY' })
     expect(tocouDisco).toBe(false)
   })

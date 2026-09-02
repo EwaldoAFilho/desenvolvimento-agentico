@@ -70,6 +70,7 @@ import type { AgentLogConfig } from './agent-log.js'
 import { CommandRefusedError } from './errors.js'
 import { SharedTreeIntegrator } from './integration.js'
 import {
+  type AbandonOptions,
   type HumanCommand,
   Orchestrator,
   type TaskCommandInput,
@@ -171,6 +172,20 @@ export interface ControlPlaneConfig {
   readonly lease?: OwnershipLease
 }
 
+/** Prazo padrao para os efeitos de um plane pararem no `close` (I15). */
+export const DEFAULT_SHUTDOWN_GRACE_MS = 30_000
+
+export type CloseOptions = AbandonOptions
+
+/**
+ * Onde o plane esta no proprio ciclo de vida.
+ *
+ * `open`: aceita trabalho. `closing`: recusa trabalho novo e esta drenando o que ja comecou —
+ * e fica aqui se a drenagem falhar, para que um `close` seguinte tente de novo em vez de
+ * fingir que terminou. `closed`: nenhum efeito deste plane pode mais mutar o projeto.
+ */
+export type ControlPlaneLifecycle = 'open' | 'closing' | 'closed'
+
 export interface ControlPlane {
   readonly persistence: Persistence
   /**
@@ -178,6 +193,7 @@ export interface ControlPlane {
    * quem recebe um plane pronto pode PERGUNTAR em vez de deduzir da presenca de um lease.
    */
   readonly access: ControlPlaneAccess
+  readonly lifecycle: ControlPlaneLifecycle
   /** Identidade do dono, quando este plane tem posse. Liga a posse a descoberta. */
   readonly instanceId?: string
   readonly registry: ProviderRegistry
@@ -202,7 +218,13 @@ export interface ControlPlane {
   generateMissionReport(runId: RunId): Promise<MissionReport>
   open(runId: RunId): Promise<Orchestrator>
   adoptRecoverableRuns(): Promise<AdoptionResult>
-  close(): Promise<void>
+  /**
+   * Encerra ESTE plane (I15): recusa trabalho novo, cancela o que e cancelavel, espera o que
+   * ja comecou, registra o que chegou, e so entao fecha o banco. Se algum efeito nao parar
+   * dentro do prazo, REJEITA com `ShutdownTimeoutError` e deixa o banco aberto — quem
+   * chama nao devolve a posse nesse caso. Idempotente e seguro sob chamadas concorrentes.
+   */
+  close(options?: CloseOptions): Promise<void>
 }
 
 /**
@@ -399,6 +421,13 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    *    manda mais neste projeto, mesmo que o processo continue vivo.
    */
   const exigirPosse = (acao: string): void => {
+    // Encerrando ou encerrado, este plane nao aceita trabalho novo — antes mesmo de olhar
+    // a posse. E a primeira fase do encerramento: parar de aceitar (I15).
+    if (closed) {
+      throw new CommandRefusedError(
+        `control plane ${lifecycle === 'closed' ? 'encerrado' : 'encerrando'}: ${acao} recusado`,
+      )
+    }
     if (lease === undefined) {
       throw new CommandRefusedError(
         `control plane aberto sem posse do projeto: ${acao} recusado (I14)`,
@@ -429,6 +458,9 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
   /** Aberturas em voo, por run: o que impede dois donos nascerem em paralelo (I13). */
   const opening = new Map<string, Promise<Orchestrator>>()
   let closed = false
+  let lifecycle: ControlPlaneLifecycle = 'open'
+  /** O `close` em curso: chamadas concorrentes compartilham a mesma drenagem. */
+  let closing: Promise<void> | undefined
 
   const wiringFor = (mission: MissionSpec): RunWiring => {
     const execution = config.project.execution
@@ -535,10 +567,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    */
   const open = (runId: RunId): Promise<Orchestrator> => {
     // Depois de `close` nao ha banco para abrir contra: recusar e melhor que devolver um
-    // dono que so vai falhar no primeiro tick.
-    if (closed) {
-      return Promise.reject(new CommandRefusedError('control plane encerrado: nada a abrir'))
-    }
+    // dono que so vai falhar no primeiro tick. Durante o `close`, idem: abrir seria aceitar
+    // trabalho novo no meio da drenagem.
     const semPosse = recusarSemPosse<Orchestrator>(`abrir orquestrador do run ${runId}`)
     if (semPosse !== undefined) return semPosse
     const existing = orchestrators.get(runId)
@@ -615,10 +645,62 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     return { adopted, refused }
   }
 
+  /**
+   * A ordem do encerramento E a garantia (I15), e ela vive aqui com um motivo por passo:
+   *
+   * 1. `closed = true` primeiro: nenhuma abertura, criacao, aprovacao, partida ou adocao
+   *    nova passa daqui. Aberturas em voo sao esperadas — uma que terminasse depois povoaria
+   *    o mapa ja limpo com um dono vivo sobre banco fechado.
+   * 2. Cada orquestrador e abandonado: cancela o que e cancelavel, espera a cadeia do tick e
+   *    os efeitos assincronos, e colhe os resultados que ja chegaram. Com PRAZO. Um que nao
+   *    pare dentro dele faz o `close` inteiro falhar — e o banco fica ABERTO, porque fecha-lo
+   *    por baixo de um efeito vivo so trocaria "efeito em voo" por "efeito em voo que falha
+   *    no ultimo passo". O chamador nao devolve a posse nesse caso, e um `close` seguinte
+   *    tenta de novo.
+   * 3. As escritas de artefato em voo terminam (`settle`) antes de o banco fechar: sao o unico
+   *    efeito da persistencia com metade fora do banco.
+   * 4. So entao a conexao fecha e o gancho sai do lease.
+   */
+  const closeAll = async (options: CloseOptions): Promise<void> => {
+    closed = true
+    lifecycle = 'closing'
+    const emVoo = await Promise.allSettled([...opening.values()])
+    for (const aberto of emVoo) {
+      if (aberto.status === 'fulfilled') orchestrators.set(aberto.value.runId, aberto.value)
+    }
+    opening.clear()
+    const falhas: unknown[] = []
+    for (const orchestrator of [...orchestrators.values()]) {
+      try {
+        await orchestrator.abandon(options)
+        orchestrators.delete(orchestrator.runId)
+      } catch (error) {
+        falhas.push(error)
+      }
+    }
+    if (falhas.length > 0) {
+      const primeira = falhas[0]
+      if (falhas.length === 1 && primeira instanceof Error) throw primeira
+      throw new AggregateError(
+        falhas,
+        `${falhas.length} orquestrador(es) nao encerraram dentro do prazo: a posse nao pode ser devolvida (I15)`,
+      )
+    }
+    await persistence.settle()
+    // Fechar e devolver recurso, nao escrever estado — e depois de fechar nao ha mais o
+    // que o lease precise revogar, entao o gancho sai junto em vez de envelhecer nele.
+    desregistrar?.()
+    persistence.close()
+    lifecycle = 'closed'
+  }
+
   return {
     persistence,
     get access(): ControlPlaneAccess {
       return access()
+    },
+    get lifecycle(): ControlPlaneLifecycle {
+      return lifecycle
     },
     ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,
@@ -650,23 +732,15 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     generateMissionReport: (runId) => generateMissionReport(deps, runId),
     open,
     adoptRecoverableRuns,
-    close: async () => {
-      // Fechar sem olhar para `opening` deixava a pior sobra possivel: uma abertura
-      // iniciada antes do fechamento terminava depois, povoava o mapa ja limpo e entregava
-      // ao chamador um dono vivo sobre um banco fechado. Barrar novas aberturas e esperar
-      // as em voo custa um `await`; o oposto custa um orquestrador fantasma.
-      closed = true
-      const emVoo = await Promise.allSettled([...opening.values()])
-      for (const aberto of emVoo) {
-        if (aberto.status === 'fulfilled') await aberto.value.abandon().catch(() => undefined)
-      }
-      opening.clear()
-      for (const orchestrator of orchestrators.values()) await orchestrator.abandon()
-      orchestrators.clear()
-      // Fechar e devolver recurso, nao escrever estado — e depois de fechar nao ha mais o
-      // que o lease precise revogar, entao o gancho sai junto em vez de envelhecer nele.
-      desregistrar?.()
-      persistence.close()
+    close: (options = {}) => {
+      if (lifecycle === 'closed') return Promise.resolve()
+      // Chamadas concorrentes compartilham a MESMA drenagem; uma que falhe libera o lugar
+      // para a proxima tentar de novo, em vez de repetir a rejeicao para sempre.
+      closing ??= closeAll(options).catch((error: unknown) => {
+        closing = undefined
+        throw error
+      })
+      return closing
     },
   }
 }

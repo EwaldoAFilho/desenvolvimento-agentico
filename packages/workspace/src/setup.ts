@@ -100,6 +100,8 @@ async function linkOne(
 interface ShellOutcome {
   readonly exitCode: number | null
   readonly timedOut: boolean
+  /** O chamador cancelou (sinal de abort): a arvore do comando foi encerrada. */
+  readonly aborted: boolean
   readonly durationMs: number
   readonly output: string
 }
@@ -108,11 +110,17 @@ function tail(text: string): string {
   return text.length <= OUTPUT_TAIL_BYTES ? text : text.slice(text.length - OUTPUT_TAIL_BYTES)
 }
 
-function runShell(command: string, cwd: string, timeoutMs: number): Promise<ShellOutcome> {
+function runShell(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ShellOutcome> {
   return new Promise<ShellOutcome>((resolvePromise) => {
     const startedAt = Date.now()
     let output = ''
     let timedOut = false
+    let aborted = false
     let settled = false
     // `detached` no POSIX torna o shell lider de grupo: no timeout matamos a arvore
     // inteira, senao um neto segurando o pipe deixaria o setup pendurado para sempre.
@@ -141,11 +149,17 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<Shel
     child.stderr?.on('data', collect)
 
     let timer: NodeJS.Timeout | undefined
+    const onAbort = (): void => {
+      aborted = true
+      killTree()
+      settle(null)
+    }
     const settle = (exitCode: number | null): void => {
       if (settled) return
       settled = true
       if (timer !== undefined) clearTimeout(timer)
-      resolvePromise({ exitCode, timedOut, durationMs: Date.now() - startedAt, output })
+      signal?.removeEventListener('abort', onAbort)
+      resolvePromise({ exitCode, timedOut, aborted, durationMs: Date.now() - startedAt, output })
     }
     timer = setTimeout(() => {
       timedOut = true
@@ -153,6 +167,7 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<Shel
       settle(null)
     }, timeoutMs)
     timer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
     child.on('error', (error) => {
       output = tail(`${output}${error.message}`)
       settle(null)
@@ -171,8 +186,13 @@ export async function runWorkspaceSetup(
   target: string,
   repoRoot: string,
   setup: WorkspaceSetup | undefined,
+  signal?: AbortSignal,
 ): Promise<WorkspaceSetupResult> {
   if (setup === undefined) return EMPTY_SETUP_RESULT
+  const cancelado = (command: string): WorkspaceError =>
+    new WorkspaceError('setup', `workspaceSetup cancelado antes de concluir: ${command}`, {
+      detail: 'o control plane esta encerrando; a worktree e descartada e nada e presumido',
+    })
 
   const linked: string[] = []
   const skipped: SetupLinkSkip[] = []
@@ -186,14 +206,16 @@ export async function runWorkspaceSetup(
   const defaultTimeout = setup.timeoutMs ?? DEFAULT_WORKSPACE_SETUP_TIMEOUT_MS
   for (const raw of setup.commands ?? []) {
     const command = normalizeSetupCommand(raw)
+    if (signal?.aborted === true) throw cancelado(command.run)
     const cwd = command.cwd === undefined ? target : resolve(target, command.cwd)
-    const outcome = await runShell(command.run, cwd, command.timeoutMs ?? defaultTimeout)
+    const outcome = await runShell(command.run, cwd, command.timeoutMs ?? defaultTimeout, signal)
     commands.push({
       run: command.run,
       exitCode: outcome.exitCode,
       durationMs: outcome.durationMs,
       timedOut: outcome.timedOut,
     })
+    if (outcome.aborted) throw cancelado(command.run)
     if (outcome.timedOut) {
       throw new WorkspaceError(
         'setup',

@@ -53,6 +53,7 @@ governança.
 | I12 | Run em `VERIFYING` tem mission gate em voo **ou** resultado de gate persistido |
 | I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem **exatamente um** orquestrador com o loop ligado **naquela instância** — ou recusa de adoção com motivo observável |
 | I14 | Para um `repoRoot` canônico existe **no máximo um** Control Plane Owner; qualquer outro processo é cliente ou tem a inicialização recusada |
+| I15 | Antes de um Control Plane Owner devolver a posse, **nenhum efeito** iniciado por ele — banco, artefato, worktree, branch, processo filho — permanece capaz de mutar o projeto; efeito que não para dentro do prazo **segura** a posse |
 
 I13 vale dentro de um processo, e é I14 que faz isso bastar: a posse do projeto é disputada
 antes de abrir o banco, e quem perde não chega às operações mutáveis. O mecanismo é uma
@@ -68,6 +69,12 @@ Três consequências que o código cobra:
   diagnóstico; a identidade estável é o `instanceId`.
 - **`control-plane.json` é descoberta, não posse.** Ausente, velho ou apagado, ele nunca cria
   um segundo dono.
+
+E o encerramento é uma ordem com nome (`shutdownControlPlane`, ADR-0014), a mesma para
+`SIGINT`/`SIGTERM`, `agentic serve`, `mission start` e o `stop()` do serviço: parar de
+aceitar → cancelar e drenar (com prazo) → colher integração e mission gate → fechar o banco →
+devolver a posse. `ControlPlaneService` (`start`/`stop`/`restart`/`status`) é a máquina de
+estados do processo que a CLI usa e a extensão vai usar; não é `RunStatus`.
 
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**

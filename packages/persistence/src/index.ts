@@ -50,6 +50,7 @@ export {
   RowDecodeError,
   SchemaVersionError,
   StateWithoutEventError,
+  WritesInFlightError,
 } from './errors.js'
 export {
   createEventStore,

@@ -45,7 +45,8 @@ export interface GateCommandRecord extends CommandResult {
   readonly error?: GateCommandError
 }
 
-export type GateSkipReason = 'FAIL_FAST'
+/** `FAIL_FAST`: um obrigatorio reprovou antes. `ABORTED`: o chamador cancelou o gate. */
+export type GateSkipReason = 'FAIL_FAST' | 'ABORTED'
 
 /** Comando declarado que nao rodou. Existe para o relatorio nao mentir sobre cobertura. */
 export interface SkippedGateCommand {
@@ -54,7 +55,10 @@ export interface SkippedGateCommand {
   readonly cwd: string
   readonly required: boolean
   readonly reason: GateSkipReason
-  /** Indice do comando obrigatorio que interrompeu a sequencia. */
+  /**
+   * Indice do comando que interrompeu a sequencia: o obrigatorio que reprovou, ou o ultimo
+   * que chegou a rodar antes do cancelamento (`-1` quando nenhum rodou).
+   */
   readonly after: number
 }
 
@@ -67,6 +71,11 @@ export interface GateRunRequest {
   readonly attemptId?: AttemptId
   /** Allowlist efetiva. Nunca amplia o que o arquivo versionado declarou. */
   readonly envAllow: readonly string[]
+  /**
+   * Cancelamento cooperativo (encerramento do control plane). O comando em execucao e
+   * encerrado como processo — SIGTERM, depois SIGKILL — e os seguintes nao chegam a rodar.
+   */
+  readonly signal?: AbortSignal
 }
 
 export interface GateRunResult extends GateExecution {

@@ -22,6 +22,8 @@ export interface RunGateInput {
   readonly attemptId?: AttemptId
   /** Diretorio relativo do run onde as saidas viram artefato. */
   readonly directory: string
+  /** Encerramento do control plane: o comando em curso e cancelado e o resultado descartado. */
+  readonly signal?: AbortSignal
 }
 
 export interface GateOutcome {
@@ -84,7 +86,18 @@ export async function runGate(input: RunGateInput): Promise<GateOutcome> {
       runId: input.runId,
       attemptId: input.attemptId,
       envAllow: gate.env,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
     })
+    // Gate cancelado nao e medicao: nao vira artefato nem execucao. O proximo dono refaz.
+    if (input.signal?.aborted === true) {
+      return {
+        failure: {
+          code: 'INTERRUPTED',
+          detail: `gate ${input.gateId} cancelado pelo encerramento do control plane`,
+        },
+        cwd: result.cwd,
+      }
+    }
     const execution: GateExecution = {
       id: result.id,
       gateId: result.gateId,

@@ -4,6 +4,7 @@ import type {
   AttemptId,
   Clock,
   DomainEvent,
+  GateExecution,
   GateId,
   IdGenerator,
   Integrator,
@@ -38,6 +39,8 @@ export interface OrchestratorStore {
   loadTaskRuns(id: RunId): Promise<TaskRun[]>
   loadAttempts(id: RunId, taskId?: TaskId): Promise<Attempt[]>
   listLocks(id: RunId): Promise<LockRow[]>
+  /** A execucao do MISSION gate pelo id persistido no run: e a segunda metade de I12. */
+  loadGateExecution(id: string): Promise<GateExecution | undefined>
   withTransaction<T>(work: (uow: TransactionalUnitOfWork) => Promise<T>): Promise<T>
 }
 
@@ -60,6 +63,8 @@ export interface MissionWorkspaceRequest {
   readonly runId: RunId
   readonly attemptId: AttemptId
   readonly missionId: MissionId
+  /** Cancelamento cooperativo do `workspaceSetup` no encerramento do control plane. */
+  readonly signal?: AbortSignal
 }
 
 /** O mission gate roda em worktree propria da branch da missao, nunca na ultima tentativa. */

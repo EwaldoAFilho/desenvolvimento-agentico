@@ -275,6 +275,35 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   pode cair nesse caminho por esquecimento. E o encerramento só devolve o projeto depois que os
   efeitos pararam — se os orquestradores não abandonarem, a posse fica onde está, porque
   entregar o projeto com loop andando é o dano de D4 voltando por um caminho de falha.
+- **Encerramento (I15):** devolver a posse é o **último** ato, e só acontece quando nenhum
+  efeito deste dono pode mais mutar o projeto. A ordem tem nome (`shutdownControlPlane`,
+  ADR-0014) e é a mesma para `SIGINT`/`SIGTERM`, `agentic serve`, `mission start` e o
+  `stop()` do serviço:
+
+  1. **parar de aceitar** — o plane recusa `open`, `createRun`, `approveMission`, `startRun`
+     e `adoptRecoverableRuns`; streams SSE são encerrados; a porta fecha; a descoberta sai;
+  2. **cancelar e drenar** — por orquestrador: timer desligado, ticks recusados, despacho
+     barrado; handles de agente cancelados (árvore inteira); gate e `workspaceSetup`
+     abortados por sinal; a **cadeia do tick** e **todos** os jobs esperados, inclusive os
+     que um tick em voo registrou depois do retrato inicial — com prazo;
+  3. **colher** — integração e mission gate que terminaram durante a espera são gravados
+     (o merge já está na branch; a medição já foi feita). Desfecho de agente, gate de task e
+     revisão são descartados: registrá-los iniciaria trabalho novo, e quem adota reconcilia;
+  4. **fechar** — escritas de artefato em voo terminam antes de o banco fechar;
+  5. **devolver** — `release()` devolve `false` se um escritor recusou fechar, e o
+     encerramento falha em vez de fingir.
+
+  Vencido o prazo com efeito vivo, `close` rejeita (`ShutdownTimeoutError`), o banco fica
+  aberto e a posse fica onde está. É o mal menor: a posse morre com o processo de qualquer
+  jeito, e um `close` seguinte tenta de novo.
+
+  A tentativa cujo desfecho foi descartado continua `RUNNING`/`REVIEW` no banco de
+  propósito: é exatamente o que a reconciliação do próximo dono encerra como `INTERRUPTED`
+  (1.4). Uma regra só, para o encerramento gracioso e para o `SIGKILL`.
+
+  O resultado do **mission gate persistido é lido** pelo próximo dono, não refeito
+  (`missionGateExecutionId` → `GateExecution`). Antes, o cache vivia só em memória e uma
+  queda entre gravar a execução e concluir o run gerava uma segunda execução (D12).
 - `COMPLETED`: `∀ task: status ∈ {DONE, SKIPPED}` ∧ mission gate `PASS` ∧ branch da missão
   consolidada. Uma task `CANCELLED` impede `COMPLETED` — o run termina `FAILED` com razão
   explícita. Concluir uma entrega com pedaço cancelado seria mentir no relatório.
@@ -299,3 +328,4 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
 | I12 | Run em `VERIFYING` tem execução de mission gate em voo **ou** resultado de gate persistido — nunca nenhum dos dois |
 | I13 | Com o control plane no ar, todo run em `RECOVERABLE_ACTIVE_RUN_STATUSES` tem exatamente um orquestrador vivo com o loop ligado **naquela instância** — ou uma recusa de adoção com motivo observável |
 | I14 | Para um `repoRoot` canônico existe no máximo **um** Control Plane Owner. Só ele abre `Orchestrator`, adota runs, reconcilia estado e despacha efeito; qualquer outro processo é cliente ou tem a inicialização recusada com o endereço do dono no motivo |
+| I15 | Antes de um Control Plane Owner devolver a posse, nenhum efeito operacional iniciado por ele — banco, artefato, worktree, branch, processo filho — permanece capaz de mutar o projeto. Efeito que não para dentro do prazo segura a posse; nunca a devolve em silêncio |

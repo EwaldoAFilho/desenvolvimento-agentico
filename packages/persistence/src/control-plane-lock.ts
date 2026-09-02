@@ -75,8 +75,13 @@ export interface ControlPlaneLease {
    * numa posse que atravessa varios planes (o `reopen` do harness e o caso real).
    */
   onRelease(hook: () => void): () => void
-  /** Idempotente. Falhar aqui nao tranca o projeto: o SO solta o lock no fim do processo. */
-  release(): void
+  /**
+   * Devolve o projeto. `true` = o lock do arquivo foi solto e outro processo pode assumir.
+   * `false` = algum escritor recusou fechar (efeito em voo, I15) e o lock CONTINUA com este
+   * processo — chame de novo quando o efeito terminar. Idempotente: depois de `true`, sempre
+   * `true`. Falhar aqui nao tranca o projeto: o SO solta o lock no fim do processo.
+   */
+  release(): boolean
 }
 
 export const OWNERSHIP_ALREADY_HELD = 'OWNERSHIP_ALREADY_HELD'
@@ -282,7 +287,7 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
        * Um gancho que falha nao pode impedir os outros nem segurar o lock: o que ele
        * protege e o banco DESTE processo, e o processo inteiro esta indo embora.
        */
-      release: (): void => {
+      release: (): boolean => {
         held = false
         /**
          * Escritor que NAO fechou impede a entrega do projeto. E o ponto todo.
@@ -307,8 +312,8 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
             algumFalhou = true
           }
         }
-        if (algumFalhou) return
-        if (!db.open) return
+        if (algumFalhou) return false
+        if (!db.open) return true
         // Fechar ja desfaz a transacao; o ROLLBACK explicito so torna a intencao legivel.
         try {
           db.prepare('ROLLBACK').run()
@@ -319,7 +324,9 @@ export function acquireControlPlaneOwnership(options: AcquireOwnershipOptions): 
           db.close()
         } catch {
           /* o SO solta o lock no fim do processo; a proxima chamada tenta de novo */
+          return false
         }
+        return true
       },
     },
   }

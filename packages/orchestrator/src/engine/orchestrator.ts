@@ -71,6 +71,7 @@ import {
   describeError,
   failureReasonOf,
   RunNotFoundError,
+  ShutdownTimeoutError,
   TaskNotFoundError,
 } from './errors.js'
 import { type EventContext, engineEvent, humanActor } from './events.js'
@@ -185,6 +186,49 @@ export interface DrainOptions {
   readonly maxTicks?: number
 }
 
+export interface AbandonOptions {
+  /**
+   * Prazo para os efeitos deste orquestrador pararem. Vencido o prazo com efeito vivo,
+   * `abandon` REJEITA com `ShutdownTimeoutError` — e quem chama nao devolve a posse (I15).
+   */
+  readonly graceMs?: number
+}
+
+/** Prazo padrao do `abandon`: processos de agente e gate recebem SIGTERM e depois SIGKILL em 2s+2s; git leva segundos. */
+export const DEFAULT_ABANDON_GRACE_MS = 30_000
+
+/**
+ * Mensagens que ainda sao COLHIDAS depois de `abandon` comecar.
+ *
+ * Integracao: o merge ja esta na branch da missao; registrar e a unica forma de o disco
+ * contar a verdade (D6). Mission gate: medicao concluida sobre um commit. Nenhuma das duas
+ * cria efeito novo ao ser registrada. As demais — desfecho de agente, gate de task, revisao —
+ * sao descartadas de proposito: registra-las levaria ao passo seguinte (gate, revisao,
+ * integracao), que e trabalho NOVO; o proximo dono reconcilia essas tentativas.
+ */
+const COLLECTABLE_AFTER_CLOSE: ReadonlySet<Message['kind']> = new Set<Message['kind']>([
+  'integration',
+  'mission-gate',
+])
+
+function withDeadline(promise: Promise<unknown>, deadline: number): Promise<boolean> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return Promise.resolve(false)
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), remaining)
+    void promise.then(
+      () => {
+        clearTimeout(timer)
+        resolve(true)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(true)
+      },
+    )
+  })
+}
+
 /** Teto do detalhe que entra na razao do run: diagnostico, nao despejo de log. */
 const MISSION_GATE_DETAIL_MAX = 300
 
@@ -248,6 +292,9 @@ export class Orchestrator {
   #closed = false
   #autoTick = false
   #timer: ReturnType<typeof setInterval> | undefined
+  /** Cancelamento cooperativo de gate, setup e processo: abortado UMA vez, no `abandon`. */
+  readonly #abort = new AbortController()
+  #abandoning: Promise<void> | undefined
 
   constructor(deps: EngineDeps, runId: RunId) {
     this.#deps = deps
@@ -284,11 +331,11 @@ export class Orchestrator {
     const interval = this.#deps.safetyIntervalMs ?? DEFAULT_SAFETY_INTERVAL_MS
     if (interval > 0 && this.#timer === undefined) {
       this.#timer = setInterval(() => {
-        void this.tick()
+        this.#kick()
       }, interval)
       this.#timer.unref?.()
     }
-    void this.tick()
+    this.#kick()
   }
 
   stop(): void {
@@ -298,25 +345,107 @@ export class Orchestrator {
   }
 
   /**
-   * Encerra o processo do control plane SEM presumir nada sobre o que estava em voo — e o
-   * que o teste de recovery exercita: o estado no banco continua RUNNING e a proxima
-   * abertura reconcilia.
+   * Encerra ESTE dono do run sem presumir nada sobre o que estava em voo (I15).
+   *
+   * Quando resolve, nenhum efeito deste orquestrador pode mais mutar o projeto: nem tick,
+   * nem processo de agente, nem gate, nem worktree, nem escrita. A ordem e a garantia:
+   *
+   * 1. Nada novo — timer desligado, ticks recusados, despacho barrado.
+   * 2. Cancelamento cooperativo do que e cancelavel: processos de agente (tree-kill via o
+   *    handle), gates e `workspaceSetup` (sinal de abort). Integracao NAO e cancelada: um
+   *    rebase pela metade e pior que um rebase inteiro, e ele leva segundos.
+   * 3. Espera a cadeia do tick E os efeitos assincronos — inclusive os que um tick em voo
+   *    registrou depois do retrato inicial. Com prazo: vencido, REJEITA e nao limpa nada,
+   *    para que o chamador saiba que ha efeito vivo e nao devolva a posse.
+   * 4. Colhe o que chegou e cujo registro nao cria efeito novo (integracao, mission gate).
+   *
+   * O estado das tentativas cujo desfecho foi descartado continua RUNNING/REVIEW no banco de
+   * proposito — e o que o proximo dono reconcilia como INTERRUPTED (STATE-MACHINES 1.4).
+   * Idempotente: chamadas concorrentes compartilham a mesma drenagem; uma que falhou pode
+   * ser repetida.
    */
-  async abandon(): Promise<void> {
+  abandon(options: AbandonOptions = {}): Promise<void> {
+    this.#abandoning ??= this.#abandon(options).catch((error: unknown) => {
+      this.#abandoning = undefined
+      throw error
+    })
+    return this.#abandoning
+  }
+
+  async #abandon(options: AbandonOptions): Promise<void> {
+    const graceMs = options.graceMs ?? DEFAULT_ABANDON_GRACE_MS
+    const deadline = Date.now() + graceMs
     this.stop()
     this.#closed = true
-    const handles = [...this.#inflight.values()].map((entry) => entry.handle)
-    for (const handle of handles) {
-      if (handle === undefined) continue
-      await handle.cancel('control plane encerrado').catch(() => undefined)
+    if (!this.#abort.signal.aborted) this.#abort.abort('control plane encerrando')
+    for (const entry of [...this.#inflight.values()]) {
+      if (entry.handle === undefined) continue
+      await entry.handle.cancel('control plane encerrado').catch(() => undefined)
     }
-    await Promise.allSettled([...this.#jobs])
+    if (!(await this.#settle(deadline))) {
+      throw new ShutdownTimeoutError({
+        runId: this.#runId,
+        graceMs,
+        pendingJobs: this.#jobs.size,
+        chainBusy: this.#chainBusy,
+        inflightAttempts: [...this.#inflight.keys()],
+      })
+    }
+    try {
+      await this.#collect()
+    } catch (error) {
+      this.#errors.push(error)
+    }
     this.#inflight.clear()
     this.#inbox = []
   }
 
+  /**
+   * Resolve `true` quando a cadeia do tick esta parada e nao ha job em voo — nem os que
+   * apareceram enquanto esperavamos. `false` se o prazo venceu antes disso.
+   */
+  async #settle(deadline: number): Promise<boolean> {
+    for (;;) {
+      const chain = this.#chain
+      const jobs = [...this.#jobs]
+      if (!(await withDeadline(Promise.allSettled([chain, ...jobs]), deadline))) return false
+      if (this.#jobs.size === 0 && this.#chain === chain) return true
+    }
+  }
+
+  /** Um tick esta em execucao ou enfileirado — usado so para o diagnostico do timeout. */
+  #chainBusy = false
+
+  /**
+   * Colhe, ja encerrado, os resultados que chegaram durante a espera e cujo registro NAO cria
+   * efeito novo (`COLLECTABLE_AFTER_CLOSE`). Roda na propria cadeia, como um tick — so que
+   * sem reconciliar, promover ou despachar.
+   */
+  async #collect(): Promise<void> {
+    if (!this.#inbox.some((message) => COLLECTABLE_AFTER_CLOSE.has(message.kind))) return
+    await this.#enqueue(async () => {
+      const state = await this.#load()
+      this.#status = state.run.status
+      if (isTerminalRunStatus(state.run.status)) return
+      await this.#drainInbox(state)
+      await this.#derive(state)
+      this.#status = state.run.status
+    })
+  }
+
   tick(): Promise<void> {
     return this.#enqueue(() => this.#runTick())
+  }
+
+  /**
+   * Tick disparado por evento ou timer. A rejeicao vai para `errors` em vez de virar
+   * `unhandledRejection`: um `#load` que falha (banco fechado no meio de um encerramento,
+   * run apagado) derrubava o processo inteiro por um tick que ninguem esperava.
+   */
+  #kick(): void {
+    this.tick().catch((error: unknown) => {
+      this.#errors.push(error)
+    })
   }
 
   /** Dirige o loop ate nao haver mais trabalho pendente. Usado pela CLI e pelos testes. */
@@ -342,11 +471,16 @@ export class Orchestrator {
   }
 
   #enqueue<T>(work: () => Promise<T>): Promise<T> {
+    this.#chainBusy = true
     const result = this.#chain.then(work)
-    this.#chain = result.then(
+    const chain = result.then(
       () => undefined,
       () => undefined,
     )
+    this.#chain = chain
+    void chain.then(() => {
+      if (this.#chain === chain) this.#chainBusy = false
+    })
     return result
   }
 
@@ -364,14 +498,15 @@ export class Orchestrator {
   }
 
   #push(message: Message): void {
-    if (this.#closed) return
+    // Encerrando, so entra o que `abandon` ainda vai colher; o resto e descartado.
+    if (this.#closed && !COLLECTABLE_AFTER_CLOSE.has(message.kind)) return
     this.#inbox.push(message)
     this.#requestTick()
   }
 
   /** Tick por evento: comando humano e resultado de trabalho assincrono acordam o loop. */
   #requestTick(): void {
-    if (this.#autoTick && !this.#closed) void this.tick()
+    if (this.#autoTick && !this.#closed) this.#kick()
   }
 
   #nextRetryDelay(): number | undefined {
@@ -394,8 +529,13 @@ export class Orchestrator {
     await this.#loadGrants()
 
     await this.#reconcile(state)
+    // Encerramento pedido no meio do tick: o que falta e trabalho NOVO, e para aqui. O que
+    // ja foi gravado fica; o `abandon` colhe o que couber.
+    if (this.#closed) return
     await this.#drainInbox(state)
+    if (this.#closed) return
     await this.#promote(state)
+    if (this.#closed) return
     await this.#dispatch(state)
     await this.#derive(state)
     this.#status = state.run.status
@@ -570,6 +710,7 @@ export class Orchestrator {
     while (this.#inbox.length > 0) {
       const message = this.#inbox.shift()
       if (message === undefined) break
+      if (this.#closed && !COLLECTABLE_AFTER_CLOSE.has(message.kind)) continue
       const taskId = this.#taskOfMessage(message)
       await this.#guard(() => this.#handle(state, message), taskId)
     }
@@ -1486,6 +1627,7 @@ export class Orchestrator {
   // ------------------------------------ (e, f) decisoes do scheduler e despacho
 
   async #dispatch(state: TickState): Promise<void> {
+    if (this.#closed) return
     if (state.run.status !== 'RUNNING' && state.run.status !== 'PAUSED') return
     const specs = new Map<TaskId, TaskSpec>()
     for (const task of state.run.graph.tasks) specs.set(task.id, task)
@@ -1506,6 +1648,7 @@ export class Orchestrator {
       now: this.#deps.clock.now(),
     }
     for (const decision of select(input)) {
+      if (this.#closed) return
       await this.#guard(() => this.#applyDecision(state, decision), decision.taskId)
     }
   }
@@ -1563,6 +1706,7 @@ export class Orchestrator {
     const attemptNumber = taskRun.attemptCount + 1
     const attemptId = toAttemptId(`${spec.id}-a${attemptNumber}-${this.#deps.ids.attemptId()}`)
 
+    if (this.#closed) return
     let workspace: Workspace
     try {
       workspace = await this.#deps.workspaces.acquire({
@@ -1574,6 +1718,7 @@ export class Orchestrator {
         attemptNumber,
         touches: spec.touches,
         denyPaths: denyScopes(state.run.policies.denyPaths),
+        signal: this.#abort.signal,
       })
     } catch (error) {
       this.#dispatchCooldown.set(spec.id, now.getTime() + DISPATCH_COOLDOWN_MS)
@@ -1594,6 +1739,13 @@ export class Orchestrator {
           ),
         ],
       })
+      return
+    }
+
+    // Encerramento chegou durante o `acquire`: nada foi gravado ainda, entao a worktree
+    // volta e a task continua READY — como se o despacho nunca tivesse comecado.
+    if (this.#closed) {
+      await this.#deps.workspaces.release(workspace, 'discard').catch(() => undefined)
       return
     }
 
@@ -1705,6 +1857,13 @@ export class Orchestrator {
         env: this.#deps.agentEnv ?? {},
       })
       inflight.handle = handle
+      // O encerramento chegou enquanto `start()` estava em voo: o handle nasceu DEPOIS do
+      // cancelamento do `abandon`, entao e cancelado aqui — e nao observado. A tentativa
+      // fica RUNNING no banco para o proximo dono reconciliar (I15).
+      if (this.#closed) {
+        await handle.cancel('control plane encerrando').catch(() => undefined)
+        return
+      }
       // Responde "qual processo executou?" sem depender de log (DOMAIN-MODEL 5).
       inflight.attempt = {
         ...inflight.attempt,
@@ -1929,6 +2088,13 @@ export class Orchestrator {
         timeoutMs: state.run.policies.attemptTimeoutMs,
         env: this.#deps.agentEnv ?? {},
       })
+      inflight.handle = handle
+      // Mesma janela do executor: revisor nascido durante o encerramento e cancelado, nao
+      // observado. A task fica REVIEW no banco para o proximo dono reconciliar (I15).
+      if (this.#closed) {
+        await handle.cancel('control plane encerrando').catch(() => undefined)
+        return
+      }
       this.#track(this.#afterReviewer(inflight, handle))
     } catch (error) {
       this.#push({
@@ -2003,6 +2169,8 @@ export class Orchestrator {
   // ------------------------------------------------- trabalho assincrono
 
   #startTaskGate(inflight: Inflight): void {
+    // Encerrando: gate e trabalho novo. A task fica VERIFYING para o proximo dono.
+    if (this.#closed) return
     const gateId = this.#settingsOf(inflight.spec).gate
     if (gateId === undefined) {
       this.#push({ kind: 'gate', attemptId: inflight.attempt.id })
@@ -2021,6 +2189,7 @@ export class Orchestrator {
           cwd: inflight.workspace.path,
           attemptId: inflight.attempt.id,
           directory: attemptDirectory(inflight.spec.id, inflight.attempt.attemptNumber),
+          signal: this.#abort.signal,
         })
         this.#push({
           kind: 'gate',
@@ -2033,6 +2202,9 @@ export class Orchestrator {
   }
 
   #startIntegration(inflight: Inflight): void {
+    // Encerrando: integrar e trabalho novo (e irreversivel). A task fica INTEGRATING sem
+    // merge feito; o proximo dono a reconcilia.
+    if (this.#closed) return
     this.#track(
       (async (): Promise<void> => {
         try {
@@ -2055,6 +2227,9 @@ export class Orchestrator {
    */
   #startMissionGate(): void {
     if (this.#missionGateStarted) return
+    // Encerrando: o run fica VERIFYING sem gate em voo e sem resultado — exatamente o estado
+    // que a adocao do proximo dono sabe retomar (I12/I13).
+    if (this.#closed) return
     this.#missionGateStarted = true
     const gateId = this.#deps.missionGateId
     if (gateId === undefined) {
@@ -2074,6 +2249,7 @@ export class Orchestrator {
                   runId: this.#runId,
                   attemptId,
                   missionId: this.#deps.mission.id,
+                  signal: this.#abort.signal,
                 })
           if (workspace === undefined) {
             this.#push({ kind: 'mission-gate' })
@@ -2088,13 +2264,19 @@ export class Orchestrator {
             scope: 'mission',
             cwd: workspace.path,
             directory: 'mission',
+            signal: this.#abort.signal,
           })
+          // Cancelado pelo encerramento: nao e medicao, nao vira resultado. Se virasse, o
+          // `abandon` colheria um ERROR e o run terminaria FAILED por um gate que ninguem
+          // reprovou. O proximo dono refaz o gate do zero (I12).
+          if (this.#abort.signal.aborted) return
           this.#push({
             kind: 'mission-gate',
             execution: outcome.execution,
             failure: outcome.failure,
           })
         } catch (error) {
+          if (this.#abort.signal.aborted) return
           // I12: adquirir a worktree da missao pode falhar (branch ja em check-out, disco,
           // setup). Sem esta mensagem a excecao morreria em `#errors` — memoria que nada le
           // — e, com `#missionGateStarted` ja travado, NENHUM tick tentaria de novo: o run
@@ -2137,6 +2319,19 @@ export class Orchestrator {
     }
 
     if (state.run.status !== 'VERIFYING') return
+    if (this.#missionGate === undefined) {
+      // I12, segunda metade: resultado PERSISTIDO e usado, nao refeito. Depois de um
+      // reinicio o cache em memoria esta vazio, mas o run ja aponta para a execucao que
+      // mediu a entrega — refazer o gate aqui gravaria uma segunda execucao (D12).
+      const persistedId = state.run.missionGateExecutionId
+      if (persistedId !== undefined) {
+        const persisted = await this.#deps.store.loadGateExecution(persistedId)
+        if (persisted !== undefined) {
+          this.#missionGate = { status: persisted.status, executionId: persisted.id }
+          this.#missionGateStarted = true
+        }
+      }
+    }
     if (this.#missionGate === undefined) {
       this.#startMissionGate()
       if (this.#missionGate === undefined) return

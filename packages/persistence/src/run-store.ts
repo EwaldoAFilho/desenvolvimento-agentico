@@ -207,6 +207,20 @@ export class SqliteRunStore implements RunStore {
     return { result, events: emitted }
   }
 
+  /**
+   * Uma execucao de gate pelo id — a do MISSION gate, que nao pertence a tentativa nenhuma.
+   *
+   * I12 diz que um run em VERIFYING tem gate em voo OU resultado persistido. A segunda
+   * metade so vale se o resultado persistido for LIDO depois de um reinicio; sem esta
+   * consulta o proximo dono refazia o gate e gravava uma segunda execucao.
+   */
+  loadGateExecution(id: string): Promise<GateExecution | undefined> {
+    const row = prepareCached(this.db, 'SELECT * FROM gate_executions WHERE id = ?').get(id) as
+      | GateExecutionRow
+      | undefined
+    return Promise.resolve(row === undefined ? undefined : rowToGateExecution(row))
+  }
+
   #hydrateAttempt(row: AttemptRow): Attempt {
     const gateRows = prepareCached(
       this.db,

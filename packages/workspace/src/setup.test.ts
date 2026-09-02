@@ -111,6 +111,44 @@ describe('runWorkspaceSetup', () => {
     expect((erro as WorkspaceError).message).toContain('tempo')
   })
 
+  it('sinal de abort cancela o comando em voo, mata a arvore e vira WORKSPACE_ERROR', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const controller = new AbortController()
+    const inicio = Date.now()
+    const pending = runWorkspaceSetup(
+      destino,
+      repo.root,
+      { commands: ['node -e "setTimeout(() => {}, 30000)"', 'node -e "process.exit(0)"'] },
+      controller.signal,
+    )
+    setTimeout(() => controller.abort('encerrando'), 150)
+    const error = await pending.then(
+      () => undefined,
+      (cause: unknown) => cause,
+    )
+    expect(isWorkspaceError(error)).toBe(true)
+    expect((error as WorkspaceError).message).toContain('cancelado')
+    expect(Date.now() - inicio).toBeLessThan(10_000)
+  })
+
+  it('sinal ja abortado: nenhum comando chega a rodar', async () => {
+    repo = await createTestRepo()
+    const destino = await target()
+    const controller = new AbortController()
+    controller.abort()
+    const marca = join(destino, 'rodou')
+    await expect(
+      runWorkspaceSetup(
+        destino,
+        repo.root,
+        { commands: [`node -e "require('node:fs').writeFileSync(${JSON.stringify(marca)}, 'x')"`] },
+        controller.signal,
+      ),
+    ).rejects.toThrow('cancelado')
+    await expect(lstat(marca)).rejects.toThrow()
+  })
+
   it('normaliza comando em string', () => {
     expect(normalizeSetupCommand('npm ci')).toEqual({ run: 'npm ci' })
     expect(normalizeSetupCommand({ run: 'npm ci', cwd: 'app' })).toEqual({

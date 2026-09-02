@@ -5,6 +5,7 @@ import {
   type FileArtifactStore,
 } from './artifact-store.js'
 import { type DatabaseHandle, type DatabaseMode, openDatabase } from './database.js'
+import { WritesInFlightError } from './errors.js'
 import { createEventStore, type SqliteEventStore } from './event-store.js'
 import { ChangeNotifier } from './notifier.js'
 import { createQueries, type SqliteQueries } from './queries.js'
@@ -43,6 +44,15 @@ export interface Persistence {
   readonly artifacts: FileArtifactStore
   readonly queries: SqliteQueries
   readonly baseDir: string
+  /** Escritas de artefato que ja comecaram e ainda nao terminaram. */
+  readonly pendingWrites: number
+  /** Espera as escritas em voo terminarem. Quem vai fechar chama isto antes. */
+  settle(): Promise<void>
+  /**
+   * Fecha a conexao. Com escrita de artefato em voo, RECUSA (`WritesInFlightError`): fechar
+   * o banco por baixo de um `writeFile` pendente deixaria arquivo sem linha e, pior, um
+   * efeito deste processo ainda vivo depois de a posse ser devolvida (I15).
+   */
   close(): void
 }
 
@@ -65,15 +75,22 @@ export function openPersistence(options: OpenPersistenceOptions = {}): Persisten
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   })
 
+  const artifacts = createArtifactStore(database, baseDir, options.artifacts)
+
   return {
     database,
     runs: createRunStore(database, { notifier }),
     events,
-    artifacts: createArtifactStore(database, baseDir, options.artifacts),
+    artifacts,
     queries: createQueries(database),
     baseDir,
     mode,
+    get pendingWrites(): number {
+      return artifacts.pending
+    },
+    settle: () => artifacts.settle(),
     close: (): void => {
+      if (artifacts.pending > 0) throw new WritesInFlightError(artifacts.pending)
       events.close()
       database.close()
     },

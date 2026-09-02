@@ -37,6 +37,14 @@ function errorCode(error: unknown): string | null {
   return null
 }
 
+/** O motivo do sinal vira o `cancelReason` do relato; sem motivo, uma frase honesta. */
+function abortReasonOf(signal: AbortSignal): string {
+  const reason: unknown = signal.reason
+  if (typeof reason === 'string' && reason.length > 0) return reason
+  if (reason instanceof Error && reason.message.length > 0) return reason.message
+  return 'cancelado por sinal de abort'
+}
+
 function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
 }
@@ -67,6 +75,7 @@ class ManagedProcess implements RunningProcess {
   #observedSignal: string | null = null
   #timeoutTimer: NodeJS.Timeout | null = null
   #closeTimer: NodeJS.Timeout | null = null
+  #desligarAbort: (() => void) | null = null
 
   constructor(spec: RunSpec, deps: RuntimeDeps = {}) {
     this.#now = deps.now ?? Date.now
@@ -82,6 +91,15 @@ class ManagedProcess implements RunningProcess {
     const limit = spec.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
     this.#out = new StreamSink(limit)
     this.#err = new StreamSink(limit)
+
+    // Sinal ja abortado: nao ha o que iniciar. O processo nunca existe e o relato diz por que.
+    const signal = spec.signal
+    if (signal?.aborted === true) {
+      this.#cancelled = true
+      this.#cancelReason = abortReasonOf(signal)
+      this.#settle(null, null)
+      return
+    }
 
     const spawnFn = deps.spawn ?? defaultSpawn
     let child: ChildProcessLike
@@ -100,6 +118,13 @@ class ManagedProcess implements RunningProcess {
     this.#child = child
     this.#pid = typeof child.pid === 'number' ? child.pid : null
     this.#wire(child, spec)
+    if (signal !== undefined) {
+      const onAbort = (): void => {
+        void this.cancel(abortReasonOf(signal))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      this.#desligarAbort = () => signal.removeEventListener('abort', onAbort)
+    }
   }
 
   get pid(): number | null {
@@ -273,6 +298,8 @@ class ManagedProcess implements RunningProcess {
     if (this.#status !== null) return
     if (this.#timeoutTimer !== null) clearTimeout(this.#timeoutTimer)
     if (this.#closeTimer !== null) clearTimeout(this.#closeTimer)
+    this.#desligarAbort?.()
+    this.#desligarAbort = null
     this.#timeoutTimer = null
     this.#closeTimer = null
     this.#out.end()

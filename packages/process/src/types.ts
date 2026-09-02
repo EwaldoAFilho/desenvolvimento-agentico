@@ -9,6 +9,11 @@ export interface RunSpec {
   timeoutMs?: number
   stdin?: string
   maxOutputBytes?: number
+  /**
+   * Cancelamento cooperativo de fora: abortar o sinal e o mesmo que `cancel(reason)`.
+   * Sinal JA abortado na criacao nao chega a iniciar processo nenhum.
+   */
+  signal?: AbortSignal
 }
 
 /** Motivo estruturado para um processo que nunca chegou a existir (ENOENT, EACCES...). */

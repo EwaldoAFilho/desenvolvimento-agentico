@@ -34,6 +34,49 @@ export class CommandRefusedError extends OrchestratorError {
   }
 }
 
+/**
+ * O encerramento excedeu o prazo com efeito ainda em voo (I15).
+ *
+ * Quem recebe isto NAO devolve a posse: um projeto que continua possuido por um processo
+ * que ainda esta terminando e o mal menor — a posse morre com o processo de qualquer jeito,
+ * e entregar o projeto com efeito vivo e o dano de D4 voltando por um caminho de falha.
+ */
+export class ShutdownTimeoutError extends OrchestratorError {
+  readonly runId: string
+  readonly graceMs: number
+  readonly pendingJobs: number
+  readonly chainBusy: boolean
+  readonly inflightAttempts: readonly string[]
+
+  constructor(input: {
+    readonly runId: string
+    readonly graceMs: number
+    readonly pendingJobs: number
+    readonly chainBusy: boolean
+    readonly inflightAttempts: readonly string[]
+  }) {
+    const what = [
+      input.chainBusy ? 'tick em execucao' : undefined,
+      input.pendingJobs > 0 ? `${input.pendingJobs} efeito(s) assincrono(s)` : undefined,
+      input.inflightAttempts.length > 0
+        ? `tentativas ${input.inflightAttempts.join(', ')}`
+        : undefined,
+    ]
+      .filter((part) => part !== undefined)
+      .join('; ')
+    super(
+      'SHUTDOWN_TIMEOUT',
+      `run ${input.runId}: encerramento excedeu ${input.graceMs}ms com efeito ainda em voo ` +
+        `(${what}); a posse do projeto NAO e devolvida enquanto isso durar (I15)`,
+    )
+    this.runId = input.runId
+    this.graceMs = input.graceMs
+    this.pendingJobs = input.pendingJobs
+    this.chainBusy = input.chainBusy
+    this.inflightAttempts = input.inflightAttempts
+  }
+}
+
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
