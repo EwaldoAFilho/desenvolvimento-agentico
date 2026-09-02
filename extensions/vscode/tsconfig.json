@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "baseUrl": "../..",
+    "paths": {
+      "@agentic/schemas": ["./packages/schemas/src/index.ts"],
+      "@agentic/server": ["./apps/server/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "media/**/*"],
+  "exclude": ["**/dist/**", "**/node_modules/**", "**/__fixtures__/**"]
+}

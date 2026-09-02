@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Agentic: Extension Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode",
+        "${workspaceFolder}"
+      ],
+      "outFiles": ["${workspaceFolder}/extensions/vscode/dist/**/*.js"],
+      "preLaunchTask": "agentic: build extension"
+    }
+  ]
+}

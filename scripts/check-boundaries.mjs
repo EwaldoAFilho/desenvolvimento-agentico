@@ -62,7 +62,7 @@ function stripNoise(source) {
 export function checkBoundaries(rootDir) {
   const violations = []
   for (const [pkg, allowed] of Object.entries(ALLOWED)) {
-    const base = ['packages', 'apps']
+    const base = ['packages', 'apps', 'extensions']
       .map((d) => join(rootDir, d, pkg))
       .find((p) => {
         try {

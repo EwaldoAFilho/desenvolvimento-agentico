@@ -50,6 +50,11 @@ export const ALLOWED = {
   ],
   server: ['domain', 'schemas', 'compiler', 'persistence', 'orchestrator', 'graph'],
   web: ['schemas'],
+  // DA-VSCODE-MVP-001: a extensao e CLIENTE do control plane. Ela pode conhecer o CONTRATO
+  // (tipos dos DTOs em `schemas` e do servidor) e nada mais; `extensions/vscode/src/**`
+  // importa esses pacotes apenas como `import type`, e o teste de bundle prova que nenhum
+  // codigo do core entra em `dist/extension.js`.
+  vscode: ['schemas', 'server', 'web'],
 }
 
 /** Pacotes que precisam ser puros: nenhum modulo de plataforma. */

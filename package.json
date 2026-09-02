@@ -10,7 +10,8 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "extensions/*"
   ],
   "bin": {
     "agentic": "apps/cli/bin/agentic.mjs"
@@ -28,7 +29,10 @@
     "test:browser": "playwright test",
     "test:browser:ui": "playwright test --ui",
     "verify": "npm run lint && npm run typecheck && npm run test",
-    "dev:web": "npm run dev -w @agentic/web"
+    "dev:web": "npm run dev -w @agentic/web",
+    "vscode:build": "npm run build -w desenvolvimento-agentico-vscode",
+    "vscode:package": "npm run package -w desenvolvimento-agentico-vscode",
+    "vscode:test": "vitest run --project vscode-extension"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.0",

@@ -1,0 +1,8 @@
+**
+!dist/**
+!resources/**
+!media/*.css
+!README.md
+!LICENSE
+!CHANGELOG.md
+!package.json
