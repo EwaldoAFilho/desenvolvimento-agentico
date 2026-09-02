@@ -578,3 +578,8 @@ abrir essa task no meu editor", e um futuro botão *Open Workspace in VS Code* �
 UI sobre um dado que já existe — não uma mudança de arquitetura. O princípio: a plataforma
 orquestra agentes via runtime local, **não impede** o desenvolvedor de abrir o editor e
 trabalhar na mesma árvore.
+
+**Atualização (DA-VSCODE-MVP-001, ADR-0015):** a integração com editor existe como
+**cliente** — `extensions/vscode` detecta o projeto, descobre ou sobe o control plane e lê
+por HTTP; não contém orquestrador, servidor nem banco, e abrir arquivo/diff continua sendo
+UI sobre dado que já existe. Nada desta seção mudou de lado: o domínio segue intocado.

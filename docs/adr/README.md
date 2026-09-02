@@ -19,3 +19,4 @@ Só decisões relevantes: não criamos ADR para escolha trivial.
 | [0012](ADR-0012-process-e-agent-runtime.md) | Process Runtime e Local Agent Runtime como pacotes próprios | Aceita |
 | [0013](ADR-0013-ownership-do-control-plane.md) | Posse do projeto por lock SQLite dedicado (I14) | Aceita |
 | [0014](ADR-0014-ciclo-de-vida-do-servico.md) | Ciclo de vida do serviço: encerramento drena antes de devolver a posse (I15) | Aceita |
+| [0015](ADR-0015-extensao-vscode-como-cliente.md) | Extensão VS Code como cliente do control plane (não contém o core) | Aceita |

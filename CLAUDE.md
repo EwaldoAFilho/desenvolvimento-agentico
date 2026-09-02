@@ -130,3 +130,4 @@ declaradas no domínio, implementadas fora. A regra é verificada por lint — n
 | Worktree, diff, escopo, merge | `packages/workspace/` |
 | Integrar um agente novo | `packages/providers/` (implemente a porta + passe na suíte de contrato; não toque no domínio) |
 | Tela do DAG | `apps/web/` |
+| Extensão VS Code (cliente do control plane) | `extensions/vscode/` (ADR-0015; não contém o core) |

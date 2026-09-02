@@ -198,6 +198,14 @@ agentic run report --md             # relatório final com caminho crítico real
 
 ---
 
+### Dentro do VS Code
+
+A extensão em [`extensions/vscode`](extensions/vscode/README.md) faz a mesma jornada sem
+terminal: abrir a pasta → **Agentic** na Activity Bar → projeto detectado → *Start* (reutiliza
+o control plane que já existir) → providers e missions na sidebar → *Open Agentic* abre o
+painel. `npm run vscode:package` gera o VSIX. A extensão é cliente do control plane e não
+contém o orquestrador (ADR-0015).
+
 ## Stack
 
 Escolhida para ser previsível e local, não para impressionar.
