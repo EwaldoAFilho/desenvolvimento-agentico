@@ -185,8 +185,9 @@ nenhum outro processo consegue publicar antes de ele ser solto.
   container por um sistema de arquivos que não propaga locks pode render dois donos — é
   limite documentado, não mecanismo alternativo.
 - **A garantia é por diretório de estado.** Dois `repoRoot` distintos apontando para o mesmo
-  `.agentic` disputam a mesma posse (correto); um `repoRoot` cujo `state.db` foi movido por
-  `databasePath` sai da chave (não acontece no uso normal).
+  `.agentic` disputam a mesma posse (correto). A saída por `databasePath` que este parágrafo
+  registrava foi **removida** em 003C: o banco é sempre `<runtimeDir>/state.db`, derivado, e
+  não há mais como um `repoRoot` sair da própria chave.
 
 ## Correção de 003B — a chave existia, mas não era a mesma para todos
 
@@ -241,8 +242,8 @@ Três achados, todos legítimos, todos fechados na mesma fatia:
   `runtimeDir`, e depois que esse diretório virou a chave de posse, duas chamadas para o
   mesmo `repoRoot` com diretórios diferentes venciam **duas** posses. A opção foi
   **removida**: o diretório de estado sai de `projectIdentityOf` e de mais lugar nenhum.
-  `databasePath` continua sendo a única saída declarada da chave (e continua não
-  acontecendo no uso normal).
+  `databasePath` continuou por um tempo como a única saída declarada da chave — e foi
+  removido em 003C, junto com o `baseDir` de `createControlPlane`.
 - **A prova de identidade tem de viajar com o comando.** Sondar o `/api/health` antes e
   mandar o POST depois deixa uma janela: o dono encerra, outro control plane — de outro
   repositório — reaproveita a porta, e o comando muta o run errado. Agora cada requisição da
@@ -255,8 +256,8 @@ Três achados, todos legítimos, todos fechados na mesma fatia:
   `plane.persistence.runs.createRun` chegava ao banco. Sem lease, os quatro caminhos de
   escrita da persistência (`runs.createRun`, `runs.withTransaction`, `events.append`,
   `artifacts.write`) passam a recusar; a leitura fica inteira. Isso **não** é a fatia do modo
-  `readonly` da conexão (D9, ainda em aberto): a conexão continua `readwrite`, o que muda é a
-  capacidade exposta.
+  `readonly` da conexão (D9): a conexão continua `readwrite`, e o que muda é a capacidade
+  exposta. *Esse era exatamente o defeito de forma que 003C viria fechar — ver abaixo.*
 
 ### O que a segunda revisão independente cobrou
 
@@ -281,3 +282,80 @@ Três achados, os três reais, os três fechados:
 falhasse, este processo já não poderia agir (nenhuma mutação passa com `held: false`), mas o
 lock de arquivo continuaria preso até o processo morrer — atrasando o *takeover*, nunca
 criando um segundo dono. É o mesmo modelo de sempre: a posse morre com o processo.
+
+## Correção de 003C — a fronteira é a conexão, não o espelho
+
+A revisão de promoção da 003B encontrou quatro furos, e o padrão entre eles importava mais
+que qualquer um deles:
+
+1. uma função capturada antes de `lease.release()` continuava escrevendo;
+2. a reflexão (`Reflect.get`, descriptor) alcançava capacidade que o acesso normal negava;
+3. `createControlPlane` conferia o lease contra o `baseDir` que o **chamador** escolheu, e
+   não contra o diretório que o **repositório** determina;
+4. `databasePath` movia o `state.db` mutável para fora do diretório que a posse protege.
+
+Os dois primeiros não são bugs independentes: são a mesma coisa dita duas vezes. Uma
+fronteira construída **escondendo capacidade** — Proxy, allowlist, trap de propriedade —
+perde por construção, porque quem já tem a referência não precisa reencontrá-la. Fechar
+*reflection tricks* um a um é uma corrida sem linha de chegada.
+
+### A decisão
+
+**Sem posse não existe conexão capaz de escrever.**
+
+`createControlPlane` abre `readwrite` quando há lease vivo **deste** projeto, e `readonly` em
+qualquer outro caso. `readonly` não é convenção: é `better-sqlite3` abrindo o arquivo com
+`SQLITE_OPEN_READONLY`, e é o próprio SQLite que recusa `INSERT`, `UPDATE`, `DELETE`,
+`CREATE TABLE` e transação de escrita. Não há capacidade escondida para a reflexão encontrar,
+porque não há nada escondido — há uma conexão que não sabe escrever.
+
+Três consequências:
+
+- **O lease revoga o escritor.** `ControlPlaneLease.onRelease` amarra o tempo de vida da
+  conexão mutável ao da posse, e `release()` fecha os escritores **antes** de soltar o lock do
+  arquivo. No instante em que outro processo pode virar dono, o escritor deste já fechou.
+  É o que mata a função capturada: não adianta ter a referência quando o banco saiu de baixo
+  dela. O método é **obrigatório** no tipo — um lease que não sabe revogar não pode autorizar
+  escrita, e o compilador cobra isso de todo produtor de lease, inclusive de dublê de teste.
+- **Uma identidade só, derivada.** `baseDir` e `databasePath` saem da API de produção
+  (`ControlPlaneConfig`, `OpenPersistenceOptions`, `ServerConfig`). O estado sai de
+  `runtimeDirOf(repoRoot)`, que desceu para `@agentic/persistence` porque `@agentic/
+  orchestrator` não pode importar um app; `projectIdentityOf` reexporta a **mesma** função.
+  Nenhum call site de produção usava `databasePath`: era escape hatch puro.
+- **Ler não inicializa projeto.** `readonly` sobre um `state.db` inexistente levanta
+  `DatabaseNotInitializedError` em vez de criar o banco — criar e migrar são escritas, e
+  escrita pertence a quem possui o projeto. `doctor` distingue *"não inicializado"* (zero
+  runs, fato conhecido) de *"não apurado"* (dúvida), para não voltar a exibir a contabilidade
+  em memória do processo.
+
+O espelho da 003B (`comPosse`, `persistenciaSobPosse` e as allowlists) foi **removido**: duas
+pseudo-fronteiras em conflito são piores que uma real. A fachada mantém `exigirPosse`, agora
+por um motivo declarado e diferente — dar a **frase** que explica o que fazer, em vez de
+deixar `SQLITE_READONLY` vazar do driver para o usuário.
+
+### Medido, não assumido
+
+WAL era o risco não óbvio: um leitor `readonly` precisa alcançar o `-shm` para achar o
+snapshot, e o `-shm` só nasce de uma conexão que escreve. Medido contra um control plane de
+verdade em outro processo:
+
+| Estado | `-wal` / `-shm` | Leitura `readonly` |
+| --- | --- | --- |
+| dono vivo, escrevendo | presentes | passa, vê `journal_mode = wal` |
+| dono encerrado (close limpo) | apagados no checkpoint | passa |
+| dono encerrado por SIGTERM | costumam sobrar | passa |
+
+Três leitores mantidos abertos durante uma escrita do dono não produziram `SQLITE_BUSY`, não
+criaram segundo banco e não disputaram posse.
+
+### Limites que continuam declarados
+
+- O threat model não mudou: **instâncias legítimas do produto**, não código hostil executando
+  dentro do processo dono. Quem já roda no processo do dono tem o handle mutável por
+  definição, e nenhuma fronteira em JavaScript mudaria isso.
+- Depois de `release()`, o plane não lê **nem** escreve — a conexão fechou. É deliberado, e é
+  o preço exato da propriedade: ou a conexão morre junto com a posse, ou a capacidade
+  sobrevive a ela. Não custa nada em produção, onde a ordem já era essa (`withPlane` fecha no
+  `finally` antes do `release`; `shutdownControlPlane` para os efeitos antes de devolver o
+  projeto). Quem quiser ler depois abre um plane de leitura — o que é mais honesto, porque a
+  essa altura o dono do banco pode ser outro processo.
