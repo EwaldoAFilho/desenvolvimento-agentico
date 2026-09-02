@@ -32,7 +32,8 @@
     "dev:web": "npm run dev -w @agentic/web",
     "vscode:build": "npm run build -w desenvolvimento-agentico-vscode",
     "vscode:package": "npm run package -w desenvolvimento-agentico-vscode",
-    "vscode:test": "vitest run --project vscode-extension"
+    "vscode:test": "vitest run --project vscode-extension",
+    "vscode:test:integration": "npm run test:integration -w desenvolvimento-agentico-vscode"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.0",

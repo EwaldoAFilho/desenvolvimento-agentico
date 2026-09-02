@@ -214,7 +214,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project vscode-extension",
     "vscode:prepublish": "npm run build",
-    "package": "npm run build && vsce package --no-dependencies --out ../../desenvolvimento-agentico-vscode-0.1.0-alpha.1.vsix"
+    "package": "npm run build && vsce package --no-dependencies --out ../../desenvolvimento-agentico-vscode-0.1.0-alpha.1.vsix",
+    "test:integration": "node test/run.mjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.134.0",

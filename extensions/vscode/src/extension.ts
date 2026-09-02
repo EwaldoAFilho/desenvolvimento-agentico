@@ -16,7 +16,12 @@ import { StatusTreeProvider } from './vscode/status-view.js'
  */
 let host: AgenticHost | undefined
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+/** API devolvida por `activate`: o teste de integracao (VS Code real) le o estado por aqui. */
+export interface AgenticExtensionApi {
+  readonly host: AgenticHost
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<AgenticExtensionApi> {
   const log = new AgenticLog()
   context.subscriptions.push(log)
   host = new AgenticHost(log)
@@ -31,6 +36,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerCommands(context, host, panel, log)
   log.info('extensao ativada')
   await host.initialize()
+  return { host }
 }
 
 export async function deactivate(): Promise<void> {
