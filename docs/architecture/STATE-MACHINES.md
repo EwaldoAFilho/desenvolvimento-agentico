@@ -98,7 +98,7 @@ resposta — e `GATE_FAILED` ficaria indistinguível de `REVIEW_FAILED` na obser
 | 18 | `BLOCKED` | `READY` | `agentic task unblock` | deps satisfeitas; exige `--note` |
 | 19 | `BLOCKED` | `PENDING` | `agentic task unblock` | deps **não** satisfeitas |
 | 20 | `BLOCKED` | `SKIPPED` | `agentic task skip --reason` | — |
-| 21 | qualquer não terminal | `CANCELLED` | cancelamento do run ou da task | tentativa em voo é cancelada no provider |
+| 21 | qualquer não terminal | `CANCELLED` | cancelamento do run ou da task | tentativa em voo é cancelada no provider **e o grupo de processos dela é provado morto**; sem a prova, o comando é recusado (`CANCELLATION_UNSETTLED`) e nada muda — intenção de cancelar não é cancelamento assentado (ADR-0014, 004B) |
 | 22 | `PENDING`/`READY`/`BLOCKED` | `SKIPPED` | decisão humana | — |
 | 23 | `DONE` | `READY` | `agentic task reopen --reason` (operação humana formal) | nenhum dependente saiu de `PENDING`/`READY`/`BLOCKED` |
 
@@ -305,7 +305,11 @@ DRAFT ──compile OK + aprovação humana──► APPROVED ──start──�
   jeito. A unidade de um processo filho é o **grupo**: quando o líder assenta, o resto do
   grupo recebe SIGKILL e a morte do grupo é **confirmada** por sonda com teto antes de o
   processo ser dado por encerrado — sinal enviado não é processo morto. Grupo que sobrevive
-  ao teto é efeito não provado morto: o encerramento rejeita e a posse fica.
+  ao teto é efeito não provado morto: o encerramento rejeita e a posse fica. Cada resíduo
+  guarda a própria sonda (o `cancel()` do handle, ou o pid do grupo de um gate/setup) e o
+  `stop` seguinte **sonda de novo** em vez de esquecer; só o que se prova morto sai da lista.
+  O mesmo vale para o agente que sai **sozinho** deixando descendente: `AgentOutcome`
+  carrega `groupTerminated`, e `false` reprova a tentativa sem medir a worktree.
 
   A tentativa cujo desfecho foi descartado continua `RUNNING`/`REVIEW` no banco de
   propósito: é exatamente o que a reconciliação do próximo dono encerra como `INTERRUPTED`

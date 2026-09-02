@@ -76,6 +76,13 @@ aceitar → cancelar e drenar (com prazo) → colher integração e mission gate
 devolver a posse. `ControlPlaneService` (`start`/`stop`/`restart`/`status`) é a máquina de
 estados do processo que a CLI usa e a extensão vai usar; não é `RunStatus`.
 
+Sinal enviado não é processo morto: `cancel()` de um processo só resolve com o **grupo**
+confirmado morto e rejeita (`PROCESS_GROUP_ALIVE`) quando o teto vence; `exit()` sempre diz se
+o grupo assentou (`groupTerminated`), inclusive na saída natural. Cancelamento humano sem essa
+prova é **recusado** (`CANCELLATION_UNSETTLED`), nunca gravado como `CANCELLED`; e um resíduo
+que o `stop` não provou morto é sondado de novo no `stop` seguinte, nunca esquecido
+(ADR-0014, adendo 004B).
+
 E a regra que sustenta o produto inteiro: **o relato do agente (`claims`) é armazenado como
 informação operacional, mas nunca decide uma transição de estado nem basta para `DONE`.**
 Fato é o que o control plane mediu.

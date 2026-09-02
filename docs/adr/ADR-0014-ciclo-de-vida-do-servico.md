@@ -178,6 +178,63 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
   espera o próximo sinal para tentar de novo (ver Decisão). Sair soltaria o lock pelo sistema
   operacional com o efeito vivo.
 
+### Adendo (STABILITY-SLICE-004B) — contrato de cancelamento e assentamento do grupo
+
+A revisão de confirmação da 004 mostrou que "sinal enviado não é processo morto" estava
+implementado no runtime, mas o **contrato** em volta dele tinha três furos e um ramo aberto:
+um `cancel()` disparado por `AbortSignal` sem ninguém para receber a rejeição (C1); o
+cancelamento humano declarando `CANCELLED` com o grupo ainda vivo (C2); a tentativa seguinte
+de `stop` apagando os resíduos em vez de sondá-los (C3); e `groupTerminated` descartado pelo
+adapter quando o agente saía **sozinho** (B1). O que passa a valer, derivado do código:
+
+**`cancel(reason)`** — pede o encerramento (SIGTERM à árvore; SIGKILL depois do teto) e
+**espera o assentamento**. Resolve somente com o grupo de processos **confirmado** morto.
+Rejeita com `ProcessGroupAliveError` (`PROCESS_GROUP_ALIVE`) se o grupo ainda existir depois
+de `groupGraceMs`. Chamado de novo mais tarde — inclusive depois de o líder já ter saído —
+**sonda outra vez**; se o grupo morreu nesse meio tempo, resolve, e `exit()` passa a relatar
+`groupTerminated: true`. Idempotente no pedido; não idempotente na prova, de propósito.
+
+**`exit()`** — resolve quando o líder assentou **e** a confirmação do grupo terminou (com
+sucesso ou por teto). Nunca rejeita. `ExitStatus` diz a saída do líder (`code`, `signal`,
+`timedOut`, `cancelled`) **e** se o grupo assentou (`groupTerminated`), para **toda** forma de
+saída: cancel, abort, timeout, sinal, saída natural. Carrega também `pid` (o grupo é `-pid`),
+para quem precise sondar de novo sem ter o handle.
+
+**`AbortSignal` e timeout** — são pedidos sem quem espere, então não podem prometer nada a
+ninguém: usam o mesmo pedido interno do `cancel()`, sem esperar por ele, e o desfecho —
+inclusive "grupo vivo" — sai por `exit()`. Nenhum caminho do runtime deixa uma rejeição órfã;
+`unhandledRejection` deixou de ser um modo de a posse escapar pelo sistema operacional (C1).
+
+**`AgentOutcome.groupTerminated`** — obrigatório na porta do domínio, vindo do `ExitStatus`.
+O adapter de CLI local o repassa; o agente in-process o declara `true` (não há grupo). O
+orquestrador, ao receber `false`, **não mede a worktree** (um diff de árvore em movimento não é
+evidência): a tentativa reprova com `AGENT_ERROR` e detalhe explícito, o handle vira resíduo,
+e a posse não sai antes da prova de morte. Em árvore compartilhada, nenhum despacho novo
+enquanto houver resíduo não provado morto (B1-final).
+
+**Resíduos são sondáveis, não nomes.** O orquestrador guarda, para cada efeito não provado
+morto, a **sonda** que o prova: o `cancel()` do handle (tentativa, revisor) ou o `pid` do
+grupo (comando de gate, `workspaceSetup` — `GateCommandRecord.pid`,
+`WorkspaceError.residualGroup`). Cada `abandon` **sonda de novo** o que sobrou da tentativa
+anterior; só o que se prova morto sai da lista; "não lembro mais" não existe (C3). Um resíduo
+sem pid (não deveria existir por construção) falha fechado: fica não provado.
+
+**Cancelamento humano: intenção ≠ assentamento.** `cancel run` e `cancel task` só gravam
+`CANCELLED` com **todo** grupo relevante provado morto — as tentativas em voo **e** os resíduos
+já conhecidos (do run inteiro; da task, no `cancel task`). Senão o comando é **recusado** com
+`CancellationUnsettledError` (`CANCELLATION_UNSETTLED`, HTTP 409): run e tasks ficam como
+estavam, nenhum evento de cancelamento é gravado, o resíduo fica com o encerramento, e o
+**mesmo comando pode ser repetido** — ele sonda de novo. A intenção não se perde: no `cancel
+run`, o orquestrador já parou de despachar (`#closed`); no `cancel task`, a tentativa guarda o
+pedido e o próximo desfecho dela **não** vira gate, revisão nem retry — ele sonda de novo e,
+provada a morte, cumpre o cancelamento (C2).
+
+**Fronteira.** `orchestrator` passa a poder importar `process` — uma função, `confirmProcessGroupGone`
+— porque a autoridade que decide o encerramento precisa de um fato de sistema operacional
+("este grupo ainda existe?") para sondar um resíduo cujo handle já não está à mão. A sonda
+continua vivendo em `process`, o único lugar com código de SO; o orquestrador a chama, não a
+reimplementa.
+
 ### Limites declarados
 
 - **Windows.** O tree-kill do runtime de processo usa `taskkill /T`, mas o abort de
@@ -195,4 +252,10 @@ decidir iniciar o gate. É a segunda metade de I12, que só estava escrita.
 - **Descendente que trocou de sessão** (`setsid`) saiu do grupo de processos e do alcance
   do SIGKILL ao grupo. Não há sessão nova por desenho nos comandos do produto; um agente que
   o faça está fora do que o produto controla.
+- **Reaproveitamento de pid.** A re-sonda de um resíduo por pid (`kill(-pid, 0)`) pode
+  responder "vivo" para um grupo **novo** que herdou o mesmo id depois de o original morrer.
+  O efeito é conservador (a posse fica retida até o próximo `stop`), nunca o inverso.
+- **Windows.** Não há grupo a sondar: `groupTerminated` é `true` por definição e a re-sonda
+  por pid resolve verdadeiro. O contrato de `cancel()`/`exit()` é portável; a prova não. Não
+  está na suíte; fica registrado, não resolvido.
 - **Ameaça continua sendo instância legítima**, não código hostil no mesmo processo.

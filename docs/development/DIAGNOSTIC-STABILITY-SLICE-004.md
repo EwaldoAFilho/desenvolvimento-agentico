@@ -171,8 +171,10 @@ A revisão de confirmação, classificada como o operador pediu:
 | D | D6 pós-crash, D13, D14 | não se tornaram alcançáveis automaticamente; não bloqueiam |
 | E | Windows e `setsid`: limites declarados. A prova E2E de B3 usa o `waitForShutdown` injetado do harness (`cli-process.ts`), não o hub de produção, e o segundo sinal é enviado a 150 ms sem prova de que o drain estava ativo | lacuna de evidência, não defeito |
 
-Nada foi corrigido depois desta leitura: a autorização era de UM ciclo. Duas saídas
-possíveis, ambas pequenas, para a decisão humana:
+Nada foi corrigido depois desta leitura: a autorização era de UM ciclo. **Decisão humana:**
+não reverter; C1, C2, C3 e o ramo de saída natural de B1 viraram a micro-slice
+[STABILITY-SLICE-004B](DIAGNOSTIC-STABILITY-SLICE-004B.md). Duas saídas possíveis, ambas
+pequenas, que estavam na mesa:
 
 1. **Ciclo restrito a C1–C3 e ao ramo de saída natural de B1.** `catch` no listener de abort
    (registrando o resíduo); propagar `ProcessGroupAliveError` nos cancelamentos humanos (a

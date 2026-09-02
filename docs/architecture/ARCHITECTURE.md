@@ -185,7 +185,12 @@ usuário; não injetamos credencial nenhuma.
 Abaixo dele, `Process Runtime` concentra a parte perigosa e específica de sistema
 operacional (spawn, sinais, tree-kill, allowlist de ambiente, buffers) em um único lugar
 testado. `Gate Runner` usa o mesmo primitivo para comandos curtos e capturados; `Local Agent
-Runtime` usa para processos longos e transmitidos.
+Runtime` usa para processos longos e transmitidos. A unidade de um processo filho é o
+**grupo**: `exit()` relata a saída do líder e se o grupo assentou (`groupTerminated`), e
+`cancel()` só resolve com o grupo provado morto (ADR-0014, adendo 004B). O orquestrador chama
+uma função deste pacote — a sonda do grupo — para provar de novo, num `stop` repetido, que um
+resíduo sem handle (gate, `workspaceSetup`) morreu; é a única dependência de orquestração
+sobre `process`, e ela não reimplementa nada de SO.
 
 ### 3.7 Persistence
 
