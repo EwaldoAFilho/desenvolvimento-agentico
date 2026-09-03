@@ -16,6 +16,8 @@ Jornada principal dentro do VS Code (DA-VSCODE-MVP-002):
   tentativa, worktree, branch, logs, gate, revisão, evidência, arquivos), ações nativas
   (abrir arquivo/worktree/log, diff), retry/unblock/skip/pause/resume quando o core suporta.
 - **Sidebar**: view *Active Run* com as tasks; *+ New Mission*.
+- **Dogfooding real no VS Code**: a jornada completa Nova Mission → DAG → aprovação → Run
+  foi exercitada usando o próprio repositório.
 - Base: `deactivate` conhece o spawn em voo e nunca toca dono externo; identidade do
   `project.yaml` com o mesmo `trim` da CLI.
 
