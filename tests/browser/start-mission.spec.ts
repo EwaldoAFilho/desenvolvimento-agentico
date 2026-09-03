@@ -54,7 +54,14 @@ test('START MISSION: um clique inicia, dois cliques não criam dois runs', async
 
   await approveInUi(page, ACTOR)
   const aposAprovar = await runsOf()
-  expect(aposAprovar, 'aprovar cria o run em APPROVED').toBe(antes + 1)
+  // Aprovar e idempotente por versao do plano: um rascunho (DRAFT/APPROVED) deste spec deixado
+  // por outro teste e REUTILIZADO, nao duplicado. O que se exige: nenhum run a menos, e
+  // exatamente UM run APPROVED deste spec esperando a partida.
+  expect(aposAprovar, 'aprovar nao perde run').toBeGreaterThanOrEqual(antes)
+  const aprovados = (await listRuns(env.baseURL)).filter(
+    (run) => run.missionId === env.missionRef && run.status === 'APPROVED',
+  )
+  expect(aprovados, 'exatamente um run APPROVED deste spec').toHaveLength(1)
 
   await test.step('o botão diz START antes de partir', async () => {
     await expect(startButton(page)).toBeEnabled()
