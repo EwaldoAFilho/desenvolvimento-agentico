@@ -62,6 +62,29 @@ describe('GitWorktreeWorkspaceProvider.acquire', () => {
     await provider.acquire(lease())
     await expect(provider.acquire(lease())).rejects.toThrow(/ja existe/)
   })
+
+  it('segundo run da mesma missao: a branch da tentativa anterior e renomeada, nao trava (F2)', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    const first = await provider.acquire(lease({ task: 'T01' }))
+    await provider.release(first, 'discard')
+    // Mesmo missao/task/tentativa, OUTRO run: o nome da branch e o mesmo.
+    const second = await provider.acquire({
+      ...lease({ task: 'T01' }),
+      runId: '01J0000000000000000000000B' as typeof RUN,
+      attemptId: attemptId('01J0000000000000000000000B:T01:a1'),
+    })
+    expect(second.branch).toBe(first.branch)
+    const { stdout } = await exec('git', ['branch', '--list', `${first.branch}*`], {
+      cwd: repo.root,
+    })
+    const branches = stdout
+      .split('\n')
+      .map((l) => l.trim().replace(/^[*+] /, ''))
+      .filter(Boolean)
+    expect(branches).toContain(first.branch)
+    expect(branches.some((b) => b.startsWith(`${first.branch}.stale.`))).toBe(true)
+  })
 })
 
 describe('isolamento entre tentativas', () => {

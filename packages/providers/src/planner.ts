@@ -887,7 +887,16 @@ export class LocalCliMissionPlanner implements MissionPlanner {
    */
   async cancel(reason: string): Promise<void> {
     const running = [...this.#running]
-    await Promise.all(running.map((proc) => proc.cancel(reason).catch(() => undefined)))
+    const outcomes = await Promise.allSettled(running.map((proc) => proc.cancel(reason)))
+    const vivos = outcomes.filter((o): o is PromiseRejectedResult => o.status === 'rejected')
+    if (vivos.length === 0) return
+    // Sinal enviado nao e processo morto: `cancel()` so resolve com o grupo provado morto. Um
+    // grupo que sobreviveu (PROCESS_GROUP_ALIVE) continua em `#running` — o proximo
+    // `cancel()` sonda de novo — e a recusa sobe para quem encerra segurar a posse (I15).
+    throw new AggregateError(
+      vivos.map((o) => o.reason),
+      `${vivos.length} processo(s) do planejador ${String(this.id)} ainda vivo(s) apos o cancelamento`,
+    )
   }
 
   async plan(request: PlanningRequest): Promise<PlanningResult> {
@@ -915,7 +924,7 @@ export class LocalCliMissionPlanner implements MissionPlanner {
     const logsRef = plannerLogsRef(this.id, proc.handle)
     this.#running.add(proc)
     const budget = new OutputBudget(this.#maxOutputChars)
-    let exit: ExitStatus
+    let exit: ExitStatus | undefined
     try {
       const [status] = await Promise.all([
         proc.exit(),
@@ -924,7 +933,9 @@ export class LocalCliMissionPlanner implements MissionPlanner {
       ])
       exit = status
     } finally {
-      this.#running.delete(proc)
+      // O lider saiu, mas o GRUPO pode nao ter assentado (descendente vivo): o handle fica
+      // como residuo, para o `cancel()` do encerramento sonda-lo de novo — nunca esquecido.
+      if (exit === undefined || exit.groupTerminated) this.#running.delete(proc)
     }
     return this.#settle(exit, budget, request, logsRef)
   }

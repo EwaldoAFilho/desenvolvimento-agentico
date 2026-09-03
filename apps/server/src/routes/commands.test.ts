@@ -119,6 +119,23 @@ describe('POST /api/runs — START MISSION', () => {
     expect(response.json<{ error: { code: string } }>().error.code).toBe('MISSION_CHANGED')
   })
 
+  it('caminho do dashboard (missionId + specHash) tambem recompila: hash da inspecao diferente do disco recusa', async () => {
+    harness = await createServerHarness(ALL)
+    await approve(harness, 'DA-SRV-001')
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      payload: {
+        missionId: 'DA-SRV-001',
+        acceptWarnings: true,
+        actor: ACTOR,
+        specHash: 'fnv1a64:0000000000000000',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json<{ error: { code: string } }>().error.code).toBe('MISSION_CHANGED')
+  })
+
   it('so com missionId a partida recompila o arquivo e parte no run APPROVED dessa versao', async () => {
     harness = await createServerHarness(ALL)
     await approve(harness, 'DA-SRV-001')

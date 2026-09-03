@@ -133,6 +133,17 @@ export async function ensureBranch(
   return { sha, branch }
 }
 
+/** Sufixo da branch de tentativa que sobrou de um run anterior da MESMA missao. */
+export const STALE_BRANCH_SUFFIX = '.stale.'
+
+/**
+ * Cria a worktree numa branch NOVA. Se a branch ja existir — sobra de um run anterior da
+ * mesma missao, que nomeia a tentativa por `task/<missao>/<task>/a<n>` sem o run — ela e
+ * RENOMEADA (nunca apagada: a evidencia daquela tentativa continua referenciada) e o nome
+ * fica livre. Sem isto, o segundo run de uma missao travava para sempre em
+ * `git worktree add -b` (F2 do relatorio da DA-UX-001): o despacho falhava, era tentado de
+ * novo a cada tick e a task nunca escalava para BLOCKED.
+ */
 export async function addWorktree(
   cwd: string,
   path: string,
@@ -140,6 +151,10 @@ export async function addWorktree(
   startPoint: string,
   stage: WorkspaceStage = 'acquire',
 ): Promise<void> {
+  if (await branchExists(cwd, branch)) {
+    const stale = `${branch}${STALE_BRANCH_SUFFIX}${Date.now().toString(36)}`
+    await git(['branch', '-m', branch, stale], { cwd, stage })
+  }
   await git(['worktree', 'add', '-b', branch, path, startPoint], { cwd, stage })
 }
 

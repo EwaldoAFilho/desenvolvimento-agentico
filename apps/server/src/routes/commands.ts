@@ -90,18 +90,18 @@ async function startRun(deps: ServerDeps, raw: unknown): Promise<StartRunResult>
   // sem ele, o arquivo e recompilado e a partida fica presa a versao que esta no disco.
   // Em nenhum caso "qualquer run APPROVED desta missao" serve — um APPROVED antigo faria
   // partir um plano que ninguem inspecionou.
-  if (command.specHash !== undefined) {
-    if (specHash !== undefined && specHash !== command.specHash) {
-      throw badRequest(
-        'MISSION_CHANGED',
-        `missao ${missionId} mudou desde a inspecao: o arquivo compila para outro plano`,
-      )
-    }
-    specHash = command.specHash
-  } else if (specHash === undefined) {
+  if (specHash === undefined) {
+    // So `missionId`: o arquivo e recompilado SEMPRE, com ou sem hash declarado — o hash do
+    // cliente e a versao inspecionada, e a do disco e a que partiria; as duas tem de bater.
     const compiled = await compileMissionRef(deps, missionId)
     refuseOnErrors(compiled)
     specHash = compiled.graph?.specHash
+  }
+  if (command.specHash !== undefined && specHash !== undefined && specHash !== command.specHash) {
+    throw badRequest(
+      'MISSION_CHANGED',
+      `missao ${missionId} mudou desde a inspecao: o arquivo compila para outro plano`,
+    )
   }
 
   const lookup = { missionId, ...(specHash === undefined ? {} : { specHash }) }

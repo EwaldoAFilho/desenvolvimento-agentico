@@ -1037,22 +1037,38 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    */
   const drainPlanning = async (options: CloseOptions): Promise<void> => {
     if (planningInFlight.size === 0) return
-    for (const id of planners.list()) {
-      const planner = planners.get(id) as { cancel?: (reason: string) => Promise<void> }
-      if (typeof planner.cancel === 'function') {
-        await planner.cancel('control plane encerrando').catch(() => undefined)
-      }
-    }
     const graceMs = options.graceMs ?? DEFAULT_SHUTDOWN_GRACE_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => resolve('timeout'), graceMs)
       timer.unref?.()
     })
-    const settled = await Promise.race([
-      Promise.allSettled([...planningInFlight]).then(() => 'settled' as const),
-      deadline,
-    ])
+    /**
+     * Cancelar E esperar assentar, os dois dentro do MESMO prazo. O `cancel()` do planejador
+     * so resolve com o grupo de processos provado morto: uma rejeicao (PROCESS_GROUP_ALIVE)
+     * e um efeito vivo, e efeito vivo segura a posse — nao e engolida.
+     */
+    const cancelAll = async (): Promise<void> => {
+      const falhas: unknown[] = []
+      for (const id of planners.list()) {
+        const planner = planners.get(id) as { cancel?: (reason: string) => Promise<void> }
+        if (typeof planner.cancel !== 'function') continue
+        try {
+          await planner.cancel('control plane encerrando')
+        } catch (error) {
+          falhas.push(error)
+        }
+      }
+      if (falhas.length > 0) {
+        throw new CommandRefusedError(
+          `planejador com processo ainda vivo apos o cancelamento: ${falhas
+            .map((f) => (f instanceof Error ? f.message : String(f)))
+            .join('; ')} — a posse nao pode ser devolvida (I15)`,
+        )
+      }
+      await Promise.allSettled([...planningInFlight])
+    }
+    const settled = await Promise.race([cancelAll().then(() => 'settled' as const), deadline])
     if (timer !== undefined) clearTimeout(timer)
     if (settled === 'timeout') {
       throw new CommandRefusedError(

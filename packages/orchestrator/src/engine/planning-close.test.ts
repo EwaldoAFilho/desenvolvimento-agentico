@@ -144,3 +144,30 @@ describe('close() com planejamento em voo (I15)', () => {
     await plane.close({ graceMs: 2_000 }).catch(() => undefined)
   })
 })
+
+/** Planejador cujo cancelamento REJEITA: o grupo de processos sobreviveu ao sinal. */
+class PlannerComResiduo extends PlannerPendurado {
+  override async cancel(_reason: string): Promise<void> {
+    throw new Error('1 processo(s) do planejador ainda vivo(s): PROCESS_GROUP_ALIVE')
+  }
+}
+
+describe('close() com residuo de processo do planejador', () => {
+  it('cancelamento que nao prova o grupo morto faz o close falhar — a posse fica (I15)', async () => {
+    const planner = new PlannerComResiduo()
+    const plane = await planeCom(planner)
+    if (plane.planMission === undefined) throw new Error('plane sem planejamento')
+    const planning = plane.planMission({
+      prompt: 'um plano qualquer',
+      plannerId: toProviderId('pendurado'),
+      actor: 'teste',
+      acceptsSubscriptionUse: true,
+    })
+    planning.catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await expect(plane.close({ graceMs: 2_000 })).rejects.toThrow(/ainda vivo/)
+    expect(plane.lifecycle).not.toBe('closed')
+    await PlannerPendurado.prototype.cancel.call(planner, 'fim do teste')
+    await plane.close({ graceMs: 2_000 }).catch(() => undefined)
+  })
+})
