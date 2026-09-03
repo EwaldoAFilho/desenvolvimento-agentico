@@ -2,8 +2,10 @@
 
 **Branch:** `feature/DA-VSCODE-MVP-002` (a partir de `feature/DA-VSCODE-MVP`; `main` intocada)
 **Data:** 2026-09-03
-**Veredito desta rodada:** `BASE_VSCODE_BLOCKED` — ver §A. O desenvolvimento do MVP-002 **não começou**;
-o que existe no branch é o terreno preparado (§B).
+**Veredito:** ver §Z no fim (preenchido no fechamento do lote).
+
+> Histórico: a primeira rodada parou em `BASE_VSCODE_BLOCKED` (§A). Por decisão do operador, os
+> dois MAJOR foram corrigidos, a revisão restrita confirmou (§A2) e o MVP-002 seguiu (§C em diante).
 
 ## A. Base review (Fase 1)
 
@@ -59,7 +61,51 @@ usada pelo planejamento os inclui — o dogfooding do MVP-002 em projeto descart
 de `.gitignore` (ou o `init` precisa gerá-lo). F2 (livelock ao reiniciar missão) e F5 (run
 reaberto sem executor) do relatório da DA-UX-001 continuam abertos.
 
-## C. Próximo passo
+## A2. Correções da base e revisão restrita
 
-Decisão humana: aplicar as duas correções de §A (cerca de 40 linhas, com teste) e retomar a
-Fase 1 com uma leitura fresh restrita a elas — ou aceitar o risco e seguir para o MVP-002.
+Commits `15c454f` (spawn em voo conhecido pelo `deactivate`, `stopOwnChild()` que nunca toca
+dono externo, `trim` como o schema) e `4246e1d` (bandeira de abandono verificada depois de cada
+descoberta; achado da própria revisão restrita). Testes A–E por barreiras, sem sleep.
+
+| Rodada | Resultado |
+| --- | --- |
+| Revisão restrita das duas correções | FAIL com **um** MAJOR (interleaving da sondagem em voo); os outros cinco pontos confirmados |
+| Correção adicional + confirmação restrita | **PASS** — "nenhuma regressão BLOCKER/MAJOR" |
+
+MINOR registrados e não corrigidos: perdedor que ignora SIGTERM fica com handle (`childPid`);
+valores de `process.env` materializados antes do filtro da allowlist.
+
+## C. Nova Mission, planning, Draft, DAG, inspector, aprovação, Run (Entregas 1–13)
+
+Decisão de reuso: em vez de reconstruir telas, o **mesmo `App` de `apps/web`** roda na aba
+Agentic. Três costuras no dashboard (sem mudar o navegador): transporte injetável
+(`setApiTransport`), navegação em memória (`navigation`/`initialRoute`/`onNavigate`) e um
+contexto de ações de editor (`EditorActionsContext`: abrir arquivo/worktree/log, diff). `actor`
+sugerido do `git config user.name`, sempre editável e obrigatório.
+
+Na extensão: leitor SSE sobre `fetch` (`src/core/sse.ts`), protocolo da ponte validado por
+inteiro (`bridge-protocol.ts`), ponte do host (`bridge.ts`: header de guarda do `repoRoot`,
+prazo longo só em `/missions/plan`, worktrees devolvidas pelo control plane viram caminhos
+autorizados), ponte da webview (`client-bridge.ts`), painel React (`app-panel.ts` +
+`media/app.tsx`) com portão Start quando o control plane está parado, view **Active Run**,
+comandos *New Mission* e *Open Run*, rota Home/Mission/Run guardada no host (título da aba e
+navegação pela sidebar). Painel vanilla da MVP-001 removido.
+
+O que cada entrega usa:
+
+| Entrega | Onde |
+| --- | --- |
+| Nova Mission / planner / planning | `NewMission.tsx` → `POST /api/missions/plan` (planners de `GET /api/planners`, só READY) |
+| Draft (título, tasks, warnings/errors, waves, caminho crítico, conflitos) | `PlanReview.tsx` + `lib/plan-review.ts` sobre `CompileReportDto`/`RunSnapshot` |
+| DAG | `DagCanvas.tsx` (React Flow + dagre) — reutilizado, não reconstruído |
+| Task inspector | `PlanNodePanel.tsx` (objective, dependências, touches clicáveis, validation, gate, risco, provider, requireReview, reviewPolicy) |
+| Aprovação | `StartMission.tsx` (`actor`, `specHash`, aprovar+executar num ato, guarda de duplo clique) |
+| Start / navegação ao Run | `App.tsx` (`starting` ref + navegação para `?run=`) |
+| Live Run / DAG vivo | `RunDashboard.tsx` + `useRunStream` com `EventSourceLike` da ponte (SSE via host) |
+| Task live detail / logs / evidence / diff | `TaskDetailPanel.tsx` + ações de editor |
+| Providers no run | `RunHeader.tsx`/`ProvidersPanel.tsx` com `running`/estado do control plane |
+| Failure UX | `lib/failure.ts`/`no-changes.ts` (causa, tentativa, gate/revisão, evidência) + `TaskActions` (retry/unblock/skip) e pause/resume |
+| No active run / erro | `ProjectHome.tsx` / `ErrorScreen.tsx` (nunca loading infinito) |
+
+Planejamento é síncrono (até 10 min) e o contrato do planner não tem cancelamento: a UI
+mostra tempo decorrido; nenhum cancelamento inseguro foi inventado.

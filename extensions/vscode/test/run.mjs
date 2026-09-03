@@ -6,6 +6,8 @@
 //
 //   AGENTIC_IT_WORKSPACE=<pasta>  usa essa pasta como workspace (default: projeto descartavel
 //                                 criado com `agentic init` e provider mock).
+//   AGENTIC_IT_DOGFOOD=1          roda test/dogfood.cjs: jornada REAL com planner e executor
+//                                 de verdade (consome assinatura); use com AGENTIC_IT_WORKSPACE.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -50,7 +52,7 @@ if (disposable) {
 try {
   await runTests({
     extensionDevelopmentPath,
-    extensionTestsPath: resolve(here, 'suite.cjs'),
+    extensionTestsPath: resolve(here, process.env.AGENTIC_IT_DOGFOOD === '1' ? 'dogfood.cjs' : 'suite.cjs'),
     launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust'],
     extensionTestsEnv: { AGENTIC_IT_REPO_ROOT: repoRoot, AGENTIC_IT_WORKSPACE: workspace },
   })

@@ -1041,9 +1041,13 @@ export class LocalCliMissionPlanner implements MissionPlanner {
       })
     }
     if (exit.code !== 0) {
+      // A causa quase sempre esta na ultima linha que a CLI escreveu (versao, login, modelo).
+      // Ela vai NA MENSAGEM, porque `raw` nao atravessa a API — e "saiu com codigo 1" sozinho
+      // manda o humano ao terminal, que e o que a tela existe para evitar.
+      const cause = lastLineOf(budget.both())
       return refused({
         code: 'PLANNER_FAILED',
-        message: `o planejador saiu com codigo ${exit.code ?? '-'}`,
+        message: `o planejador saiu com codigo ${exit.code ?? '-'}${cause === undefined ? '' : `: ${cause}`}`,
         raw: budget.both(),
         logsRef,
       })
@@ -1197,4 +1201,17 @@ export function createMissionPlannerRegistry(
   options: MissionPlannerRegistryOptions,
 ): DefaultMissionPlannerRegistry {
   return new DefaultMissionPlannerRegistry(options)
+}
+
+const CAUSE_MAX_CHARS = 240
+
+/** Ultima linha nao vazia da saida do planejador, cortada: e a causa, nao o log inteiro. */
+function lastLineOf(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const last = lines.at(-1)
+  if (last === undefined) return undefined
+  return last.length > CAUSE_MAX_CHARS ? `${last.slice(0, CAUSE_MAX_CHARS - 1)}…` : last
 }
