@@ -54,3 +54,44 @@ export const ProviderHealthDtoSchema = z
   .strict()
 
 export type ProviderHealthDto = z.infer<typeof ProviderHealthDtoSchema>
+
+/**
+ * Os cinco estados de um fornecedor. Existem porque `installed` e `ready` sozinhos deixam o
+ * operador adivinhando: "nao instalado" e "instalado, prontidao nao apurada" tem conserto
+ * diferente, e `unknown` nao e nenhum dos dois (ADR-0010, DASHBOARD 5.1).
+ *
+ * Moram no contrato, e nao na CLI, porque terminal e dashboard precisam pintar a MESMA
+ * situacao do MESMO jeito. Duas derivacoes com a mesma intencao divergem — e a divergencia
+ * aparece como um fornecedor verde num lugar e amarelo no outro (ADR-0016).
+ */
+export const PROVIDER_STATES = [
+  'READY',
+  'NOT_READY',
+  'INSTALLED',
+  'NOT_INSTALLED',
+  'UNKNOWN',
+] as const
+
+export type ProviderState = (typeof PROVIDER_STATES)[number]
+
+export const ProviderStateSchema = z.enum(PROVIDER_STATES)
+
+/** O literal que viaja no JSON quando a resposta nao foi apurada. */
+export const UNKNOWN = 'unknown'
+
+/**
+ * Total e sem ambiguidade:
+ *
+ * - `NOT_INSTALLED` — nao ha executavel; nada mais importa ate isso mudar.
+ * - `NOT_READY`     — existe (ou pode existir), mas a sonda de sessao REPROVOU.
+ * - `UNKNOWN`       — a propria instalacao nao foi apurada.
+ * - `READY`         — instalado e sonda de sessao aprovou.
+ * - `INSTALLED`     — instalado, prontidao nao apurada. Nao e READY, e nao e falha.
+ */
+export function providerStateOf(health: ProviderHealthDto): ProviderState {
+  if (health.installed === false) return 'NOT_INSTALLED'
+  if (health.ready === false) return 'NOT_READY'
+  if (health.installed === UNKNOWN) return 'UNKNOWN'
+  if (health.ready === true) return 'READY'
+  return 'INSTALLED'
+}

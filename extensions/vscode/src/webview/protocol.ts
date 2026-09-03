@@ -1,4 +1,10 @@
-import type { ProviderHealthDto, RunHeaderDto, RunSnapshot, TaskDetail } from '../core/contracts.js'
+import type {
+  CompileReportDto,
+  ProviderHealthDto,
+  RunHeaderDto,
+  RunSnapshot,
+  TaskDetail,
+} from '../core/contracts.js'
 import type { MissionSummary } from '../core/missions.js'
 import type { ServiceView } from '../core/service.js'
 
@@ -18,6 +24,7 @@ export interface HomeProject {
 
 export interface MissionDetail {
   readonly summary: MissionSummary
+  readonly report?: CompileReportDto
   readonly runs: RunHeaderDto[]
   readonly snapshot?: RunSnapshot
   readonly tasks?: TaskDetail[]

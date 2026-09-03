@@ -1,4 +1,5 @@
 import type { ProviderHealthDto } from '@agentic/schemas'
+import * as contrato from '@agentic/schemas'
 import { describe, expect, it } from 'vitest'
 import { MASK, sanitize } from '../redact.js'
 import {
@@ -74,6 +75,24 @@ describe('os cinco estados de provider', () => {
 
   it('NOT_INSTALLED ganha de tudo: sem binario nao ha prontidao a discutir', () => {
     expect(providerStateOf(dto({ installed: false, ready: true }))).toBe('NOT_INSTALLED')
+  })
+})
+
+/**
+ * O dashboard so pode importar `@agentic/schemas` (ADR-0001). Estes testes falham se alguem
+ * recriar a derivacao aqui: o terminal e o navegador precisam pintar a MESMA situacao do
+ * mesmo jeito, e duas copias com a mesma intencao divergem (ADR-0016).
+ */
+describe('a derivacao e a do contrato, importavel pelo dashboard', () => {
+  it('a CLI nao tem derivacao propria: reexporta a do contrato', () => {
+    expect(providerStateOf).toBe(contrato.providerStateOf)
+    expect(PROVIDER_STATES).toBe(contrato.PROVIDER_STATES)
+  })
+
+  it('o bloco impresso usa exatamente o estado que o contrato deriva', () => {
+    const health = dto({ installed: true, ready: 'unknown' })
+
+    expect(providerViewOf({ health }).state).toBe(contrato.providerStateOf(health))
   })
 })
 

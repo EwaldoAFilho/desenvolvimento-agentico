@@ -24,6 +24,12 @@ export interface RunStreamResult {
   /** Quantas vezes o stream foi aberto. Reconexao aumenta — util para diagnostico e teste. */
   readonly connections: number
   readonly lastStreamUrl: string | undefined
+  /**
+   * Pedir o snapshot de novo depois de uma falha. A reconexao automatica so existe DEPOIS
+   * do primeiro snapshot; se ele falhar, sem isto a tela fica com a mensagem e nenhuma
+   * saida a nao ser o F5 — que perde a navegacao.
+   */
+  readonly reload: () => void
 }
 
 function defaultEventSource(url: string): EventSourceLike {
@@ -59,7 +65,10 @@ export function useRunStream(runId: string | undefined, deps: RunStreamDeps = {}
   const [error, setError] = useState<string | undefined>(undefined)
   const [connections, setConnections] = useState(0)
   const [lastStreamUrl, setLastStreamUrl] = useState<string | undefined>(undefined)
+  const [attempt, setAttempt] = useState(0)
   const stateRef = useRef<RunState | undefined>(undefined)
+
+  const reload = useCallback((): void => setAttempt((count) => count + 1), [])
 
   const push = useCallback((next: RunState) => {
     stateRef.current = next
@@ -110,6 +119,7 @@ export function useRunStream(runId: string | undefined, deps: RunStreamDeps = {}
     }
 
     setPhase('loading')
+    setError(undefined)
     fetchSnapshot(runId)
       .then((snapshot) => {
         if (cancelled) return
@@ -118,7 +128,10 @@ export function useRunStream(runId: string | undefined, deps: RunStreamDeps = {}
       })
       .catch((cause: unknown) => {
         if (cancelled) return
-        setError(cause instanceof Error ? cause.message : String(cause))
+        const detail = cause instanceof Error ? cause.message : String(cause)
+        // A contagem entra na mensagem porque duas falhas iguais em sequencia sao
+        // indistinguiveis na tela: sem ela, "tentar novamente" parece nao ter feito nada.
+        setError(attempt === 0 ? detail : `${detail} (tentativa ${attempt + 1})`)
         setPhase('error')
       })
 
@@ -127,7 +140,7 @@ export function useRunStream(runId: string | undefined, deps: RunStreamDeps = {}
       if (timer !== undefined) clearTimeout(timer)
       source?.close()
     }
-  }, [runId, fetchSnapshot, createEventSource, reconnectDelayMs, push])
+  }, [runId, fetchSnapshot, createEventSource, reconnectDelayMs, push, attempt])
 
-  return { state, phase, error, connections, lastStreamUrl }
+  return { state, phase, error, connections, lastStreamUrl, reload }
 }

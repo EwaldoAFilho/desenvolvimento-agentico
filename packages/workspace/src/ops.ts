@@ -116,10 +116,19 @@ export async function commitWorkingTree(options: CommitOptions): Promise<Attempt
   // `:(exclude)` estagiaria a arvore inteira. O index fica em HEAD => NO_CHANGES.
   const specs = await matchingSpecs(cwd, scopeSpecs(options.scope))
   if (specs.length > 0) {
-    await git(['add', '-A', '--', ...specs, ...excludeSpecs(links)], {
-      cwd,
-      stage: 'commit',
-    })
+    // NAO usar `:(exclude)` aqui. Combinado com pathspec explicito, ele zera o staging de
+    // ARQUIVO NOVO em silencio (git 2.53): `git add -A -- <novo.ts> :(exclude)node_modules`
+    // estagia nada e sai 0, enquanto `git ls-files --others` com os mesmos pathspecs lista
+    // o arquivo — que e exatamente o que matchingSpecs consulta para decidir que o escopo
+    // casa. O efeito era um commit sem os arquivos criados pela tentativa, com o gate
+    // passando na arvore suja: evidencia PASS atribuida a um commit que nao compila.
+    // Observado em DA-UX-001/U02, tentativas a1 e a2.
+    await git(['add', '-A', '--', ...specs], { cwd, stage: 'commit' })
+    // A garantia dos links vira desestagiamento explicito: mesmo efeito, sem depender da
+    // interacao de pathspec. Cobre o caso de um `touches` de diretorio que contenha o link.
+    if (links.length > 0) {
+      await git(['reset', '--quiet', '--', ...links], { cwd, allowFailure: true })
+    }
   }
   const staged = await git(['diff', '--cached', '--quiet'], { cwd, allowFailure: true })
   if (staged.exitCode === 0) {

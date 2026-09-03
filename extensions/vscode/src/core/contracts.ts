@@ -10,13 +10,16 @@ export type {
   CompileReportDto,
   CompileStatsDto,
   DiagnosticDto,
+  MissionSummaryDto,
+  MissionViewState,
   ProviderHealthDto,
   RunHeaderDto,
   RunSnapshot,
+  RunSummaryDto,
   TaskDetail,
   TaskSnapshotDto,
 } from '@agentic/schemas'
-export type { ControlPlaneRuntime, HealthBody, MissionListItem } from '@agentic/server'
+export type { ControlPlaneRuntime, HealthBody } from '@agentic/server'
 
 /** Identidade que o `/api/health` devolve. Porta ocupada por outro programa nao e control plane. */
 export const CONTROL_PLANE_SERVICE = '@agentic/server'

@@ -1,7 +1,7 @@
 import type {
   CompileReportDto,
   HealthBody,
-  MissionListItem,
+  MissionSummaryDto,
   ProviderHealthDto,
   RunHeaderDto,
   RunSnapshot,
@@ -51,8 +51,9 @@ export class AgenticClient {
     return this.get<ProviderHealthDto[]>('/api/providers')
   }
 
-  missions(): Promise<MissionListItem[]> {
-    return this.get<MissionListItem[]>('/api/missions')
+  /** Listagem ja enriquecida pelo control plane: id, estado, contadores e ultimo run. */
+  missions(): Promise<MissionSummaryDto[]> {
+    return this.get<MissionSummaryDto[]>('/api/missions')
   }
 
   runs(limit = 50): Promise<RunHeaderDto[]> {

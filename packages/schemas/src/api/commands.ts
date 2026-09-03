@@ -6,6 +6,13 @@ export const ApproveMissionCommandSchema = z
   .object({
     actor: NonEmptyStringSchema,
     note: z.string().optional(),
+    /**
+     * Versao do plano que o humano inspecionou. O endpoint RECOMPILA o arquivo, entao sem
+     * isto a aprovacao registra o que estiver no disco NA HORA — que pode nao ser o que
+     * estava na tela. Declarando, o control plane recusa quando o arquivo mudou no meio, e a
+     * janela deixa de existir em vez de so encolher.
+     */
+    specHash: z.string().optional(),
   })
   .strict()
 
@@ -35,6 +42,30 @@ export const StartRunCommandSchema = z
   })
 
 export type StartRunCommand = z.infer<typeof StartRunCommandSchema>
+
+/**
+ * Criar rascunho e compilar-e-congelar, sem aprovar. Existe porque hoje o unico caminho de
+ * criar run por HTTP tambem aprova, e ver o DAG antes de decidir e justamente o que o
+ * humano precisa para decidir (P15).
+ */
+export const CreateDraftCommandSchema = z
+  .object({
+    missionPath: NonEmptyStringSchema.optional(),
+    missionId: MissionIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    const given = [command.missionPath, command.missionId].filter((v) => v !== undefined).length
+    if (given !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['missionPath'],
+        message: 'informe exatamente um entre `missionPath` e `missionId`',
+      })
+    }
+  })
+
+export type CreateDraftCommand = z.infer<typeof CreateDraftCommandSchema>
 
 export const TaskCommandSchema = z
   .object({

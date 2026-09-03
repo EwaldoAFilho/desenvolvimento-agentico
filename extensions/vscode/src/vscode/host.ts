@@ -3,16 +3,16 @@ import { readdir } from 'node:fs/promises'
 import process from 'node:process'
 import * as vscode from 'vscode'
 import { AgenticClient } from '../core/client.js'
-import type {
-  CompileReportDto,
-  MissionListItem,
-  ProviderHealthDto,
-  RunHeaderDto,
-} from '../core/contracts.js'
+import type { CompileReportDto, ProviderHealthDto, RunHeaderDto } from '../core/contracts.js'
 import { CONTROL_PLANE_FILE_NAME } from '../core/contracts.js'
 import { discoverLive } from '../core/discovery.js'
 import { launchServe } from '../core/launcher.js'
-import { type MissionSummary, missionFilesOnDisk, summarizeMissions } from '../core/missions.js'
+import {
+  type MissionSummary,
+  missionFilesOnDisk,
+  summariesFromControlPlane,
+  withReport,
+} from '../core/missions.js'
 import { type DetectedProject, detectProject, messageOf } from '../core/project.js'
 import { AgenticService, type ServiceView } from '../core/service.js'
 import { childEnv, resolveToolchain } from '../core/toolchain.js'
@@ -49,7 +49,6 @@ export class AgenticHost implements vscode.Disposable {
   private pollTimer: NodeJS.Timeout | undefined
   private lastDataAt = 0
   private loading: Promise<void> | undefined
-  private readonly reports = new Map<string, CompileReportDto>()
   /** Servicos de projetos anteriores desta janela que ainda possuem um filho vivo. */
   private readonly retired: AgenticService[] = []
 
@@ -92,7 +91,6 @@ export class AgenticHost implements vscode.Disposable {
     // alcancavel pelo encerramento da janela (stopOnWindowClose).
     if (this.service?.view().childPid !== undefined) this.retired.push(this.service)
     this.service = undefined
-    this.reports.clear()
     this.data = { missions: [] }
     if (detected !== undefined) {
       this.log.info(`projeto detectado: ${detected.name} (${detected.repoRoot})`)
@@ -218,24 +216,22 @@ export class AgenticHost implements vscode.Disposable {
     this.lastDataAt = Date.now()
     if (client === undefined) {
       const entries = await readdir(project.missionsDir).catch(() => [] as string[])
-      const files = missionFilesOnDisk(project.missionsDir, project.repoRoot, entries)
       this.data = {
-        missions: summarizeMissions(files, undefined, this.reports),
+        missions: missionFilesOnDisk(project.missionsDir, project.repoRoot, entries),
         loadedAt: new Date().toISOString(),
       }
       return
     }
     try {
-      const [providers, files, runs] = await Promise.all([
+      const [providers, items, runs] = await Promise.all([
         client.providers(),
         client.missions(),
         client.runs(),
       ])
-      await this.compileAll(client, files)
       this.data = {
         providers,
         runs,
-        missions: summarizeMissions(files, runs, this.reports),
+        missions: summariesFromControlPlane(project.repoRoot, items),
         loadedAt: new Date().toISOString(),
       }
     } catch (error) {
@@ -244,36 +240,31 @@ export class AgenticHost implements vscode.Disposable {
     }
   }
 
-  private async compileAll(
-    client: AgenticClient,
-    files: readonly MissionListItem[],
-  ): Promise<void> {
-    await Promise.all(
-      files.map(async (item) => {
-        try {
-          this.reports.set(item.file, await client.compile(item.file))
-        } catch (error) {
-          this.log.warn(`compile de ${item.file} falhou: ${messageOf(error)}`)
-        }
-      }),
-    )
-  }
-
   async missionDetail(file: string): Promise<MissionDetail> {
     const summary = this.data.missions.find((m) => m.file === file)
     if (summary === undefined) throw new Error(`mission nao listada: ${file}`)
     const client = this.client()
-    if (client === undefined)
+    if (client === undefined) {
       return { summary, runs: [], error: 'control plane parado: runs nao apurados' }
+    }
     try {
+      const report = await client.compile(summary.file).catch(() => undefined)
+      const enriched = withReport(summary, report)
       const runs = (this.data.runs ?? (await client.runs())).filter(
-        (run) => run.missionId === summary.id,
+        (run) => run.missionId === enriched.id,
       )
       const last = runs[0]
-      if (last === undefined) return { summary, runs }
+      if (last === undefined)
+        return { summary: enriched, runs, ...(report === undefined ? {} : { report }) }
       const snapshot = await client.snapshot(last.id)
       const tasks = await Promise.all(snapshot.tasks.map((task) => client.task(last.id, task.id)))
-      return { summary, runs, snapshot, tasks }
+      return {
+        summary: enriched,
+        runs,
+        snapshot,
+        tasks,
+        ...(report === undefined ? {} : { report }),
+      }
     } catch (error) {
       return { summary, runs: [], error: messageOf(error) }
     }

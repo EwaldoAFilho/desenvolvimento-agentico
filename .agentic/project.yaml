@@ -20,7 +20,13 @@ execution:
   attemptTimeoutMinutes: 30
   retryBackoffSeconds: 15
   workspaceSetup:                # prepara a worktree antes do agente e do gate
-    link: [node_modules]
+    # apps/web/dist entra junto com node_modules porque a worktree precisa parecer uma
+    # INSTALACAO do produto, nao so um checkout do fonte. productWebDist() sobe no maximo 6
+    # niveis a partir do proprio modulo procurando apps/web/dist/index.html; numa worktree
+    # esse caminho nao existe (dist/ e gitignored) e a busca para antes de alcancar o repo
+    # principal. Sem o link, web-dist.test.ts reprova o gate `unit` de TODA task, em toda
+    # worktree. Observado em DA-UX-001/U01/a1.
+    link: [node_modules, apps/web/dist]
     commands: []
     timeoutMs: 600000
 

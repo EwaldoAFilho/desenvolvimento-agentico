@@ -248,14 +248,12 @@ function missionRow(mission: MissionSummary, selected: boolean): HTMLElement {
       {},
       mission.lastRun === undefined
         ? '—'
-        : `${mission.lastRun.id.slice(-8)} · ${formatClock(mission.lastRun.timestamps.createdAt)}`,
+        : `${mission.lastRun.id.slice(-8)} · ${formatClock(mission.lastRun.createdAt)}`,
     ),
     el(
       'td',
       {},
-      mission.stats === undefined
-        ? '—'
-        : `${mission.stats.tasks} tasks · ${mission.stats.phases} fases`,
+      mission.tasks === undefined ? '—' : `${mission.tasks} tasks · ${mission.phases ?? 0} fases`,
     ),
     el(
       'td',
@@ -382,12 +380,13 @@ function selectedSection(state: HomeState): HTMLElement | undefined {
       ),
     ),
   )
-  if (summary.diagnostics !== undefined && summary.diagnostics.length > 0) {
+  const diagnostics = detail.report?.diagnostics ?? []
+  if (diagnostics.length > 0) {
     parts.push(
       el(
         'ul',
         { class: 'diagnostics' },
-        ...summary.diagnostics.map((d) =>
+        ...diagnostics.map((d) =>
           el(
             'li',
             { class: `sev-${d.severity.toLowerCase()}` },

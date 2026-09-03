@@ -1,37 +1,32 @@
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
-import type { CompileReportDto, MissionListItem, RunHeaderDto } from './contracts.js'
+import type {
+  CompileReportDto,
+  MissionSummaryDto,
+  MissionViewState,
+  RunSummaryDto,
+} from './contracts.js'
 
 /**
- * Missions como a sidebar mostra: id, estado e ultimo run. O arquivo e listado pelo control
- * plane quando ele esta no ar (`GET /api/missions`) e pelo disco quando nao esta — a lista
- * nao some porque o processo parou. Runs so existem pelo control plane (I7): sem ele, o
- * ultimo run e "nao apurado", nunca "nenhum".
+ * Missions como a sidebar mostra: id, estado e ultimo run. Com o control plane no ar a
+ * listagem ja vem enriquecida (`GET /api/missions`: estado, contadores, ultimo run); parada,
+ * a lista vem do disco (mesmo filtro do servidor) e tudo que depende de run e "nao apurado",
+ * nunca "nenhum" (I7: run so existe pelo control plane).
  */
-export type MissionState =
-  | 'UNKNOWN'
-  | 'INVALID'
-  | 'READY'
-  | 'DRAFT'
-  | 'APPROVED'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'BLOCKED'
-  | 'VERIFYING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'CANCELLED'
+export type MissionState = MissionViewState | 'UNKNOWN'
 
 export interface MissionSummary {
   readonly id: string
   /** Relativo ao `repoRoot`, como o servidor devolve. */
   readonly file: string
   readonly path: string
+  readonly title: string
   readonly state: MissionState
-  readonly ok?: boolean
-  readonly stats?: CompileReportDto['stats']
-  readonly diagnostics?: CompileReportDto['diagnostics']
-  readonly lastRun?: RunHeaderDto
-  /** `false` quando os runs nao puderam ser consultados (control plane parado). */
+  readonly tasks?: number
+  readonly phases?: number
+  readonly errors?: number
+  readonly warnings?: number
+  readonly lastRun?: RunSummaryDto
+  /** `false` quando o control plane nao pode ser consultado (parado). */
   readonly runsKnown: boolean
 }
 
@@ -46,7 +41,7 @@ export function missionFilesOnDisk(
   missionsDir: string,
   repoRoot: string,
   entries: readonly string[],
-): MissionListItem[] {
+): MissionSummary[] {
   return entries
     .filter((name) => /\.ya?ml$/i.test(name))
     .sort()
@@ -54,47 +49,49 @@ export function missionFilesOnDisk(
       const path = join(missionsDir, name)
       const rel = relative(repoRoot, path)
       const inside = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
-      return { file: inside ? rel.split(sep).join('/') : path, path }
+      const file = inside ? rel.split(sep).join('/') : path
+      return {
+        id: missionIdOfFile(name),
+        file,
+        path,
+        title: '',
+        state: 'UNKNOWN',
+        runsKnown: false,
+      }
     })
 }
 
-export function stateOfRun(status: string | undefined, ok: boolean | undefined): MissionState {
-  switch (status) {
-    case 'DRAFT':
-    case 'APPROVED':
-    case 'RUNNING':
-    case 'PAUSED':
-    case 'BLOCKED':
-    case 'VERIFYING':
-    case 'COMPLETED':
-    case 'FAILED':
-    case 'CANCELLED':
-      return status
-    default:
-      if (ok === undefined) return 'UNKNOWN'
-      return ok ? 'READY' : 'INVALID'
-  }
+/** Listagem do control plane, com o caminho absoluto resolvido para o editor abrir. */
+export function summariesFromControlPlane(
+  repoRoot: string,
+  items: readonly MissionSummaryDto[],
+): MissionSummary[] {
+  return items.map((item) => ({
+    id: item.id ?? missionIdOfFile(item.file),
+    file: item.file,
+    path: join(repoRoot, item.file),
+    title: item.title,
+    state: item.state,
+    tasks: item.tasks,
+    phases: item.phases,
+    errors: item.errors,
+    warnings: item.warnings,
+    runsKnown: true,
+    ...(item.lastRun === undefined ? {} : { lastRun: item.lastRun }),
+  }))
 }
 
-export function summarizeMissions(
-  files: readonly MissionListItem[],
-  runs: readonly RunHeaderDto[] | undefined,
-  reports: ReadonlyMap<string, CompileReportDto>,
-): MissionSummary[] {
-  return files.map((item) => {
-    const report = reports.get(item.file)
-    const id = report?.missionId ?? missionIdOfFile(item.file)
-    const lastRun = runs?.find((run) => run.missionId === id)
-    return {
-      id,
-      file: item.file,
-      path: item.path,
-      state: stateOfRun(lastRun?.status, report?.ok),
-      runsKnown: runs !== undefined,
-      ...(report === undefined
-        ? {}
-        : { ok: report.ok, stats: report.stats, diagnostics: report.diagnostics }),
-      ...(lastRun === undefined ? {} : { lastRun }),
-    }
-  })
+/** Relatorio de compile de uma mission, quando o host o pediu (detalhe). */
+export function withReport(
+  summary: MissionSummary,
+  report: CompileReportDto | undefined,
+): MissionSummary {
+  if (report === undefined) return summary
+  return {
+    ...summary,
+    tasks: report.stats.tasks,
+    phases: report.stats.phases,
+    errors: report.stats.errors,
+    warnings: report.stats.warnings,
+  }
 }

@@ -1,4 +1,5 @@
-import { resolve } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import nodeProcess from 'node:process'
 import type { CompiledGraph } from '@agentic/compiler'
 import {
@@ -7,9 +8,13 @@ import {
   type Clock,
   type IdGenerator,
   type Integrator,
+  isMissionId,
   isRecoverableActiveRunStatus,
   isRunId,
   isRunStatus,
+  type MissionId,
+  type MissionPlanner,
+  type MissionPlannerRegistry,
   type MissionSpec,
   type ProviderRegistry,
   RECOVERABLE_ACTIVE_RUN_STATUSES,
@@ -18,6 +23,7 @@ import {
   type RunStatus,
   type TaskId,
   agentProfileId as toAgentProfileId,
+  missionId as toMissionId,
   providerId as toProviderId,
 } from '@agentic/domain'
 import { type GateProfiles, GateRunner, loadGateProfiles } from '@agentic/gates'
@@ -30,14 +36,19 @@ import {
 } from '@agentic/persistence'
 import type { GroupProbeDeps } from '@agentic/process'
 import {
+  BUILT_IN_PLANNER_DESCRIPTORS,
+  createMissionPlannerRegistry,
   createProviderRegistryFromProject,
+  LocalCliMissionPlanner,
   type MockScript,
   type ProviderFactory,
 } from '@agentic/providers'
 import type { GatesFile, ProjectFile, RunSnapshot, TaskDetail } from '@agentic/schemas'
+import { parseMissionFile } from '@agentic/schemas'
 import {
   GitIntegrator,
   GitWorktreeWorkspaceProvider,
+  git,
   SharedWorkspaceProvider,
 } from '@agentic/workspace'
 import {
@@ -49,13 +60,22 @@ import {
   type CreateRunInput,
   compileMission,
   createRun,
+  DEFAULT_PLANNING_TIMEOUT_MS,
   generateMissionReport,
   getRunSnapshot,
   getTaskDetail,
   loadMissionSpec,
   loadRun,
+  type MissionArtifactStore,
+  MissionFileExistsError,
   type MissionReport,
+  type PlanMissionInput,
+  type PlanMissionResult,
+  type PlanningDeps,
+  type ProjectSourceText,
   pauseRun,
+  planMission,
+  type RepoObserver,
   resumeRun,
   retryTask,
   type StartRunInput,
@@ -133,6 +153,12 @@ export interface OwnershipLease {
   onRelease(hook: () => void): () => void
 }
 
+/** Onde as missoes do projeto moram, dentro do `baseDir`. */
+const DEFAULT_MISSIONS_DIR = 'missions'
+
+const MISSION_FILE_SUFFIX = '.mission.yaml'
+const MISSION_FILE_SUFFIXES = ['.yaml', '.yml']
+
 export interface ControlPlaneConfig {
   readonly project: ProjectFile
   readonly gatesFile: GatesFile
@@ -146,6 +172,18 @@ export interface ControlPlaneConfig {
    * ninguem previu (I14).
    */
   readonly repoRoot?: string
+  /**
+   * Conteudo BRUTO do project.yaml e do gates.yaml. Compilar e funcao pura sobre texto
+   * (ARCHITECTURE 7), e planejar compila a proposta antes de gravar qualquer coisa. Ausentes,
+   * o control plane le os dois do disco na primeira vez que precisar.
+   */
+  readonly projectText?: string
+  readonly gatesText?: string
+  /** Onde o artefato da missao e gravado. Default: `<runtimeDir>/missions`. */
+  readonly missionsDir?: string
+  /** Planejadores disponiveis. Ausente: os derivados das CLIs declaradas no projeto. */
+  readonly planners?: MissionPlannerRegistry
+  readonly planningTimeoutMs?: number
   readonly clock?: Clock
   readonly ids?: IdGenerator
   readonly registry?: ProviderRegistry
@@ -204,6 +242,16 @@ export interface ControlPlane {
   /** Identidade do dono, quando este plane tem posse. Liga a posse a descoberta. */
   readonly instanceId?: string
   readonly registry: ProviderRegistry
+  /**
+   * Quem sabe propor missao. Lista vazia e resposta legitima: nem todo projeto declara uma
+   * CLI que saiba planejar.
+   *
+   * Opcional no CONTRATO, e nunca em `createControlPlane`: existe implementacao parcial de
+   * `ControlPlane` fora deste pacote, e exigir planejamento de quem so precisa despachar
+   * task quebraria essas implementacoes sem ganho. Quem consome recusa explicitamente
+   * quando falta, em vez de assumir que existe.
+   */
+  readonly planners?: MissionPlannerRegistry
   readonly gates: GateProfiles
   readonly clock: Clock
   readonly ids: IdGenerator
@@ -211,6 +259,8 @@ export interface ControlPlane {
   validateMission(input: CompileInput): ReturnType<typeof validateMission>
   compileMission(input: CompileInput): CompileResult
   createRun(input: Omit<CreateRunInput, 'project'> & { project?: ProjectFile }): Promise<Run>
+  /** Ver `planners`: opcional pelo mesmo motivo, e sempre presente em `createControlPlane`. */
+  planMission?(input: PlanMissionInput): Promise<PlanMissionResult>
   approveMission(input: ApproveMissionInput): Promise<Run>
   startRun(input: StartRunInput): Promise<Run>
   pauseRun(runId: RunId, command: HumanCommand): Promise<void>
@@ -296,6 +346,236 @@ interface RunWiring {
   readonly workspaces: AttemptWorkspaceProvider
   readonly missionWorkspaces?: MissionWorkspaceProvider
   readonly integrator: Integrator
+}
+
+// --------------------------------------------------------------------------------------
+// Planejamento: quem pode propor, onde o artefato mora, como o repositorio e observado
+// --------------------------------------------------------------------------------------
+
+/**
+ * Planejadores derivados das CLIs que o projeto declara. So entra a CLI para a qual
+ * conhecemos um modo nao interativo de LEITURA: pedir plano a uma CLI cujo modo de leitura
+ * desconhecemos seria adivinhar permissao de escrita, e planejar nao escreve.
+ *
+ * Provider in-process nao vira planejador — simulador nao se apresenta como planejamento de
+ * verdade (ADR-0016 4). Planejador simulado entra por `config.planners`, nomeado como tal.
+ */
+function plannersOf(project: ProjectFile): MissionPlannerRegistry {
+  const planners: MissionPlanner[] = []
+  for (const [id, config] of Object.entries(project.providers.registry)) {
+    if (config.kind !== 'local-cli') continue
+    const descriptor = BUILT_IN_PLANNER_DESCRIPTORS[id]
+    if (descriptor === undefined) continue
+    planners.push(
+      new LocalCliMissionPlanner(descriptor, {
+        id: toProviderId(id),
+        ...(config.command === undefined ? {} : { command: config.command }),
+        ...(config.versionArgs === undefined ? {} : { versionArgs: config.versionArgs }),
+      }),
+    )
+  }
+  const preferred = project.providers.default
+  const isPlanner = planners.some((planner) => String(planner.id) === preferred)
+  return createMissionPlannerRegistry({
+    planners,
+    ...(isPlanner ? { default: toProviderId(preferred) } : {}),
+  })
+}
+
+/** Id da missao pelo NOME do arquivo. `DA-UX-001.mission.yaml` -> `DA-UX-001`. */
+function missionIdOfFile(name: string): MissionId | undefined {
+  const suffix = MISSION_FILE_SUFFIXES.find((item) => name.endsWith(item))
+  if (suffix === undefined) return undefined
+  const base = name.slice(0, -suffix.length)
+  const id = base.endsWith('.mission') ? base.slice(0, -'.mission'.length) : base
+  return isMissionId(id) ? id : undefined
+}
+
+function posix(path: string): string {
+  return path.split(sep).join('/')
+}
+
+/**
+ * O artefato da missao em disco. `create` usa `wx`: se o arquivo ja existe, o sistema de
+ * arquivos recusa — nao ha janela entre conferir e gravar em que outro pedido pudesse
+ * sobrescrever o plano de alguem.
+ */
+function missionArtifactStore(repoRoot: string, missionsDir: string): MissionArtifactStore {
+  const fileOf = (id: MissionId): string => join(missionsDir, `${id}${MISSION_FILE_SUFFIX}`)
+  return {
+    pathFor: (id) => posix(relative(repoRoot, fileOf(id))),
+    /**
+     * Nome do arquivo E id declarado dentro dele: um plano gravado com outro nome continua
+     * ocupando o id, e propor esse id daria colisao so na hora de compilar.
+     */
+    taken: async (): Promise<readonly MissionId[]> => {
+      let entries: string[]
+      try {
+        entries = await readdir(missionsDir)
+      } catch {
+        // Diretorio ausente e projeto sem missao — o estado normal de quem acabou de comecar.
+        return []
+      }
+      const taken = new Set<string>()
+      for (const name of entries) {
+        const fromName = missionIdOfFile(name)
+        if (fromName !== undefined) taken.add(fromName)
+        if (!MISSION_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue
+        const text = await readFile(join(missionsDir, name), 'utf8').catch(() => undefined)
+        if (text === undefined) continue
+        const parsed = parseMissionFile(text)
+        if (parsed.ok) taken.add(parsed.value.id)
+      }
+      return [...taken].sort().map((id) => toMissionId(id))
+    },
+    create: async (id, text): Promise<void> => {
+      const path = fileOf(id)
+      await mkdir(dirname(path), { recursive: true })
+      try {
+        await writeFile(path, text, { encoding: 'utf8', flag: 'wx' })
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        if (code === 'EEXIST') throw new MissionFileExistsError(posix(relative(repoRoot, path)))
+        throw error
+      }
+    },
+  }
+}
+
+/**
+ * O que o control plane consegue MEDIR do repositorio sem alterar nada: o commit atual e o
+ * que o git ve de diferente dele. Duas leituras iguais em volta da chamada do planejador sao
+ * a evidencia de que planejar nao alterou arquivo.
+ *
+ * LIMITE CONHECIDO, registrado em vez de escondido: `git diff HEAD` compara conteudo DEPOIS
+ * dos filtros do git. Com `.gitattributes` declarando `text`, trocar LF por CRLF (ou o
+ * contrario) nao aparece em lugar nenhum — para o git aquilo nao e mudanca. Uma alteracao
+ * so de fim de linha em arquivo normalizado passa despercebida aqui.
+ *
+ * Nao e defeito desta funcao: e o significado de "mudou" que o proprio git define. Fechar
+ * exigiria hashear bytes do disco de todo arquivo rastreado a cada leitura, em toda chamada
+ * de planejamento, e o custo nao paga o cenario. Fica dito, e vale lembrar o modelo do
+ * produto: verificado, nao confinado. Esta digital detecta alteracao comum; ela nao e
+ * barreira contra processo adversarial — quem consegue rodar `git update-index` tambem
+ * consegue commitar.
+ *
+ * Somente conteudo versionado — arquivo ignorado fica de fora de proposito: `.agentic/` e o
+ * banco do proprio control plane mudam durante o planejamento, e cobra-los aqui trocaria a
+ * garantia por um alarme permanente. Sem git nao ha observacao, e ausencia de observacao nao
+ * vale como prova: o caso de uso recusa em vez de afirmar o que nao mediu.
+ */
+export function gitRepoObserver(repoRoot: string): RepoObserver {
+  return {
+    fingerprint: async (): Promise<string | undefined> => {
+      try {
+        const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+          cwd: repoRoot,
+          stage: 'diff',
+        })
+        // Repositorio sem nenhum commit nao tem HEAD, e isso nao impede a comparacao.
+        const head = await git(['rev-parse', 'HEAD'], {
+          cwd: repoRoot,
+          allowFailure: true,
+          stage: 'diff',
+        })
+        // `status` diz NOME e ESTADO, nunca conteudo: um arquivo que ja estava modificado
+        // continua saindo como ` M caminho` depois de ser reescrito, e um nao rastreado
+        // continua saindo como `?? caminho`. So com isso, o planejador poderia sobrescrever
+        // qualquer um dos dois sem mover a impressao digital — e a garantia de "nada mudou
+        // alem do artefato da missao" seria vazia justamente onde ha trabalho em andamento.
+        //
+        // O conteudo entra por dois caminhos que NAO alteram o indice: o patch do que ja e
+        // rastreado, e o hash do que ainda nao e. `--intent-to-add` resolveria os dois de
+        // uma vez, mas escreve no indice, e observar nao pode alterar o que observa.
+        // `assume-unchanged` e `skip-worktree` mandam o git IGNORAR alteracao no arquivo:
+        // com o bit ligado, status e diff HEAD ficam vazios mesmo com o conteudo mudado.
+        //
+        // Nao basta incluir os bits na digital. Se o bit ja estiver ligado ANTES da primeira
+        // leitura, as duas digitais nascem iguais e a alteracao no meio fica invisivel do
+        // mesmo jeito. Com o bit ligado o git simplesmente NAO consegue reportar mudanca
+        // naquele arquivo — entao nao ha observacao a ser feita, e a resposta honesta e
+        // recusar, como em todo o resto deste observador.
+        //
+        // `ls-files -v` marca assume-unchanged com letra MINUSCULA e skip-worktree com `S`.
+        const flags = await git(['ls-files', '-v'], {
+          cwd: repoRoot,
+          allowFailure: true,
+          stage: 'diff',
+        })
+        if (flags.exitCode !== 0) return undefined
+        const ocultos = flags.stdout
+          .split('\n')
+          .filter((linha) => linha.length > 1)
+          .some((linha) => {
+            const marca = linha[0] ?? ''
+            return marca === 'S' || (marca >= 'a' && marca <= 'z')
+          })
+        if (ocultos) return undefined
+        const patch = await git(['diff', 'HEAD', '--no-ext-diff', '--no-color'], {
+          cwd: repoRoot,
+          allowFailure: true,
+          stage: 'diff',
+        })
+        const untracked = status.stdout
+          .split('\0')
+          .filter((entry) => entry.startsWith('?? '))
+          .map((entry) => entry.slice(3))
+          .filter((path) => path.length > 0)
+          .sort()
+        // A lista de caminhos vai por STDIN, nao por argv: argv tem teto de tamanho no
+        // sistema operacional (32.767 caracteres no Windows) e nenhum lote finito resolve um
+        // caminho unico grande demais. `--stdin-paths` tira o problema da equacao.
+        //
+        // `--stdin-paths` nao aceita qualquer byte: separa por quebra de linha, LE linha
+        // iniciada por aspas como C-quoted, e descarta `\r` no fim. Um nome com qualquer
+        // dessas formas seria lido como OUTRO caminho — e o git responderia exit 0, com a
+        // contagem certa, hasheando o arquivo errado. Alteracao invisivel com aparencia de
+        // observacao completa e pior que recusa, entao esses nomes recusam: e a mesma
+        // doutrina do resto deste observador — ausencia de observacao nao vale prova.
+        // U+FFFD num caminho significa uma de duas coisas, e nenhuma permite prosseguir: ou
+        // o nome no disco tem bytes que nao sao UTF-8 e o wrapper do git os destruiu na
+        // decodificacao, ou o arquivo se chama assim mesmo. No primeiro caso a string nao
+        // aponta mais para o arquivo certo — e pode apontar para OUTRO, rastreado ou nao,
+        // fazendo `hash-object` sair 0 sobre o arquivo errado e escondendo a alteracao.
+        // Distinguir os dois casos exigiria o helper git devolver bytes em vez de string,
+        // o que atinge toda chamada git do produto e e mudanca de outra missao. Aqui a
+        // resposta honesta e recusar a observacao inteira.
+        const irrepresentavel = (caminho: string): boolean =>
+          caminho.includes('\n') ||
+          caminho.includes('\r') ||
+          caminho.startsWith('"') ||
+          caminho.includes('\uFFFD')
+        let contents = ''
+        if (untracked.length > 0) {
+          if (untracked.some(irrepresentavel)) return undefined
+          // O wrapper do git decodifica em UTF-8, entao um nome POSIX com bytes invalidos
+          // vira U+FFFD. Se existir tambem um arquivo chamado literalmente com esse
+          // caractere, os dois viram a MESMA string: `--stdin-paths` hashearia o segundo
+          // duas vezes, com exit 0 e contagem certa, e alteracao no primeiro ficaria
+          // invisivel. Nome repetido depois da decodificacao e prova de que a lista nao
+          // representa mais o disco — entao recusa.
+          if (new Set(untracked).size !== untracked.length) return undefined
+          const hashes = await git(['hash-object', '--stdin-paths'], {
+            cwd: repoRoot,
+            allowFailure: true,
+            stage: 'diff',
+            stdin: `${untracked.join('\n')}\n`,
+          })
+          const saida = hashes.stdout.split('\n').filter((linha) => linha.length > 0)
+          // Hash que faltou nao pode virar `?`: devolveria impressao digital DEFINIDA sem ter
+          // observado o conteudo, e uma reescrita ficaria invisivel — exatamente o defeito
+          // que esta funcao existe para fechar.
+          if (hashes.exitCode !== 0 || saida.length !== untracked.length) return undefined
+          contents = untracked.map((caminho, i) => `${caminho} ${saida[i]}`).join('\n')
+        }
+        return [head.stdout.trim(), status.stdout, flags.stdout, patch.stdout, contents].join(
+          '\n---\n',
+        )
+      } catch {
+        return undefined
+      }
+    },
+  }
 }
 
 /**
@@ -412,6 +692,55 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     throw error
   }
   const { clock, ids, registry, gates, gateRunner, profiles, agentEnv } = montagem
+
+  const planners = config.planners ?? plannersOf(config.project)
+  const missionsDir = resolve(
+    repoRoot,
+    config.missionsDir ?? join(runtimeDir, DEFAULT_MISSIONS_DIR),
+  )
+
+  /**
+   * O TEXTO dos dois arquivos, nao o objeto ja validado: compilar a proposta e funcao pura
+   * sobre conteudo. Quando o chamador nao os entrega, sao lidos do disco uma vez e guardados
+   * — reler a cada correcao faria o projeto mudar no meio do ciclo de reparo.
+   */
+  let sources: ProjectSourceText | undefined =
+    config.projectText === undefined || config.gatesText === undefined
+      ? undefined
+      : { projectText: config.projectText, gatesText: config.gatesText }
+
+  const loadSources = async (): Promise<ProjectSourceText> => {
+    if (sources !== undefined) return sources
+    const gatesPath = isAbsolute(config.project.gates.file)
+      ? config.project.gates.file
+      : resolve(repoRoot, config.project.gates.file)
+    const projectPath = join(runtimeDir, 'project.yaml')
+    try {
+      const [projectText, gatesText] = await Promise.all([
+        readFile(projectPath, 'utf8'),
+        readFile(gatesPath, 'utf8'),
+      ])
+      sources = { projectText, gatesText }
+      return sources
+    } catch (error) {
+      throw new CommandRefusedError(
+        `nao foi possivel ler a configuracao do projeto para compilar a proposta: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+
+  const planningDeps: PlanningDeps = {
+    planners,
+    missions: missionArtifactStore(repoRoot, missionsDir),
+    repo: gitRepoObserver(repoRoot),
+    sources: loadSources,
+    project: config.project,
+    gates: gates.ids,
+    readRoot: repoRoot,
+    timeoutMs: config.planningTimeoutMs ?? DEFAULT_PLANNING_TIMEOUT_MS,
+  }
 
   const deps: ApplicationDeps = {
     store: persistence.runs,
@@ -735,19 +1064,23 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
     },
     ...(lease === undefined ? {} : { instanceId: lease.instanceId }),
     registry,
+    planners,
     gates,
     clock,
     ids,
     deps,
     validateMission,
     compileMission,
-    // Estas tres escrevem estado sem passar por `open`, entao cobram a guarda por conta
+    // Estas escrevem estado sem passar por `open`, entao cobram a guarda por conta
     // propria — e cobram a MESMA guarda: num plane sem posse declarada elas recusam, como
     // `open` e `adoptRecoverableRuns`. Foi por aqui que `mission approve` mutava o projeto
-    // de outro processo (003B).
+    // de outro processo (003B). Planejar tambem escreve (o artefato da missao e o rascunho).
     createRun: (input) =>
       recusarSemPosse<Run>('criar run') ??
       createRun(deps, { ...input, project: input.project ?? config.project }),
+    planMission: (input) =>
+      recusarSemPosse<PlanMissionResult>('planejar missao') ??
+      planMission(deps, planningDeps, input),
     approveMission: (input) =>
       recusarSemPosse<Run>('aprovar missao') ?? approveMission(deps, input),
     startRun: (input) => recusarSemPosse<Run>('iniciar run') ?? startRun(deps, input),

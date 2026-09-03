@@ -140,6 +140,8 @@ export async function getRunSnapshot(deps: ApplicationDeps, runId: RunId): Promi
         touches: [...task.touches],
         risk: task.risk,
         estimate: task.estimate ?? 1,
+        ...(task.requireReview === undefined ? {} : { requireReview: task.requireReview }),
+        ...(task.reviewPolicy === undefined ? {} : { reviewPolicy: task.reviewPolicy }),
       })),
       edges: run.graph.edges.map((edge) => ({ from: edge.from, to: edge.to })),
       waves: view.waves.map((wave) => [...wave]),

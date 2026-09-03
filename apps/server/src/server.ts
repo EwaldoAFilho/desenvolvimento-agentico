@@ -15,6 +15,8 @@ import { claimControlPlane, type ShutdownOptions, shutdownControlPlane } from '.
 import { PROJECT_HEADER, PROJECT_MISMATCH, runtimeDirOf } from './project-identity.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerMissionRoutes } from './routes/missions.js'
+import { registerPlanningRoutes } from './routes/planning.js'
+import { registerProjectRoutes } from './routes/project.js'
 import { registerReadRoutes } from './routes/read.js'
 import { closeStreams, registerStreamRoutes } from './routes/stream.js'
 import { registerStatic } from './static.js'
@@ -35,7 +37,9 @@ export function createServer(input: CreateServerInput): FastifyInstance {
   registerProjectGuard(app, deps)
   registerReadRoutes(app, deps)
   registerStreamRoutes(app, deps)
+  registerProjectRoutes(app, deps)
   registerMissionRoutes(app, deps)
+  registerPlanningRoutes(app, deps)
   registerCommandRoutes(app, deps)
   registerStatic(app, deps)
   return app
@@ -237,6 +241,12 @@ export async function startServer(config: ServerConfig = {}): Promise<RunningSer
       project: sources.project,
       gatesFile: sources.gatesFile,
       repoRoot: sources.repoRoot,
+      // O TEXTO dos dois arquivos ja esta em maos: compilar a proposta de plano e funcao pura
+      // sobre conteudo, e passar daqui evita uma segunda leitura de disco que poderia divergir
+      // do que este processo carregou.
+      projectText: sources.projectText,
+      gatesText: sources.gatesText,
+      ...(config.missionsDir === undefined ? {} : { missionsDir: config.missionsDir }),
       // O banco mora onde a posse foi disputada, e ninguem escolhe isso: `createControlPlane`
       // deriva `<repoRoot>/.agentic` e recusa se o lease proteger outro diretorio.
       lease,

@@ -35,7 +35,7 @@ export function missionDescription(mission: MissionSummary): string {
     mission.state === 'UNKNOWN' ? (mission.runsKnown ? 'sem run' : 'não apurado') : mission.state,
   ]
   if (mission.lastRun !== undefined) parts.push(`run ${mission.lastRun.id.slice(-6)}`)
-  if (mission.stats !== undefined) parts.push(`${mission.stats.tasks} tasks`)
+  if (mission.tasks !== undefined) parts.push(`${mission.tasks} tasks`)
   return parts.join(' · ')
 }
 
@@ -43,13 +43,11 @@ function missionTooltip(mission: MissionSummary): string {
   const lines = [mission.file]
   if (mission.lastRun !== undefined) {
     lines.push(
-      `último run: ${mission.lastRun.id} (${mission.lastRun.status}, ${mission.lastRun.timestamps.createdAt})`,
+      `último run: ${mission.lastRun.id} (${mission.lastRun.status}, ${mission.lastRun.createdAt})`,
     )
   }
-  if (mission.diagnostics !== undefined) {
-    const errors = mission.diagnostics.filter((d) => d.severity === 'ERROR').length
-    const warnings = mission.diagnostics.filter((d) => d.severity === 'WARNING').length
-    lines.push(`compile: ${errors} erro(s), ${warnings} aviso(s)`)
+  if (mission.errors !== undefined || mission.warnings !== undefined) {
+    lines.push(`compile: ${mission.errors ?? 0} erro(s), ${mission.warnings ?? 0} aviso(s)`)
   }
   return lines.join('\n')
 }
@@ -57,23 +55,20 @@ function missionTooltip(mission: MissionSummary): string {
 function missionIcon(mission: MissionSummary): string {
   switch (mission.state) {
     case 'RUNNING':
-    case 'VERIFYING':
       return 'sync~spin'
-    case 'PAUSED':
-      return 'debug-pause'
     case 'DRAFT':
+      return 'edit'
     case 'APPROVED':
       return 'circle-outline'
     case 'COMPLETED':
       return 'pass'
     case 'FAILED':
-    case 'BLOCKED':
       return 'error'
     case 'CANCELLED':
       return 'circle-slash'
     case 'INVALID':
       return 'warning'
-    case 'READY':
+    case 'PLANNED':
       return 'circle-large-outline'
     default:
       return 'file'

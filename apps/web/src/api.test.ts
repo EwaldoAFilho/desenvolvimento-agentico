@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  makeDraftResult,
+  makePlanFailure,
+  makePlanResult,
+  REAL_PLANNER,
+} from './__fixtures__/planning.js'
 import { makeSnapshot } from './__fixtures__/snapshot.js'
 import {
   ApiError,
   approveMission,
+  createMissionDraft,
+  getMissions,
+  getPlanners,
   getRunSnapshot,
+  planMission,
+  planningFailureOf,
   skipTask,
   startRun,
   streamUrl,
@@ -98,5 +109,117 @@ describe('cliente da API', () => {
   it('erro HTTP vira ApiError com status', async () => {
     stubFetch({ message: 'missao nao aprovada' }, false, 409)
     await expect(getRunSnapshot('run-1')).rejects.toBeInstanceOf(ApiError)
+  })
+})
+
+describe('revisão do plano pela API', () => {
+  it('as missões do projeto trazem o caminho do arquivo, validado pelo contrato', async () => {
+    const calls = stubFetch([
+      {
+        id: 'DA-BPM-021',
+        file: '.agentic/missions/DA-BPM-021.mission.yaml',
+        title: 'Refinar painel',
+        state: 'DRAFT',
+        tasks: 17,
+        phases: 7,
+        errors: 0,
+        warnings: 2,
+      },
+    ])
+    const missions = await getMissions()
+    expect(calls[0]?.url).toBe('/api/missions')
+    expect(missions[0]?.file).toBe('.agentic/missions/DA-BPM-021.mission.yaml')
+  })
+
+  it('o rascunho e pedido por UMA referencia — arquivo ou id, nunca as duas', async () => {
+    const calls = stubFetch(makeDraftResult(), true, 201)
+    const draft = await createMissionDraft({ missionId: 'DA-BPM-021' })
+    expect(calls[0]?.method).toBe('POST')
+    expect(calls[0]?.url).toBe('/api/missions/draft')
+    expect(calls[0]?.body).toEqual({ missionId: 'DA-BPM-021' })
+    expect(draft.alreadyExisted).toBe(false)
+
+    await expect(
+      createMissionDraft({
+        missionId: 'DA-BPM-021',
+        missionPath: '.agentic/missions/DA-BPM-021.mission.yaml',
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('resposta de rascunho fora do contrato nao vira DAG na tela', async () => {
+    stubFetch({ run: { id: 'run-1' } }, true, 201)
+    await expect(createMissionDraft({ missionId: 'DA-BPM-021' })).rejects.toThrow()
+  })
+})
+
+describe('planejamento pela API', () => {
+  it('quem planeja tem endereco proprio e e validado pelo contrato', async () => {
+    const calls = stubFetch([REAL_PLANNER])
+    const planners = await getPlanners()
+    expect(calls[0]?.url).toBe('/api/planners')
+    expect(planners[0]?.simulated).toBe(false)
+  })
+
+  it('planejador fora do contrato nao vira opcao na tela', async () => {
+    stubFetch([{ providerId: 'agente-a' }])
+    await expect(getPlanners()).rejects.toThrow()
+  })
+
+  it('planejar leva pedido, planejador, aceite e autor no corpo', async () => {
+    const calls = stubFetch(makePlanResult(), true, 201)
+    const outcome = await planMission({
+      prompt: 'quero um relatorio de estoque por deposito',
+      plannerId: 'agente-a',
+      acceptsSubscriptionUse: true,
+      actor: 'ewaldo',
+    })
+    expect(calls[0]?.method).toBe('POST')
+    expect(calls[0]?.url).toBe('/api/missions/plan')
+    expect(calls[0]?.body).toEqual({
+      prompt: 'quero um relatorio de estoque por deposito',
+      plannerId: 'agente-a',
+      acceptsSubscriptionUse: true,
+      actor: 'ewaldo',
+    })
+    expect(outcome.kind).toBe('planned')
+  })
+
+  it('pedido vazio ou sem autor nao sai do cliente', async () => {
+    stubFetch(makePlanResult(), true, 201)
+    await expect(
+      planMission({ prompt: '   ', acceptsSubscriptionUse: false, actor: 'ewaldo' }),
+    ).rejects.toThrow()
+    await expect(
+      planMission({ prompt: 'algo', acceptsSubscriptionUse: false, actor: '' }),
+    ).rejects.toThrow()
+  })
+
+  it('422 com corpo de diagnostico vira recusa, nao excecao', async () => {
+    stubFetch(makePlanFailure(), false, 422)
+    const outcome = await planMission({
+      prompt: 'quero um relatorio',
+      acceptsSubscriptionUse: true,
+      actor: 'ewaldo',
+    })
+    expect(outcome).toEqual({ kind: 'refused', failure: makePlanFailure() })
+  })
+
+  it('recusa de outra natureza continua sendo excecao — nao vira diagnostico de plano', async () => {
+    stubFetch({ error: { code: 'PLANNING_UNAVAILABLE', message: 'sem planejamento' } }, false, 501)
+    await expect(
+      planMission({ prompt: 'quero um relatorio', acceptsSubscriptionUse: true, actor: 'ewaldo' }),
+    ).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('so o corpo do contrato e lido como diagnostico de planejamento', () => {
+    expect(planningFailureOf(new ApiError(422, JSON.stringify(makePlanFailure())))?.code).toBe(
+      'CONTRACT_REJECTED',
+    )
+    expect(planningFailureOf(new ApiError(500, '<html>proxy</html>'))).toBeUndefined()
+    expect(planningFailureOf(new ApiError(501, JSON.stringify({ error: { code: 'X' } })))).toBe(
+      undefined,
+    )
+    expect(planningFailureOf(new Error('rede caiu'))).toBeUndefined()
   })
 })

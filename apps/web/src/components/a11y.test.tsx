@@ -3,6 +3,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { makeProjectHome } from '../__fixtures__/home.js'
+import {
+  makeDraftResult,
+  makeDraftSnapshot,
+  makePlanResult,
+  makePlanTaskDetail,
+  REAL_PLANNER,
+  SECOND_PLANNER,
+  SIMULATED_PLANNER,
+} from '../__fixtures__/planning.js'
 import {
   makeCompileReport,
   makeSnapshot,
@@ -11,12 +21,44 @@ import {
 import { TASK_STATUSES, taskStatusStyle } from '../lib/status.js'
 import { installReactFlowEnv } from '../test/react-flow-env.js'
 import { DagCanvas } from './DagCanvas.js'
+import { ErrorScreen } from './ErrorScreen.js'
+import { NewMission, type NewMissionDeps } from './NewMission.js'
+import { PlanReview, type PlanReviewDeps } from './PlanReview.js'
+import { ProjectHome } from './ProjectHome.js'
 import { ProvidersPanel } from './ProvidersPanel.js'
 import { StartMission } from './StartMission.js'
 
 installReactFlowEnv()
 
 const noop = (): void => {}
+
+/** Planejamento de mentira: acessibilidade se prova sem gastar assinatura de ninguem. */
+function renderNewMission(planners = [REAL_PLANNER, SECOND_PLANNER, SIMULATED_PLANNER]) {
+  const deps: Partial<NewMissionDeps> = {
+    loadPlanners: async () => planners,
+    plan: async () => ({ kind: 'planned' as const, result: makePlanResult() }),
+    loadSnapshot: async () => makeSnapshot(),
+  }
+  return render(<NewMission deps={deps} onCancel={noop} onOpenMission={noop} />)
+}
+
+/** Revisao do plano sem servidor e sem planejador: nada aqui congela plano de verdade. */
+const REVIEW_DEPS: Partial<PlanReviewDeps> = {
+  createDraft: async () => makeDraftResult(),
+  loadSnapshot: async () => makeDraftSnapshot(),
+  loadTaskDetail: async () => makePlanTaskDetail(),
+}
+
+function renderPlanReview() {
+  return render(
+    <PlanReview
+      report={makeCompileReport('warning')}
+      missionFile=".agentic/missions/DA-BPM-021.mission.yaml"
+      deps={REVIEW_DEPS}
+      onReload={noop}
+    />,
+  )
+}
 
 /**
  * O jsdom do teste nao carrega `styles.css`, entao `element.style.outline` nunca diz nada
@@ -132,6 +174,152 @@ describe('rotulos acessiveis dos controles', () => {
       const name = button.getAttribute('aria-label') ?? button.textContent ?? ''
       expect(name.trim().length).toBeGreaterThan(0)
     }
+  })
+
+  it('todo controle da Home recebe foco e anuncia a que missao pertence', () => {
+    render(
+      <ProjectHome
+        home={makeProjectHome()}
+        onOpenRun={noop}
+        onOpenMission={noop}
+        onNewMission={noop}
+        onReload={noop}
+      />,
+    )
+    const controls = screen.getAllByRole('button').filter((b) => !b.hasAttribute('disabled'))
+    expect(controls.length).toBeGreaterThanOrEqual(4)
+    const names = new Set<string>()
+    for (const control of controls) {
+      const name = (control.getAttribute('aria-label') ?? control.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+      names.add(name)
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    // "ver execução" repetido em cinco linhas nao diz a ninguem QUAL execucao vai abrir.
+    expect(names.size).toBe(controls.length)
+  })
+
+  it('a Home diz o estado por texto, nao so por cor', () => {
+    render(
+      <ProjectHome
+        home={makeProjectHome()}
+        onOpenRun={noop}
+        onOpenMission={noop}
+        onNewMission={noop}
+        onReload={noop}
+      />,
+    )
+    // O veredito do ambiente e uma frase — o `data-verdict` serve ao CSS, nao ao leitor.
+    const verdict = screen.getByTestId('environment-verdict')
+    expect(verdict.textContent).toContain('ambiente com pendência')
+    expect(verdict.textContent).toContain('indisponível')
+    expect(screen.getByTestId('mission-DA-DOC-004').textContent).toContain('CONCLUÍDA')
+  })
+
+  it('a tela de falha anuncia o erro e oferece um botao com nome', () => {
+    render(<ErrorScreen title="O control plane não respondeu" message="HTTP 500" onRetry={noop} />)
+    expect(screen.getByRole('main', { name: 'O control plane não respondeu' })).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+    const retry = screen.getByRole('button', { name: 'tentar novamente' })
+    retry.focus()
+    expect(document.activeElement).toBe(retry)
+  })
+
+  it('todo controle da tela de nova missao tem rotulo e recebe foco pelo teclado', async () => {
+    renderNewMission()
+    await screen.findByTestId('plan-mission')
+    fireEvent.change(screen.getByLabelText(/o que você quer que seja feito/i), {
+      target: { value: 'quero um relatório de estoque' },
+    })
+    fireEvent.change(screen.getByLabelText(/actor/i), { target: { value: 'ewaldo' } })
+    fireEvent.click(screen.getByLabelText(/consome a minha assinatura/i))
+
+    const controls = [
+      ...screen.getAllByRole('button'),
+      ...screen.getAllByRole('textbox'),
+      ...screen.getAllByRole('combobox'),
+      ...screen.getAllByRole('checkbox'),
+    ].filter((control) => !control.hasAttribute('disabled'))
+    expect(controls.length).toBeGreaterThanOrEqual(5)
+    for (const control of controls) {
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    for (const button of screen.getAllByRole('button')) {
+      const name = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('o aviso de consumo e legivel sem cor: icone escondido, frase a vista', async () => {
+    renderNewMission()
+    const notice = await screen.findByTestId('subscription-notice')
+    // `data-consumes` serve ao CSS; quem le a tela recebe a frase inteira.
+    expect(notice.getAttribute('data-consumes')).toBe('true')
+    expect(notice.textContent).toContain('consome a sua assinatura')
+    expect(notice.querySelector('[aria-hidden="true"]')).not.toBeNull()
+  })
+
+  it('o estado do planejador chega como texto, nao como cor', async () => {
+    renderNewMission()
+    const state = await screen.findByTestId('planner-state')
+    expect(state.textContent).toContain('observado pronto')
+  })
+
+  it('a espera e a razao de nao poder partir sao anunciadas por role=status', async () => {
+    renderNewMission()
+    const phase = await screen.findByTestId('plan-phase')
+    expect(phase.getAttribute('role')).toBe('status')
+    expect(phase.textContent).toContain('descreva o que você quer')
+  })
+
+  it('todo controle da revisão do plano tem rótulo próprio e recebe foco', async () => {
+    renderPlanReview()
+    await screen.findByRole('region', { name: 'Canvas do DAG' })
+    fireEvent.click(screen.getByTestId('task-node-T09'))
+    await screen.findByTestId('plan-node')
+
+    const controls = screen.getAllByRole('button').filter((b) => !b.hasAttribute('disabled'))
+    const names = new Set<string>()
+    for (const control of controls) {
+      const name = (control.getAttribute('aria-label') ?? control.textContent ?? '').trim()
+      expect(name.length).toBeGreaterThan(0)
+      names.add(name)
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+    // Dois botoes de copiar na mesma tela precisam dizer o que cada um copia.
+    expect(names.size).toBe(controls.length)
+  })
+
+  it('o nó do plano diz risco e revisão por texto, não por cor', async () => {
+    renderPlanReview()
+    await screen.findByRole('region', { name: 'Canvas do DAG' })
+    fireEvent.click(screen.getByTestId('task-node-T09'))
+
+    const risk = await screen.findByTestId('plan-node-risk')
+    // `data-risk` serve ao CSS; quem le a tela recebe a palavra.
+    expect(risk.querySelector('[data-risk="high"]')).not.toBeNull()
+    expect(risk.textContent).toContain('alto')
+    expect(screen.getByTestId('plan-node-review').textContent).toContain('revisor')
+  })
+
+  it('o conflito do plano é lido como par de tasks, não como cor de linha', () => {
+    render(
+      <StartMission
+        report={makeCompileReport('warning')}
+        approved={false}
+        providers={PROVIDERS_WITH_ENVIRONMENT}
+        onApprove={noop}
+        onStart={noop}
+        onApproveAndStart={noop}
+      />,
+    )
+    const conflicts = screen.getByTestId('conflicts')
+    expect(conflicts.textContent).toContain('T07 ↔ T09')
+    expect(conflicts.textContent).toContain('escopo')
+    expect(conflicts.querySelector('li')?.getAttribute('data-severity')).toBe('WARNING')
   })
 
   it('o campo de actor continua associado ao seu rotulo', () => {
