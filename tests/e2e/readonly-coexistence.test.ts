@@ -1,5 +1,7 @@
-import { access, readdir, rm } from 'node:fs/promises'
+import { access, chmod, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import nodeProcess from 'node:process'
 import { openPersistence, type Persistence } from '@agentic/persistence'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type LiveCli, runCli, spawnCli } from './support/cross-process.js'
@@ -30,6 +32,35 @@ import { type Fixture, materializeFixture } from './support/fixture.js'
  */
 
 const PRONTO = /control plane no ar em (http:\/\/\S+)/
+
+/**
+ * O fixture registra `claude` e `codex` como `local-cli`, e `doctor`/`providers` num processo
+ * FILHO sondam o PATH de verdade — o que fazia estes testes dependerem da maquina do operador:
+ * num runner sem as CLIs, `doctor` reporta NOT_INSTALLED e sai 1, e o teste, que quer provar
+ * leitura SEM POSSE e sem banco, reprovava por um motivo que nao e o dele. Duas CLIs de mentira
+ * na frente do PATH (o mesmo recurso do `git` de mentira em integration-in-flight) tornam a
+ * sonda deterministica em qualquer maquina: respondem `--version` e a sonda de sessao com 0.
+ * Nenhuma CLI real e invocada — que e o que a suite promete.
+ */
+let shimDir: string | undefined
+let pathOriginal: string | undefined
+
+beforeAll(async () => {
+  if (nodeProcess.platform === 'win32') return
+  shimDir = await mkdtemp(join(tmpdir(), 'agentic-cli-shim-'))
+  for (const nome of ['claude', 'codex']) {
+    const script = ['#!/bin/sh', `echo "${nome} 0.0.0-shim"`, 'exit 0', ''].join('\n')
+    await writeFile(join(shimDir, nome), script, 'utf8')
+    await chmod(join(shimDir, nome), 0o755)
+  }
+  pathOriginal = nodeProcess.env.PATH
+  nodeProcess.env.PATH = `${shimDir}:${pathOriginal ?? ''}`
+})
+
+afterAll(async () => {
+  if (pathOriginal !== undefined) nodeProcess.env.PATH = pathOriginal
+  if (shimDir !== undefined) await rm(shimDir, { recursive: true, force: true })
+})
 
 async function existe(path: string): Promise<boolean> {
   return access(path).then(
