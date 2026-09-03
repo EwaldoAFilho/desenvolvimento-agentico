@@ -602,6 +602,38 @@ describe('stopOwnChild — filho proprio, nunca o dono externo', () => {
     expect(w.signals).toEqual([])
   })
 
+  it('E. deactivate com o filho vivo e a sondagem de health em voo: o filho e encerrado, nunca "retained" mudo', async () => {
+    const w = world()
+    const probe = barrier()
+    let probes = 0
+    const service = new AgenticService(
+      depsOf(w, {
+        discover: async () => {
+          const child = w.spawned[0]
+          probes += 1
+          // A segunda sondagem (a primeira apos o spawn) fica presa ate o teste liberar.
+          if (child !== undefined && probes === 2) await probe.promise
+          w.live = child !== undefined && !child.done ? liveOf(child.pid) : undefined
+          return w.live
+        },
+      }),
+    )
+    const starting = service.start()
+    for (let i = 0; i < 50 && probes < 2; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(service.view().childPid).toBe(w.spawned[0]?.pid)
+    const stopping = service.stopOwnChild()
+    // A sondagem responde "e o seu filho" DEPOIS da bandeira: nao pode virar RUNNING.
+    probe.release()
+    const [outcome, view] = await Promise.all([stopping, starting])
+    expect(w.spawned[0]?.signals).toEqual(['SIGTERM'])
+    expect(w.spawned[0]?.done).toBe(true)
+    expect(outcome).toBe('none')
+    expect(view.state).toBe('STOPPED')
+    expect(w.signals).toEqual([])
+  })
+
   it('start apos abandono nao sobe nada', async () => {
     const w = world()
     const service = new AgenticService(depsOf(w))

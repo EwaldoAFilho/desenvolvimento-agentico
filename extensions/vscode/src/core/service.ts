@@ -218,6 +218,12 @@ export class AgenticService {
         return this.view()
       }
       const live = await this.deps.discover()
+      // A bandeira pode ter sido ligada DURANTE a sondagem: o resultado dela nao adota nada.
+      if (this.abandoned) {
+        await this.terminateOwnChild(child)
+        this.transition(this.child === undefined ? 'STOPPED' : 'FAILED')
+        return this.view()
+      }
       if (live !== undefined && live.pid === child.pid) {
         this.adopt(live)
         this.deps.log(`control plane no ar em ${live.url} (pid ${live.pid})`)
@@ -294,7 +300,8 @@ export class AgenticService {
       // quem chama (o `deactivate` corre contra o proprio relogio), e a bandeira continua
       // valendo mesmo se esse prazo vencer antes.
       await pending.catch(() => undefined)
-      return this.child === undefined ? 'none' : 'retained'
+      // O start pode ter adotado o filho num instante em que a bandeira ainda nao valia
+      // (a sondagem ja estava em voo): o que sobrou vivo e nosso e e encerrado aqui.
     }
     const child = this.child
     if (child === undefined || child.done) {
