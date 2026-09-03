@@ -48,6 +48,17 @@ async function run() {
   assert.ok(client, 'cliente')
   log(`control plane em ${client.baseUrl}`)
 
+  // Run BLOCKED de um dogfood anterior: cancelado, para a Home nao desviar para ele.
+  if (process.env.AGENTIC_DOGFOOD_CANCEL_BLOCKED === '1') {
+    for (const run of await client.runs()) {
+      if (run.status !== 'BLOCKED') continue
+      log(`cancelando run bloqueado anterior ${run.id} (${run.missionId})`)
+      await client
+        .post(`/api/runs/${encodeURIComponent(run.id)}/stop`, { actor: ACTOR })
+        .catch((e) => log(`cancelamento recusado: ${e.message}`))
+    }
+  }
+
   const planners = await client.get('/api/planners')
   log(`planners: ${JSON.stringify(planners)}`)
   const planner = planners.find((p) => p.providerId === PLANNER)
@@ -62,18 +73,29 @@ async function run() {
   const planned = await client.raw(
     'POST',
     '/missions/plan',
-    JSON.stringify({ prompt: PROMPT, plannerId: PLANNER, acceptsSubscriptionUse: true, actor: ACTOR }),
+    JSON.stringify({
+      prompt: PROMPT,
+      plannerId: PLANNER,
+      acceptsSubscriptionUse: true,
+      actor: ACTOR,
+    }),
     15 * 60_000,
   )
   log(`plan: HTTP ${planned.status} em ${Math.round((Date.now() - startedAt) / 1000)}s`)
   assert.ok(planned.ok, `planejamento recusado: ${planned.text.slice(0, 800)}`)
   const result = JSON.parse(planned.text)
-  log(`mission ${result.missionId} em ${result.file}; run ${result.run.id} ${result.run.status}; tasks=${result.report.stats.tasks}; erros=${result.report.stats.errors}; revisoes=${result.revisions}`)
+  log(
+    `mission ${result.missionId} em ${result.file}; run ${result.run.id} ${result.run.status}; tasks=${result.report.stats.tasks}; erros=${result.report.stats.errors}; revisoes=${result.revisions}`,
+  )
   assert.equal(result.run.status, 'DRAFT')
   assert.equal(result.report.ok, true)
 
   await vscode.commands.executeCommand('agentic.refresh')
-  await until('mission listada', () => host.data.missions.find((m) => m.id === result.missionId), 30_000)
+  await until(
+    'mission listada',
+    () => host.data.missions.find((m) => m.id === result.missionId),
+    30_000,
+  )
   await vscode.commands.executeCommand('agentic.openMission', result.file)
   await until('aba da mission', () => tabLabels().some((l) => l.includes(result.missionId)), 10_000)
   log('DRAFT visivel na aba (rota da mission)')
@@ -90,8 +112,16 @@ async function run() {
     note: 'dogfooding DA-VSCODE-MVP-002',
     specHash: result.report.specHash,
   })
-  assert.equal(approved.runId, result.run.id, 'aprovacao vale para o run DRAFT do plano inspecionado')
-  const started = await client.post('/api/runs', { missionId: result.missionId, acceptWarnings: true, actor: ACTOR })
+  assert.equal(
+    approved.runId,
+    result.run.id,
+    'aprovacao vale para o run DRAFT do plano inspecionado',
+  )
+  const started = await client.post('/api/runs', {
+    missionId: result.missionId,
+    acceptWarnings: true,
+    actor: ACTOR,
+  })
   assert.equal(started.runId, result.run.id, 'um clique, um run')
   log(`run ${started.runId} iniciado`)
   await vscode.commands.executeCommand('agentic.openRun', started.runId)
@@ -107,7 +137,9 @@ async function run() {
         last = line
         log(line)
       }
-      return ['COMPLETED', 'FAILED', 'CANCELLED', 'BLOCKED'].includes(snapshot.run.status) ? snapshot : undefined
+      return ['COMPLETED', 'FAILED', 'CANCELLED', 'BLOCKED'].includes(snapshot.run.status)
+        ? snapshot
+        : undefined
     },
     50 * 60_000,
   )

@@ -52,7 +52,10 @@ if (disposable) {
 try {
   await runTests({
     extensionDevelopmentPath,
-    extensionTestsPath: resolve(here, process.env.AGENTIC_IT_DOGFOOD === '1' ? 'dogfood.cjs' : 'suite.cjs'),
+    extensionTestsPath: resolve(
+      here,
+      process.env.AGENTIC_IT_DOGFOOD === '1' ? 'dogfood.cjs' : 'suite.cjs',
+    ),
     launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust'],
     extensionTestsEnv: { AGENTIC_IT_REPO_ROOT: repoRoot, AGENTIC_IT_WORKSPACE: workspace },
   })
