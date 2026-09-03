@@ -163,7 +163,9 @@ export async function detectProject(
     name: facts.name ?? projectDir.split(/[\\/]/).at(-1) ?? projectDir,
     projectDir,
     projectFile,
-    missionsDir: join(projectDir, RUNTIME_DIR_NAME, 'missions'),
+    // O control plane lista `<repoRoot>/.agentic/missions` (runtimeDir), nao o diretorio de
+    // configuracao: offline a extensao le o MESMO lugar.
+    missionsDir: join(repoRoot, RUNTIME_DIR_NAME, 'missions'),
     repoRoot,
     runtimeDir: join(repoRoot, RUNTIME_DIR_NAME),
     declaredUrl: `http://${host}:${port}`,

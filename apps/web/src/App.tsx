@@ -380,7 +380,12 @@ export function App({
           // A aprovacao ja e fato mesmo que a partida falhe depois: a tela registra isso
           // antes de tentar iniciar, para nao pedir a mesma aprovacao duas vezes.
           setBoot((prev) => (prev.kind === 'mission' ? { ...prev, approved: true } : prev))
-          return api.start({ missionId, acceptWarnings, actor })
+          return api.start({
+            missionId,
+            acceptWarnings,
+            actor,
+            ...(inspecionado === undefined ? {} : { specHash: inspecionado }),
+          })
         })
         .then((created) => {
           setStartPhase('running')
@@ -402,8 +407,14 @@ export function App({
       starting.current = true
       setStartPhase('starting')
       setBusy(true)
+      const inspecionado = boot.report.specHash
       api
-        .start({ missionId: boot.report.missionId, acceptWarnings, actor })
+        .start({
+          missionId: boot.report.missionId,
+          acceptWarnings,
+          actor,
+          ...(inspecionado === undefined ? {} : { specHash: inspecionado }),
+        })
         .then((created) => {
           setStartPhase('running')
           navigate({ run: created })

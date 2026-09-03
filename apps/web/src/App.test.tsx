@@ -423,6 +423,7 @@ describe('revisar, aprovar e executar num ato só', () => {
     expect(start).toHaveBeenCalledWith({
       missionId: 'DA-BPM-021',
       acceptWarnings: false,
+      specHash: REPORT_SPEC_HASH,
       actor: 'ewaldo',
     })
   })

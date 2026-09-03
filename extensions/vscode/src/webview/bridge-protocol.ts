@@ -34,7 +34,6 @@ export type WebviewToHostBridge =
       /** Caminho SEM o prefixo `/api`, como o cliente do dashboard o emite. */
       readonly path: string
       readonly body?: string
-      readonly timeoutMs?: number
     }
   | { readonly type: 'stream.open'; readonly streamId: number; readonly path: string }
   | { readonly type: 'stream.close'; readonly streamId: number }
@@ -98,7 +97,7 @@ export function isAppRoute(value: unknown): value is AppRoute {
 
 const SHAPES: Record<WebviewToHostBridge['type'], readonly string[]> = {
   ready: [],
-  api: ['id', 'method', 'path', 'body', 'timeoutMs'],
+  api: ['id', 'method', 'path', 'body'],
   'stream.open': ['streamId', 'path'],
   'stream.close': ['streamId'],
   'editor.openPath': ['path'],
@@ -108,7 +107,7 @@ const SHAPES: Record<WebviewToHostBridge['type'], readonly string[]> = {
   showLog: [],
 }
 
-const OPTIONAL: Readonly<Record<string, readonly string[]>> = { api: ['body', 'timeoutMs'] }
+const OPTIONAL: Readonly<Record<string, readonly string[]>> = { api: ['body'] }
 
 /** Valida a mensagem INTEIRA: tipo conhecido, chaves esperadas (as opcionais podem faltar), formato de cada campo. */
 export function isWebviewToHostBridge(raw: unknown): raw is WebviewToHostBridge {
@@ -127,11 +126,7 @@ export function isWebviewToHostBridge(raw: unknown): raw is WebviewToHostBridge 
         isId(message.id) &&
         (message.method === 'GET' || message.method === 'POST') &&
         isApiPath(message.path) &&
-        (message.body === undefined || typeof message.body === 'string') &&
-        (message.timeoutMs === undefined ||
-          (typeof message.timeoutMs === 'number' &&
-            message.timeoutMs > 0 &&
-            message.timeoutMs <= 3_600_000))
+        (message.body === undefined || typeof message.body === 'string')
       )
     case 'stream.open':
       return isId(message.streamId) && isApiPath(message.path)

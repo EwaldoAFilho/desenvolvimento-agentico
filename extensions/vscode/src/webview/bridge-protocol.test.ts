@@ -5,15 +5,12 @@ describe('protocolo da ponte', () => {
   it('api: id, metodo, caminho relativo; corpo e prazo opcionais; sem chaves extras', () => {
     expect(isWebviewToHostBridge({ type: 'api', id: 1, method: 'GET', path: '/runs' })).toBe(true)
     expect(
-      isWebviewToHostBridge({
-        type: 'api',
-        id: 1,
-        method: 'POST',
-        path: '/runs',
-        body: '{}',
-        timeoutMs: 1000,
-      }),
+      isWebviewToHostBridge({ type: 'api', id: 1, method: 'POST', path: '/runs', body: '{}' }),
     ).toBe(true)
+    // O prazo e decisao do host, por rota: a webview nao o escolhe.
+    expect(
+      isWebviewToHostBridge({ type: 'api', id: 1, method: 'GET', path: '/runs', timeoutMs: 1 }),
+    ).toBe(false)
     expect(isWebviewToHostBridge({ type: 'api', id: 1, method: 'DELETE', path: '/runs' })).toBe(
       false,
     )

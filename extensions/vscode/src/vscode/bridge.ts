@@ -43,6 +43,8 @@ export interface BridgeCapabilities {
   navigated(route: { readonly run?: string; readonly mission?: string; readonly new?: true }): void
   log(line: string): void
   fetchFn?: typeof fetch
+  /** Caminho real de uma worktree publicada; `undefined` = nao existe (nao entra na allowlist). */
+  canonical?(path: string): Promise<string | undefined>
 }
 
 /** Planejamento e uma chamada longa (ate 10 min no control plane); o resto e curto. */
@@ -112,12 +114,12 @@ export class WebviewBridge {
       })
       return
     }
+    // O prazo e do HOST, por rota: so o planejamento (chamada longa) ganha 15 min.
     const timeoutMs =
-      message.timeoutMs ??
-      (message.path === '/missions/plan' ? PLAN_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS)
+      message.path === '/missions/plan' ? PLAN_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS
     try {
       const result = await http.raw(message.method, message.path, message.body, timeoutMs)
-      if (result.ok) this.observe(message.path, result.text)
+      if (result.ok) await this.observe(message.path, result.text)
       this.post({ type: 'api.result', id: message.id, ...result })
     } catch (error) {
       this.post({
@@ -131,7 +133,7 @@ export class WebviewBridge {
   }
 
   /** Worktrees que o control plane informou em detalhes de task viram caminhos autorizados. */
-  private observe(path: string, text: string): void {
+  private async observe(path: string, text: string): Promise<void> {
     if (!/^\/runs\/[^/]+\/tasks\/[^/?]+$/.test(path)) return
     try {
       const detail = JSON.parse(text) as {
@@ -143,7 +145,11 @@ export class WebviewBridge {
         ...(detail.attempts ?? []).map((a) => a.worktreePath),
       ]
       for (const candidate of candidates) {
-        if (typeof candidate === 'string' && candidate.length > 0) this.published.add(candidate)
+        if (typeof candidate !== 'string' || candidate.length === 0) continue
+        // A allowlist guarda o caminho REAL: e contra ele que `authorizePath` compara.
+        const real =
+          this.caps.canonical === undefined ? candidate : await this.caps.canonical(candidate)
+        if (real !== undefined) this.published.add(real)
       }
     } catch {
       // corpo fora do contrato: nada a publicar

@@ -27,6 +27,10 @@ export function openPlane(
   return deps.controlPlane({
     project: context.project,
     gatesFile: context.gatesFile,
+    // O TEXTO dos dois arquivos, como o servidor faz: a configuracao mora em `projectDir`,
+    // que pode nao ser o `repoRoot` — e o plane nao sabe achar o primeiro a partir do segundo.
+    projectText: context.projectText,
+    gatesText: context.gatesText,
     repoRoot: context.repoRoot,
     registry: deps.registry(context.project),
     ...(lease === undefined ? {} : { lease }),

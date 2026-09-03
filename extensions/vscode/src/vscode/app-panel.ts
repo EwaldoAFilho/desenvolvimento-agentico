@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import { messageOf } from '../core/project.js'
 import type { AppRoute, HostState, HostToWebviewBridge } from '../webview/bridge-protocol.js'
 import { WebviewBridge } from './bridge.js'
-import { openDiff, openPath, type PathAuthorization } from './git-content.js'
+import { canonicalOrUndefined, openDiff, openPath, type PathAuthorization } from './git-content.js'
 import type { AgenticHost } from './host.js'
 import type { AgenticLog } from './log.js'
 
@@ -107,6 +107,7 @@ export class AppPanel implements vscode.Disposable {
         this.updateTitle()
       },
       log: (line: string) => log.info(line),
+      canonical: canonicalOrUndefined,
     }
   }
 

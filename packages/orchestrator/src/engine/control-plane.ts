@@ -1016,9 +1016,55 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    *    efeito da persistencia com metade fora do banco.
    * 4. So entao a conexao fecha e o gancho sai do lease.
    */
+  /** Planejamentos em voo: efeito com processo filho (a CLI do planejador) — entra na drenagem. */
+  const planningInFlight = new Set<Promise<unknown>>()
+  const trackPlanning = (work: Promise<PlanMissionResult>): Promise<PlanMissionResult> => {
+    const tracked: Promise<unknown> = work.then(
+      () => undefined,
+      () => undefined,
+    )
+    planningInFlight.add(tracked)
+    void tracked.finally(() => planningInFlight.delete(tracked))
+    return work
+  }
+
+  /**
+   * Planejamento em voo no `close` (I15): o planejador que souber cancelar e cancelado (a CLI
+   * recebe SIGTERM e o caso de uso devolve PLANNER_CANCELLED sem gravar nada); depois
+   * espera-se o caso de uso assentar, com o MESMO prazo dos orquestradores. Vencido o prazo
+   * com planejamento vivo, o `close` falha e a posse nao e devolvida — igual a um
+   * orquestrador que nao drena.
+   */
+  const drainPlanning = async (options: CloseOptions): Promise<void> => {
+    if (planningInFlight.size === 0) return
+    for (const id of planners.list()) {
+      const planner = planners.get(id) as { cancel?: (reason: string) => Promise<void> }
+      if (typeof planner.cancel === 'function') {
+        await planner.cancel('control plane encerrando').catch(() => undefined)
+      }
+    }
+    const graceMs = options.graceMs ?? DEFAULT_SHUTDOWN_GRACE_MS
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), graceMs)
+      timer.unref?.()
+    })
+    const settled = await Promise.race([
+      Promise.allSettled([...planningInFlight]).then(() => 'settled' as const),
+      deadline,
+    ])
+    if (timer !== undefined) clearTimeout(timer)
+    if (settled === 'timeout') {
+      throw new CommandRefusedError(
+        `${planningInFlight.size} planejamento(s) em voo nao encerraram em ${graceMs}ms: a posse nao pode ser devolvida (I15)`,
+      )
+    }
+  }
+
   const closeAll = async (options: CloseOptions): Promise<void> => {
     closed = true
     lifecycle = 'closing'
+    await drainPlanning(options)
     const emVoo = await Promise.allSettled([...opening.values()])
     for (const aberto of emVoo) {
       if (aberto.status === 'fulfilled') orchestrators.set(aberto.value.runId, aberto.value)
@@ -1080,7 +1126,7 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
       createRun(deps, { ...input, project: input.project ?? config.project }),
     planMission: (input) =>
       recusarSemPosse<PlanMissionResult>('planejar missao') ??
-      planMission(deps, planningDeps, input),
+      trackPlanning(planMission(deps, planningDeps, input)),
     approveMission: (input) =>
       recusarSemPosse<Run>('aprovar missao') ?? approveMission(deps, input),
     startRun: (input) => recusarSemPosse<Run>('iniciar run') ?? startRun(deps, input),

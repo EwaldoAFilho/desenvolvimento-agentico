@@ -28,6 +28,12 @@ export const StartRunCommandSchema = z
     missionId: MissionIdSchema.optional(),
     acceptWarnings: z.boolean(),
     actor: NonEmptyStringSchema,
+    /**
+     * Versao do plano que o humano inspecionou e aprovou. Com ela, a partida so acontece no
+     * run APPROVED DESSA versao; sem ela, o servidor recompila o arquivo e amarra a partida a
+     * versao que esta no disco — nunca a "qualquer run APPROVED da missao".
+     */
+    specHash: z.string().optional(),
   })
   .strict()
   .superRefine((command, ctx) => {
