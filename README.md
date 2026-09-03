@@ -206,6 +206,24 @@ o control plane que já existir) → providers e missions na sidebar → *Open A
 painel. `npm run vscode:package` gera o VSIX. A extensão é cliente do control plane e não
 contém o orquestrador (ADR-0015).
 
+**Instalar a alpha (VSIX).** A extensão ainda não está no Marketplace; a pré-release
+[`vscode-v0.2.0-alpha.1`](https://github.com/EwaldoAFilho/desenvolvimento-agentico/releases/tag/vscode-v0.2.0-alpha.1)
+traz o `.vsix`:
+
+1. Baixe `desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix` da GitHub Release.
+2. VS Code → **Extensions** → menu `...` → **Install from VSIX...**.
+3. **Developer: Reload Window**.
+4. Abra a pasta do projeto e clique em **Agentic** na Activity Bar.
+
+Ou pela linha de comando:
+
+```bash
+code --install-extension desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix
+```
+
+O VSIX não embute a CLI `agentic`: este repositório clonado e construído (acima) continua
+necessário. Em outro projeto, aponte `agentic.cliPath` para `apps/cli/bin/agentic.mjs`.
+
 ## Stack
 
 Escolhida para ser previsível e local, não para impressionar.

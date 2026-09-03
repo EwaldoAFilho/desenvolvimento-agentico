@@ -317,3 +317,28 @@ release:
    pela UI (contrato do planner).
 
 **NEXT: PUBLICAR PRIMEIRA GITHUB RELEASE ALPHA DO VSIX** (não publicado automaticamente).
+
+---
+
+## L. Release alpha (DA-VSCODE-RELEASE-ALPHA-001)
+
+Leitura independente restrita a `5bfa66e` (Codex fresh, read-only, esforço alto), a ressalva 1
+de §Z: **PASS** — nenhuma regressão de lifecycle, nenhum segundo dono possível, `specHash` e
+identidade do projeto fora do diff, `git` por `execFile` sem shell (sem path escape nem
+injeção). Único achado, **NOTA pré-existente** (F2 da DA-UX-001): branch de tentativa
+preservada por `release(keep)` faz o segundo run da mesma missão parar em
+`GUARD_FAILED:workspace-acquired` a cada tick, agora com recusa visível em vez do sequestro
+silencioso do `HEAD` da worktree viva. Testes direcionados dos dois arquivos tocados: 30/30.
+
+Publicação (sem merge em `main`, sem Marketplace):
+
+- Branch `feature/DA-VSCODE-MVP-002` enviada ao remoto; tag anotada `vscode-v0.2.0-alpha.1`
+  apontando para `736f854` (commit validado; este relatório é um commit de docs posterior).
+- GitHub Release **pré-release** "Desenvolvimento Agêntico VS Code 0.2.0-alpha.1":
+  <https://github.com/EwaldoAFilho/desenvolvimento-agentico/releases/tag/vscode-v0.2.0-alpha.1>
+- Asset `desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix` (1.205.939 bytes, gerado por
+  `npm run vscode:package` a partir de `736f854`; sha256
+  `c6c5d06128cab0ddcb6020a77a6d33bcc2ef923c0efb6f3365bcfb09af12eec4`).
+- Instalação documentada no README (seção "Dentro do VS Code").
+
+**NEXT: DA-VSCODE-MVP-003 — PRODUCT POLISH & EARLY TESTER EXPERIENCE.**
