@@ -62,9 +62,17 @@ function section(doc: unknown, key: string): Record<string, unknown> | undefined
     : undefined
 }
 
+/**
+ * A MESMA normalizacao do schema compartilhado (`NonEmptyStringSchema = z.string().trim().min(1)`):
+ * a CLI apara as strings antes de resolver caminhos, e a extensao precisa derivar a mesma
+ * identidade. Vazio depois do trim vale como ausente — o schema recusaria; aqui o `serve`
+ * dira linha e coluna.
+ */
 function stringOf(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key]
-  return typeof value === 'string' && value.length > 0 ? value : undefined
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
 }
 
 /**

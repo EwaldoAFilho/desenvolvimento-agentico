@@ -152,7 +152,12 @@ export class HomePanel implements vscode.Disposable {
     if (this.panel === undefined) return
     const view = this.host.view()
     const state: HomeState = {
-      service: view ?? { state: 'STOPPED', owned: false, since: new Date().toISOString() },
+      service: view ?? {
+        state: 'STOPPED',
+        owned: false,
+        spawning: false,
+        since: new Date().toISOString(),
+      },
       missions: this.host.data.missions,
       updatedAt: new Date().toISOString(),
       ...(this.host.homeProject() === undefined ? {} : { project: this.host.homeProject() }),

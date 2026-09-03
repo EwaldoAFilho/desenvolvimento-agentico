@@ -469,3 +469,145 @@ describe('AgenticService.refresh', () => {
     expect(view.owned).toBe(false)
   })
 })
+
+/**
+ * Encerramento da janela x spawn em voo. Barreiras controladas, nenhum sleep real: o teste
+ * decide quando a toolchain resolve e quando outra janela publica.
+ */
+describe('stopOwnChild — filho proprio, nunca o dono externo', () => {
+  interface Barrier {
+    readonly promise: Promise<void>
+    release(): void
+  }
+  function barrier(): Barrier {
+    let release!: () => void
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return { promise, release }
+  }
+
+  it('A. deactivate durante a resolucao da toolchain: o filho que nasce depois e encerrado, nenhum orfao', async () => {
+    const w = world()
+    const toolchain = barrier()
+    const service = new AgenticService(
+      depsOf(w, {
+        spawnServe: async () => {
+          await toolchain.promise
+          const proc = new FakeProcess(5001)
+          w.spawned.push(proc)
+          return proc
+        },
+        discover: () => {
+          const child = w.spawned[0]
+          w.live = child !== undefined && !child.done ? liveOf(child.pid) : undefined
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    const starting = service.start()
+    // A descoberta inicial e um await; o spawn vem logo depois. Nenhum sleep: so cede a vez.
+    for (let i = 0; i < 20 && !service.view().spawning; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(service.view()).toMatchObject({ state: 'STARTING', spawning: true })
+    const stopping = service.stopOwnChild()
+    // So agora a toolchain resolve: o filho nasce ja abandonado.
+    toolchain.release()
+    const [outcome, view] = await Promise.all([stopping, starting])
+    expect(w.spawned).toHaveLength(1)
+    expect(w.spawned[0]?.signals).toEqual(['SIGTERM'])
+    expect(w.spawned[0]?.done).toBe(true)
+    expect(outcome).toBe('none')
+    expect(view.state).toBe('STOPPED')
+    expect(view.childPid).toBeUndefined()
+    expect(w.signals).toEqual([])
+  })
+
+  it('B. outra janela publica dono enquanto o spawn local assenta: so o filho local e encerrado', async () => {
+    const w = world()
+    const service = new AgenticService(
+      depsOf(w, {
+        spawnServe: () => {
+          const proc = new FakeProcess(5002)
+          w.spawned.push(proc)
+          // Antes de o filho publicar, outra janela ja e dona.
+          w.live = liveOf(777)
+          return Promise.resolve(proc)
+        },
+      }),
+    )
+    const view = await service.ensureRunning()
+    expect(view).toMatchObject({ state: 'RUNNING', owned: false })
+    expect(view.live?.pid).toBe(777)
+    expect(view.childPid).toBeUndefined()
+    // O filho local recebeu SIGTERM (perdedor) e saiu; o dono externo nunca foi sinalizado.
+    expect(w.spawned[0]?.signals).toEqual(['SIGTERM'])
+    expect(w.spawned[0]?.done).toBe(true)
+    expect(w.signals).toEqual([])
+    // E o encerramento da janela tambem nao o toca.
+    expect(await service.stopOwnChild()).toBe('none')
+    expect(w.signals).toEqual([])
+  })
+
+  it('C. dono exclusivamente externo: stopOwnChild nao envia sinal nenhum', async () => {
+    const w = world()
+    w.live = liveOf(888)
+    const service = new AgenticService(depsOf(w))
+    await service.ensureRunning()
+    expect(await service.stopOwnChild()).toBe('none')
+    expect(w.signals).toEqual([])
+    expect(w.spawned).toHaveLength(0)
+    // O dono externo continua conhecido e no ar.
+    expect((await service.refresh()).live?.pid).toBe(888)
+  })
+
+  it('D. spawn normal: childPid registrado e stopOwnChild encerra com prova', async () => {
+    const w = world()
+    const service = new AgenticService(
+      depsOf(w, {
+        discover: () => {
+          const child = w.spawned[0]
+          w.live = child !== undefined && !child.done ? liveOf(child.pid) : undefined
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    const view = await service.start()
+    expect(view).toMatchObject({ state: 'RUNNING', owned: true, spawning: false })
+    expect(view.childPid).toBe(w.spawned[0]?.pid)
+    expect(await service.stopOwnChild()).toBe('stopped')
+    expect(w.spawned[0]?.done).toBe(true)
+    expect(service.view().state).toBe('STOPPED')
+    expect(w.signals).toEqual([])
+  })
+
+  it('D2. filho que ignora SIGTERM no encerramento: retained, handle mantido, sem sinal externo', async () => {
+    const w = world()
+    const service = new AgenticService(
+      depsOf(w, {
+        discover: () => {
+          const child = w.spawned[0]
+          w.live = child !== undefined && !child.done ? liveOf(child.pid) : undefined
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    await service.start()
+    const child = w.spawned[0]
+    if (child === undefined) throw new Error('sem filho')
+    child.onKill = () => undefined
+    expect(await service.stopOwnChild()).toBe('retained')
+    expect(service.view().childPid).toBe(child.pid)
+    expect(w.signals).toEqual([])
+  })
+
+  it('start apos abandono nao sobe nada', async () => {
+    const w = world()
+    const service = new AgenticService(depsOf(w))
+    await service.stopOwnChild()
+    const view = await service.start()
+    expect(view.state).toBe('STOPPED')
+    expect(w.spawned).toHaveLength(0)
+  })
+})

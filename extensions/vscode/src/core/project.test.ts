@@ -81,6 +81,20 @@ describe('readProjectFacts', () => {
     expect(readProjectFacts('project: [\n')).toEqual({})
   })
 
+  it('apara as strings como o schema da CLI: repoRoot, name e host com espacos externos', () => {
+    const facts = readProjectFacts(
+      'project:\n  name: "  exemplo  "\n  repoRoot: " ../repositorio "\nserver:\n  host: " 127.0.0.1 "\n  port: 4500\n',
+    )
+    expect(facts).toEqual({
+      name: 'exemplo',
+      repoRoot: '../repositorio',
+      host: '127.0.0.1',
+      port: 4500,
+    })
+    // So espacos = ausente (o schema recusaria): nao vira caminho vazio nem nome vazio.
+    expect(readProjectFacts('project:\n  name: "   "\n  repoRoot: " "\n')).toEqual({})
+  })
+
   it('YAML valido em qualquer forma deriva os mesmos fatos que a CLI', () => {
     expect(
       readProjectFacts(
@@ -111,6 +125,20 @@ describe('detectProject', () => {
     expect(project?.runtimeDir).toBe(join(await realpath(dir), '.agentic'))
     expect(project?.declaredUrl).toBe('http://127.0.0.1:4999')
     expect(project?.git).toMatchObject({ repository: true, branch: 'trunk' })
+  })
+
+  it('repoRoot com espacos externos resolve a MESMA identidade que a CLI e o mesmo endpoint', async () => {
+    const dir = await projeto(
+      YAML.replace('repoRoot: .', 'repoRoot: " ../alvo "').replace(
+        'host: "127.0.0.1"',
+        'host: " 127.0.0.1 "',
+      ),
+    )
+    await mkdir(join(dir, '..', 'alvo'), { recursive: true }).catch(() => undefined)
+    const project = await detectProject(dir, io)
+    expect(project?.repoRoot).toBe(join(await realpath(join(dir, '..')), 'alvo'))
+    expect(project?.declaredUrl).toBe('http://127.0.0.1:4999')
+    await rm(join(dir, '..', 'alvo'), { recursive: true, force: true })
   })
 
   it('repoRoot declarado fora do diretorio de configuracao e a identidade', async () => {

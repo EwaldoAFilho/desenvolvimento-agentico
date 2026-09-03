@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises'
 import process from 'node:process'
 import * as vscode from 'vscode'
 import { AgenticClient } from '../core/client.js'
-import type { CompileReportDto, ProviderHealthDto, RunHeaderDto } from '../core/contracts.js'
+import type { ProviderHealthDto, RunHeaderDto } from '../core/contracts.js'
 import { CONTROL_PLANE_FILE_NAME } from '../core/contracts.js'
 import { discoverLive } from '../core/discovery.js'
 import { launchServe } from '../core/launcher.js'
@@ -87,9 +87,19 @@ export class AgenticHost implements vscode.Disposable {
     this.project = detected
     this.watcher?.close()
     this.watcher = undefined
-    // Um servico que possui um filho vivo nao e esquecido ao trocar de projeto: continua
-    // alcancavel pelo encerramento da janela (stopOnWindowClose).
-    if (this.service?.view().childPid !== undefined) this.retired.push(this.service)
+    // Um servico com filho vivo — ou com spawn em voo — nao e esquecido ao trocar de projeto:
+    // a janela nao consegue mais observa-lo, entao o que ELA criou e encerrado ja, e o servico
+    // fica em `retired` ate o fechamento provar (ou nao) a saida. Dono externo: nunca tocado.
+    const previous = this.service
+    if (previous !== undefined) {
+      const view = previous.view()
+      if (view.spawning || view.childPid !== undefined) {
+        this.retired.push(previous)
+        void previous.stopOwnChild().then((outcome) => {
+          this.log.info(`projeto trocado: filho do servico anterior ${outcome}`)
+        })
+      }
+    }
     this.service = undefined
     this.data = { missions: [] }
     if (detected !== undefined) {
@@ -338,21 +348,24 @@ export class AgenticHost implements vscode.Disposable {
       .getConfiguration('agentic')
       .get<boolean>('stopOnWindowClose', true)
     if (!stopOnClose) return
-    // Todo filho VIVO criado por esta janela — dono confirmado, ainda em STARTING ou retido em
-    // FAILED — e alcancado; o dono externo, nunca.
-    const owned = [...this.retired, ...(this.service === undefined ? [] : [this.service])].filter(
-      (service) => service.view().childPid !== undefined,
+    // Todo filho criado por esta janela — vivo, em STARTING, retido em FAILED ou ainda por
+    // nascer (spawn em voo) — e alcancado por `stopOwnChild`, que NUNCA sinaliza um dono
+    // externo. Um dono que a janela apenas reutilizava segue no ar, como deve.
+    const own = [...this.retired, ...(this.service === undefined ? [] : [this.service])].filter(
+      (service) => {
+        const view = service.view()
+        return view.spawning || view.childPid !== undefined
+      },
     )
-    for (const service of owned) {
+    for (const service of own) {
       this.log.info('janela fechando: encerrando o control plane desta janela')
-      // O host da extensao da poucos segundos ao deactivate. O stop continua com o proprio
-      // prazo e prova; se a janela for embora antes, o processo (grupo proprio) continua dono
-      // e a proxima janela o descobre — nunca um STOPPED falso.
+      // O host da extensao da poucos segundos ao deactivate. A bandeira de abandono fica
+      // ligada mesmo se o prazo vencer: um spawn que assente depois recebe SIGTERM no ato.
       const outcome = await Promise.race([
-        service.stop().then((view) => view.state),
-        sleep(4_000).then(() => 'DEADLINE'),
+        service.stopOwnChild(),
+        sleep(4_000).then(() => 'DEADLINE' as const),
       ])
-      if (outcome !== 'STOPPED') {
+      if (outcome !== 'stopped' && outcome !== 'none') {
         this.log.warn(
           `encerramento ao fechar a janela nao provado (${outcome}); o processo segue dono ate ser parado`,
         )

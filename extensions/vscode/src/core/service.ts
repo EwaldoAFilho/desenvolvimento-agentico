@@ -33,6 +33,8 @@ export interface ServiceView {
   readonly owned: boolean
   /** pid de um filho criado por esta janela que ainda nao saiu (dono confirmado ou nao). */
   readonly childPid?: number
+  /** `true` enquanto `spawnServe()` ainda nao devolveu o processo (toolchain em resolucao). */
+  readonly spawning: boolean
   readonly since: string
   readonly failure?: ServiceFailure
   /** Ultima verificacao (ISO). */
@@ -77,6 +79,13 @@ export class AgenticService {
   private since: string
   private live: LiveControlPlane | undefined
   private child: SpawnedProcess | undefined
+  /** O spawn em voo: conhecido desde ANTES de haver pid, para o encerramento nao o perder. */
+  private spawning: Promise<SpawnedProcess> | undefined
+  /**
+   * Ligado por `stopOwnChild()`: nenhum filho desta janela pode sobreviver a partir daqui. Um
+   * spawn que resolva depois encontra a bandeira e o recem-nascido recebe SIGTERM na hora.
+   */
+  private abandoned = false
   private failure: ServiceFailure | undefined
   private checkedAt: string | undefined
   private chain: Promise<unknown> = Promise.resolve()
@@ -97,6 +106,7 @@ export class AgenticService {
       state: this.state,
       owned: this.ownsLive(),
       since: this.since,
+      spawning: this.spawning !== undefined,
       ...(this.child !== undefined && !this.child.done ? { childPid: this.child.pid } : {}),
       ...(this.live === undefined ? {} : { live: this.live }),
       ...(this.failure === undefined ? {} : { failure: this.failure }),
@@ -174,19 +184,39 @@ export class AgenticService {
       this.adopt(existing)
       return this.view()
     }
+    if (this.abandoned) {
+      this.transition('STOPPED')
+      return this.view()
+    }
     let child: SpawnedProcess
     try {
-      child = await this.deps.spawnServe()
+      this.spawning = this.deps.spawnServe()
+      child = await this.spawning
     } catch (error) {
+      this.spawning = undefined
       this.fail('start', messageOf(error))
       this.transition('STOPPED')
       return this.view()
     }
+    this.spawning = undefined
     this.child = child
+    if (this.abandoned) {
+      // O encerramento da janela chegou enquanto a toolchain resolvia. O filho nasceu; nao
+      // fica: SIGTERM agora, com a saida provada — nunca um orfao sem dono na extensao.
+      this.deps.log(`spawn assentou apos o encerramento da janela (pid ${child.pid}); encerrando`)
+      await this.terminateOwnChild(child)
+      this.transition(this.child === undefined ? 'STOPPED' : 'FAILED')
+      return this.view()
+    }
     this.deps.log(`agentic serve iniciado (pid ${child.pid}); aguardando /api/health`)
     const deadline = this.deps.now().getTime() + this.timeouts.startMs
     let exitedZeroAt: number | undefined
     for (;;) {
+      if (this.abandoned) {
+        await this.terminateOwnChild(child)
+        this.transition(this.child === undefined ? 'STOPPED' : 'FAILED')
+        return this.view()
+      }
       const live = await this.deps.discover()
       if (live !== undefined && live.pid === child.pid) {
         this.adopt(live)
@@ -245,6 +275,51 @@ export class AgenticService {
       }
       await this.deps.sleep(this.timeouts.pollMs)
     }
+  }
+
+  /**
+   * Encerramento da JANELA: para somente o que ela criou, e nunca toca um dono externo.
+   *
+   * Nao entra na fila: um `start()` em voo pode estar esperando a toolchain ou o health por
+   * ate `startMs`, e o host da extensao da poucos segundos ao `deactivate`. A bandeira
+   * `abandoned` e lida pelo `doStart` a cada volta (e logo depois do spawn assentar), entao
+   * o filho — nascido ou por nascer — recebe SIGTERM de dentro do proprio `start`. Aqui so
+   * se espera, com prazo, e se relata o que foi provado.
+   */
+  async stopOwnChild(): Promise<'none' | 'stopped' | 'retained'> {
+    this.abandoned = true
+    const pending = this.pendingStart
+    if (pending !== undefined) {
+      // O start em voo e quem encerra o filho (bandeira). Espera-se por ele; o prazo e de
+      // quem chama (o `deactivate` corre contra o proprio relogio), e a bandeira continua
+      // valendo mesmo se esse prazo vencer antes.
+      await pending.catch(() => undefined)
+      return this.child === undefined ? 'none' : 'retained'
+    }
+    const child = this.child
+    if (child === undefined || child.done) {
+      this.child = undefined
+      return 'none'
+    }
+    await this.terminateOwnChild(child)
+    if (this.child !== undefined) return 'retained'
+    if (this.live?.pid === child.pid) this.live = undefined
+    if (this.live === undefined) this.transition('STOPPED')
+    return 'stopped'
+  }
+
+  /** SIGTERM ao NOSSO filho e espera pela saida provada; sem prova, o handle fica. */
+  private async terminateOwnChild(child: SpawnedProcess): Promise<void> {
+    if (!child.done) {
+      child.kill('SIGTERM')
+      const ended = await this.waitUntil(() => child.done, this.timeouts.stopMs)
+      if (!ended) {
+        this.deps.log(`filho (pid ${child.pid}) nao saiu apos SIGTERM; handle mantido`)
+        return
+      }
+    }
+    if (this.child === child) this.child = undefined
+    if (this.live?.pid === child.pid) this.live = undefined
   }
 
   /**
