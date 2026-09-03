@@ -1,0 +1,17 @@
+name: Preparar o produto
+description: >-
+  Node da versao declarada em .nvmrc, dependencias por `npm ci` e o build que os testes
+  presumem (pacotes por tsc e o dashboard de apps/web, que `npm run test` exige em disco).
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+    - run: npm ci
+      shell: bash
+    - run: npm run build
+      shell: bash
+    - run: npm run build -w @agentic/web
+      shell: bash

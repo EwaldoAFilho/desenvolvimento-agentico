@@ -1,12 +1,16 @@
 import type { AttemptId, DomainEvent, ProviderId, RunId, TaskId } from '@agentic/domain'
-import { isRunId } from '@agentic/domain'
+import { isRunId, RECOVERABLE_ACTIVE_RUN_STATUSES } from '@agentic/domain'
 import type { Persistence } from '@agentic/persistence'
 import type { ProviderHealthDto } from '@agentic/schemas'
 
 /**
  * Runs que ainda podem ter agente em voo. Run terminal nao tem, e nao ha por que abrir.
+ *
+ * E a MESMA lista que I13 usa para decidir quem ganha dono no boot, e por um motivo so:
+ * ambas perguntam se o run ainda esta operacionalmente ativo. Manter duas copias era
+ * convidar a que uma andasse sem a outra — a regra mora no dominio.
  */
-export const LIVE_RUN_STATUSES: readonly string[] = ['RUNNING', 'PAUSED', 'BLOCKED', 'VERIFYING']
+export const LIVE_RUN_STATUSES: readonly string[] = RECOVERABLE_ACTIVE_RUN_STATUSES
 
 /**
  * Onde existe processo de agente: o executor enquanto a task esta `RUNNING`, o revisor

@@ -62,6 +62,18 @@ export const PathScopeSchema = z
     'caminho POSIX relativo, sem glob, sem ".." e sem raiz absoluta',
   )
 
+/**
+ * Caminho relativo a raiz do projeto, na fronteira de saida. Existe para que caminho
+ * absoluto do HOST nunca atravesse: o navegador nao precisa saber onde o repositorio mora
+ * no disco, e o payload deixa de carregar o nome do usuario (ARCHITECTURE 9).
+ */
+export const RepoRelativePathSchema = z
+  .string()
+  .refine(
+    (value): boolean => isPathScope(value),
+    'caminho relativo a raiz do projeto, sem ".." e sem raiz absoluta',
+  )
+
 export const RiskSchema = z.enum(RISKS)
 
 export const ReviewPolicySchema = z.enum(REVIEW_POLICIES)

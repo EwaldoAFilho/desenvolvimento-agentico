@@ -62,6 +62,48 @@ describe('GitWorktreeWorkspaceProvider.acquire', () => {
     await provider.acquire(lease())
     await expect(provider.acquire(lease())).rejects.toThrow(/ja existe/)
   })
+
+  it('branch de tentativa ainda em uso por outra worktree (release keep) NAO e renomeada: recusa', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    const first = await provider.acquire(lease({ task: 'T01' }))
+    // `keep` preserva a worktree — e a branch continua checked out nela.
+    await provider.release(first, 'keep')
+    await expect(
+      provider.acquire({
+        ...lease({ task: 'T01' }),
+        runId: '01J0000000000000000000000B' as typeof RUN,
+        attemptId: attemptId('01J0000000000000000000000B:T01:a1'),
+      }),
+    ).rejects.toThrow(/em uso por outra worktree/)
+    const { stdout } = await exec('git', ['branch', '--list', `${first.branch}*`], {
+      cwd: repo.root,
+    })
+    expect(stdout).not.toContain('.stale.')
+  })
+
+  it('segundo run da mesma missao: a branch da tentativa anterior e renomeada, nao trava (F2)', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    const first = await provider.acquire(lease({ task: 'T01' }))
+    await provider.release(first, 'discard')
+    // Mesmo missao/task/tentativa, OUTRO run: o nome da branch e o mesmo.
+    const second = await provider.acquire({
+      ...lease({ task: 'T01' }),
+      runId: '01J0000000000000000000000B' as typeof RUN,
+      attemptId: attemptId('01J0000000000000000000000B:T01:a1'),
+    })
+    expect(second.branch).toBe(first.branch)
+    const { stdout } = await exec('git', ['branch', '--list', `${first.branch}*`], {
+      cwd: repo.root,
+    })
+    const branches = stdout
+      .split('\n')
+      .map((l) => l.trim().replace(/^[*+] /, ''))
+      .filter(Boolean)
+    expect(branches).toContain(first.branch)
+    expect(branches.some((b) => b.startsWith(`${first.branch}.stale.`))).toBe(true)
+  })
 })
 
 describe('isolamento entre tentativas', () => {
@@ -324,5 +366,50 @@ describe('worktree da missao', () => {
     expect(ws.branch).toBe('mission/DA-CORE-001')
     expect(provider.setupOf(ws)?.linked).toEqual(['node_modules'])
     expect((await stat(join(ws.path, 'node_modules'))).isDirectory()).toBe(true)
+  })
+
+  /**
+   * D2. O gate da missao julga um COMMIT. Quando alguem ja tem a branch em check-out — o
+   * proprio repositorio orquestrado, no dogfooding — `git worktree add <path> <branch>`
+   * falha com exit 128; a aquisicao passa a detach sobre o mesmo sha em vez de disputar o
+   * ref, e com a branch livre nada muda.
+   */
+  it('com a branch da missao LIVRE, mantem a worktree anexada a ela', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    const ws = await provider.acquireMissionWorkspace({
+      runId: RUN,
+      attemptId: attemptId(`${RUN}:mission`),
+    })
+
+    expect(ws.branch).toBe('mission/DA-CORE-001')
+    const head = await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ws.path })
+    expect(head.stdout.trim()).toBe('mission/DA-CORE-001')
+    expect(ws.baseCommit).toBe(await repo.git('rev-parse', 'mission/DA-CORE-001'))
+  })
+
+  it('com a branch da missao JA em check-out, adquire detached sobre o mesmo sha', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    await provider.ensureMissionBranch()
+    // A arvore principal assume a branch da missao: topologia do dogfooding.
+    await repo.git('checkout', 'mission/DA-CORE-001')
+    const missionSha = await repo.git('rev-parse', 'mission/DA-CORE-001')
+
+    const ws = await provider.acquireMissionWorkspace({
+      runId: RUN,
+      attemptId: attemptId(`${RUN}:mission`),
+    })
+
+    // Sem branch anexada: dizer que HEAD esta na branch seria mentir sobre a arvore.
+    expect(ws.branch).toBeUndefined()
+    const head = await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ws.path })
+    expect(head.stdout.trim()).toBe('HEAD')
+    // Mesma ARVORE, que e o que o gate julga.
+    expect(ws.baseCommit).toBe(missionSha)
+    const worktreeSha = await exec('git', ['rev-parse', 'HEAD'], { cwd: ws.path })
+    expect(worktreeSha.stdout.trim()).toBe(missionSha)
+    // E quem ja segurava a branch continua segurando.
+    expect(await repo.git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('mission/DA-CORE-001')
   })
 })

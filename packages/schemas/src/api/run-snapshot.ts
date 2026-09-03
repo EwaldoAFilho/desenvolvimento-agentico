@@ -8,6 +8,7 @@ import {
   PathScopeSchema,
   PhaseIdSchema,
   PositiveIntSchema,
+  ReviewPolicySchema,
   RiskSchema,
   TaskIdSchema,
 } from '../common.js'
@@ -51,6 +52,12 @@ export const RunHeaderSchema = z
     policies: RunPoliciesDtoSchema,
     missionGate: GateIdSchema.optional(),
     integrationBranch: z.string().optional(),
+    /**
+     * Versao do plano que este run congelou. Sem ela, a tela so consegue perguntar "existe
+     * run aprovado desta missao?" — e um run APPROVED antigo faz um YAML NOVO parecer
+     * aprovado, liberando execucao de um plano que ninguem inspecionou.
+     */
+    specHash: z.string().optional(),
   })
   .strict()
 
@@ -69,6 +76,13 @@ export const GraphNodeDtoSchema = z
     touches: z.array(PathScopeSchema),
     risk: RiskSchema,
     estimate: z.number().positive(),
+    /**
+     * Exigencia de revisao DECLARADA pela task. Sem estes dois, a tela so conseguia mostrar
+     * o teto global de revisores do run, e tasks com exigencias diferentes ficavam
+     * indistinguiveis na inspecao do plano — justamente onde o humano decide se aprova.
+     */
+    requireReview: z.boolean().optional(),
+    reviewPolicy: ReviewPolicySchema.optional(),
   })
   .strict()
 

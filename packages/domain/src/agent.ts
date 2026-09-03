@@ -22,6 +22,8 @@ export interface AgentIdentity {
   readonly sessionRef: string
   readonly startedAt: Date
   readonly runtime?: AgentRuntimeRef
+  /** Ver `AgentProfile.simulated`. Herdado do perfil na hora de montar a identidade. */
+  readonly simulated?: boolean
 }
 
 export interface AgentProfile {
@@ -31,6 +33,17 @@ export interface AgentProfile {
   readonly model?: string
   readonly systemContextRef?: string
   readonly tags: readonly string[]
+  /**
+   * Perfil de ENSAIO: o agente por tras dele e um roteiro, nao uma sessao de verdade.
+   *
+   * Serve a teste, demonstracao e preview — e essa e a unica coisa que ele serve. Revisao e
+   * a segunda leitura INDEPENDENTE da evidencia (P07, I3); um roteiro nao le nada, entao um
+   * perfil de ensaio nunca satisfaz revisao de tentativa real, em politica nenhuma.
+   *
+   * O dominio nao sabe QUEM e de ensaio: quem monta os perfis marca o campo. Nenhum nome de
+   * fornecedor entra aqui (P18).
+   */
+  readonly simulated?: boolean
 }
 
 export function isSameAgentIdentity(a: AgentIdentity, b: AgentIdentity): boolean {

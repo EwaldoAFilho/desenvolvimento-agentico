@@ -1,5 +1,6 @@
 import type { CompileReportDto, DiagnosticDto, ProviderHealthDto } from '@agentic/schemas'
-import { type JSX, useEffect, useRef, useState } from 'react'
+import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react'
+import { bySeverity, conflictKindOf, conflictsOf, planStatsLine } from '../lib/plan-review.js'
 import { ProvidersPanel } from './ProvidersPanel.js'
 
 /** Partida tem tres estados visiveis — e um clique so cria um run (DASHBOARD 2.1). */
@@ -11,6 +12,9 @@ const START_LABEL: Record<StartPhase, string> = {
   running: 'run em andamento',
 }
 
+/** Qual ato o humano confirmou com os avisos a vista. Um de cada vez, nunca os dois. */
+type Confirming = 'start' | 'approve-start'
+
 export interface StartMissionProps {
   readonly report: CompileReportDto
   /** Aprovar e ato humano registrado com `actor` — nao existe aprovacao automatica. */
@@ -20,15 +24,17 @@ export interface StartMissionProps {
   readonly error?: string
   /** Fase informada por quem conhece o run; a guarda interna vale de qualquer forma. */
   readonly startPhase?: StartPhase
+  /** Revisao do plano (DAG, no aberto e caminho do YAML). Slot: esta tela segue pura. */
+  readonly plan?: ReactNode
   readonly onApprove: (actor: string, note: string) => void
   readonly onStart: (acceptWarnings: boolean, actor: string) => void
-}
-
-function bySeverity(
-  report: CompileReportDto,
-  severity: DiagnosticDto['severity'],
-): DiagnosticDto[] {
-  return report.diagnostics.filter((diagnostic) => diagnostic.severity === severity)
+  /**
+   * Aprovar e executar num ato so — duas chamadas em ORDEM, nunca uma so. Opcional: sem ela a
+   * tela continua oferecendo os dois atos separados, e nada muda para quem ja aprovou.
+   */
+  readonly onApproveAndStart?: (acceptWarnings: boolean, actor: string, note: string) => void
+  /** Preenchimento inicial do `actor`; continua editavel e continua obrigatorio. */
+  readonly defaultActor?: string
 }
 
 function DiagnosticList({
@@ -65,16 +71,20 @@ export function StartMission({
   busy = false,
   error,
   startPhase,
+  plan,
   onApprove,
   onStart,
+  onApproveAndStart,
+  defaultActor,
 }: StartMissionProps): JSX.Element {
-  const [actor, setActor] = useState('')
+  const [actor, setActor] = useState(defaultActor ?? '')
   const [note, setNote] = useState('')
-  const [confirming, setConfirming] = useState(false)
+  const [confirming, setConfirming] = useState<Confirming | undefined>(undefined)
   const [pressed, setPressed] = useState(false)
   /**
    * Idempotencia do clique: o `ref` fecha a janela entre dois cliques no mesmo tick, antes
-   * de qualquer re-render. Dois cliques nunca viram dois `POST /api/runs`.
+   * de qualquer re-render. Dois cliques nunca viram dois `POST /api/runs` — e a guarda vale
+   * para os dois caminhos de partida, entao aprovar-e-executar tambem parte uma vez so.
    */
   const fired = useRef(false)
 
@@ -102,17 +112,30 @@ export function StartMission({
         ? 'starting'
         : 'idle'
 
-  const fireStart = (acceptWarnings: boolean): void => {
+  /**
+   * As duas partidas passam pela MESMA guarda. `approve-start` e um ato do humano e duas
+   * chamadas do controlador, em ordem: quem aprova fica registrado antes de existir execucao.
+   */
+  const fire = (kind: Confirming, acceptWarnings: boolean): void => {
     if (phase !== 'idle' || fired.current) return
+    // A missao pode ter sido aprovada no meio do caminho — aprovacao aceita e partida
+    // recusada, por exemplo. Nao ha o que aprovar de novo: o ato que resta e partir.
+    const act = kind === 'approve-start' && !approved ? kind : 'start'
+    if (act === 'approve-start' && onApproveAndStart === undefined) return
     fired.current = true
     setPressed(true)
-    onStart(acceptWarnings, actor.trim())
+    if (act === 'start') onStart(acceptWarnings, actor.trim())
+    else onApproveAndStart?.(acceptWarnings, actor.trim(), note.trim())
   }
 
   const errors = bySeverity(report, 'ERROR')
   const warnings = bySeverity(report, 'WARNING')
   const infos = bySeverity(report, 'INFO')
+  const conflicts = conflictsOf(report)
   const blocked = errors.length > 0 || !report.ok
+  const noActor = actor.trim().length === 0
+  /** Um ato so existe enquanto ha o que aprovar: aprovada, resta a partida. */
+  const oneAct = !approved && onApproveAndStart !== undefined
   const unavailable = providers.filter(
     (provider) => provider.installed === false || provider.ready === false,
   )
@@ -127,9 +150,38 @@ export function StartMission({
         </span>
       </div>
 
-      <p className="start__stats">
-        {`${report.stats.tasks} tasks · ${report.stats.phases} fases · caminho crítico ${report.stats.criticalPathLength} tasks · ${report.stats.waves} ondas · ${warnings.length} avisos · ${errors.length} erros`}
+      <p className="start__stats" data-testid="mission-stats">
+        {planStatsLine(report)}
       </p>
+
+      {/*
+       * Conflito e leitura CRUZADA — quem se atropela com quem. O texto e o codigo de cada
+       * diagnostico continuam na lista de avisos/erros logo abaixo: aqui a informacao nova e o
+       * PAR. Zero conflitos tambem se escreve: silencio seria indistinguivel de "ninguem
+       * olhou".
+       */}
+      <section className="start__block start__conflicts" aria-label="Conflitos do plano">
+        <h2>{`conflitos — ${conflicts.length}`}</h2>
+        {conflicts.length === 0 ? (
+          <p className="start__hint" data-testid="conflicts-empty">
+            nenhum conflito de escopo ou de dependência entre as tasks deste plano.
+          </p>
+        ) : (
+          <ul className="conflicts" data-testid="conflicts">
+            {conflicts.map((conflict) => (
+              <li
+                key={`${conflict.code}:${conflict.targets.join(',')}`}
+                data-severity={conflict.severity}
+              >
+                <span className="conflicts__pair">
+                  {conflict.targets.length === 0 ? 'plano inteiro' : conflict.targets.join(' ↔ ')}
+                </span>
+                <span className="conflicts__kind">{conflictKindOf(conflict.code)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {errors.length > 0 ? (
         <section className="start__block start__block--error" aria-label="Erros de compilação">
@@ -153,6 +205,8 @@ export function StartMission({
           <DiagnosticList items={infos} testId="diagnostics-info" />
         </section>
       ) : null}
+
+      {plan}
 
       <ProvidersPanel providers={providers} />
       {unavailable.length > 0 ? (
@@ -184,58 +238,99 @@ export function StartMission({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || blocked || actor.trim().length === 0}
+            disabled={busy || blocked || noActor}
             onClick={() => onApprove(actor.trim(), note.trim())}
           >
             aprovar missão
           </button>
+          <p className="start__hint">
+            Aprovar sozinho não executa nada: o run fica APPROVED esperando a partida.
+          </p>
         </section>
       )}
 
       {blocked ? null : (
         <section className="start__go" aria-label="Partida">
-          {confirming && warnings.length > 0 ? (
+          {confirming !== undefined && warnings.length > 0 ? (
             <div className="start__confirm">
               <p>
                 {`${warnings.length} aviso(s) pendente(s). Os avisos continuam à vista — confirme para iniciar mesmo assim.`}
               </p>
+              {confirming === 'approve-start' && !approved ? (
+                <p className="start__hint" data-testid="confirm-approve-start">
+                  {`Confirmar registra ${actor.trim()} como quem aprova e, em seguida, dispara a execução.`}
+                </p>
+              ) : null}
               <button
                 type="button"
                 className="btn btn--primary"
                 data-testid="confirm-start"
                 data-phase={phase}
+                data-act={confirming}
                 aria-busy={phase === 'starting'}
                 disabled={phase !== 'idle'}
-                onClick={() => fireStart(true)}
+                onClick={() => fire(confirming, true)}
               >
                 {phase === 'idle'
                   ? `confirmar partida com ${warnings.length} aviso(s)`
                   : START_LABEL[phase]}
               </button>
-              <button type="button" className="btn btn--ghost" onClick={() => setConfirming(false)}>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => setConfirming(undefined)}
+              >
                 cancelar
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              className="btn btn--primary btn--start"
-              data-testid="start-mission"
-              data-phase={phase}
-              aria-busy={phase === 'starting'}
-              disabled={phase !== 'idle' || !approved || actor.trim().length === 0}
-              onClick={() => {
-                if (phase !== 'idle') return
-                if (warnings.length > 0) setConfirming(true)
-                else fireStart(false)
-              }}
-            >
-              {START_LABEL[phase]}
-            </button>
+            <div className="start__acts">
+              {/*
+               * Um ato humano, duas chamadas em ordem: aprovar registra quem aprova e a
+               * partida so acontece depois que o control plane confirmou a aprovacao. Nada
+               * aqui aprova sozinho — sem `actor` o botao nao existe como acao.
+               */}
+              {oneAct ? (
+                <button
+                  type="button"
+                  className="btn btn--primary btn--start"
+                  data-testid="approve-and-start"
+                  data-phase={phase}
+                  aria-busy={phase === 'starting'}
+                  disabled={phase !== 'idle' || noActor}
+                  onClick={() => {
+                    if (phase !== 'idle') return
+                    if (warnings.length > 0) setConfirming('approve-start')
+                    else fire('approve-start', false)
+                  }}
+                >
+                  {phase === 'idle' ? 'aprovar e executar' : START_LABEL[phase]}
+                </button>
+              ) : null}
+              {/* Com o ato unico a vista, a partida sozinha deixa de ser a acao primaria:
+                  duas primarias lado a lado nao dizem qual e o caminho. */}
+              <button
+                type="button"
+                className={`btn btn--start${oneAct ? '' : ' btn--primary'}`}
+                data-testid="start-mission"
+                data-phase={phase}
+                aria-busy={phase === 'starting'}
+                disabled={phase !== 'idle' || !approved || noActor}
+                onClick={() => {
+                  if (phase !== 'idle') return
+                  if (warnings.length > 0) setConfirming('start')
+                  else fire('start', false)
+                }}
+              >
+                {START_LABEL[phase]}
+              </button>
+            </div>
           )}
           <p className="start__phase" role="status" data-testid="start-phase">
             {phase === 'idle'
-              ? 'pronta para partir'
+              ? oneAct
+                ? 'pronta para aprovar e partir — a tela vai sozinha para o DAG vivo'
+                : 'pronta para partir'
               : phase === 'starting'
                 ? 'iniciando o run — aguarde a confirmação do control plane'
                 : 'run em andamento'}

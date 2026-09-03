@@ -240,36 +240,63 @@ projeto agentico em /tmp/demo-somador/.agentic
   criado      .agentic/project.yaml
   criado      .agentic/gates.yaml
   criado      .agentic/missions/EXEMPLO-001.mission.yaml
+  gitignore   7 padrao(oes) de estado local acrescentado(s)
+
+gates
+  unit: npm run lint, npm run test
+  mission: npm run verify
+
+fornecedores
+  claude-code: READY — sessao ativa
+  codex: NOT_INSTALLED — executavel nao encontrado no PATH
+
+executor padrao: claude-code
 
 proximo passo: agentic mission validate .agentic/missions/EXEMPLO-001.mission.yaml
 ```
 
-Três arquivos, todos versionados no **seu** repositório:
+O `init` **observa antes de escrever**. Ele não presume nem os comandos do seu projeto nem
+os fornecedores da sua máquina:
 
 - `project.yaml` — políticas de execução, fornecedores, paralelismo, `denyPaths`, porta do
-  servidor;
-- `gates.yaml` — **os comandos do seu projeto**, agrupados em perfis (`unit`, `mission`, …);
+  servidor. O `project.name` vem do nome da pasta, e o `registry` traz **só as CLIs que a
+  sonda observou `READY`** — a primeira delas vira `providers.default`;
+- `gates.yaml` — **os comandos do seu projeto**, lidos dos `scripts` do `package.json`
+  (`lint`, `typecheck`, `test`, `build`, `verify`). Script que você não tem não vira gate;
 - `missions/*.mission.yaml` — a entrega declarada.
 
-### Duas edições que valem fazer agora
+Os três são versionados no **seu** repositório. O que o `init` mantém fora do Git — e
+acrescenta ao seu `.gitignore`, sem tocar no que já estava lá — é o estado local:
+`state.db*`, `runs/`, `worktrees/`, `control-plane.json` e o lock de posse. Isso não é
+higiene: o observador do repositório hasheia todo arquivo não rastreado, e sem essas
+exclusões o planejamento é recusado com `PLANNER_FAILED: o repositorio mudou durante o
+planejamento`.
 
-**(a) `.gitignore`.** `init` não escreve `.gitignore`, e o estado local não pode ser
-versionado:
+Rodar `agentic init` de novo é seguro: arquivo que já existe é preservado, e o `.gitignore`
+só recebe o padrão que faltava.
 
-```gitignore
-node_modules/
-.agentic/state.db
-.agentic/runs/
-.agentic/worktrees/
-.agentic/control-plane.json
+Se você **já tem** um `.agentic/gates.yaml`, ele manda: o `init` preserva o arquivo e o
+`project.yaml` e a missão de exemplo só referenciam perfis que existem lá dentro. Sem isso o
+produto entregaria três arquivos válidos um a um e uma missão que não compila.
+
+### Se nenhuma CLI estiver pronta
+
+O `init` **não finge** que o projeto está executável. Ele escreve o registry com o agente de
+**ensaio** (`mock`) e diz, com todas as letras, o que falta:
+
+```console
+ATENCAO: nenhuma CLI de agente esta PRONTA nesta maquina.
+  `providers.default` ficou em `mock` — agente de ENSAIO, que nao escreve codigo e nao revisa.
+  Instale e autentique uma CLI (claude ou codex), rode `agentic providers`
+  e troque `providers.default` em .agentic/project.yaml pelo id dela.
 ```
 
-Isso não é higiene: `execution.workspaceSetup.link` liga `node_modules` na worktree de cada
-tentativa, e se `node_modules` estiver **rastreado pelo git** a criação da worktree falha.
-Ver [TROUBLESHOOTING.md](TROUBLESHOOTING.md#worktree-não-é-criada-e-o-run-fica-parado-sem-erro).
+O ensaio serve a teste, demonstração e preview. Ele **não** é elegível como revisor de uma
+tentativa real: revisão é a segunda leitura independente da evidência, e um roteiro fixo não
+lê nada. Se você insistir em rodar assim, a tentativa reprova dizendo o nome do problema —
+não com um `NO_CHANGES` genérico, e nunca com uma revisão de mentira.
 
-**(b) O fornecedor.** O `init` entrega o registry só com `mock` (determinístico, sem rede,
-sem quota). Para trabalho real, declare a CLI que você tem:
+Para declarar a CLI à mão, o formato é este:
 
 ```yaml
 providers:
@@ -286,11 +313,10 @@ providers:
 Nenhuma credencial aparece aqui, e nenhuma será pedida: o produto executa a CLI e ela usa a
 sessão que **você** já autenticou.
 
-> **Não deixe `mock` no registry de um projeto real com `roles: [executor, reviewer]`.**
-> A política `cross-provider-preferred` procura um revisor de **outro** fornecedor, e o
-> `mock` se qualifica — ele é outro fornecedor. O resultado observado foi uma task
-> reprovada duas vezes com `AGENT_ERROR: revisor nao emitiu veredito`.
-> Ver [TROUBLESHOOTING.md](TROUBLESHOOTING.md#revisor-não-emitiu-veredito-agent_error).
+> **Uma edição que ainda vale conferir:** `execution.workspaceSetup.link` liga
+> `node_modules` na worktree de cada tentativa, e se `node_modules` estiver **rastreado pelo
+> git** a criação da worktree falha.
+> Ver [TROUBLESHOOTING.md](TROUBLESHOOTING.md#worktree-não-é-criada-e-o-run-fica-parado-sem-erro).
 
 ---
 

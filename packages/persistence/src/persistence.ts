@@ -1,6 +1,11 @@
 import { join, resolve } from 'node:path'
-import { createArtifactStore, type FileArtifactStore } from './artifact-store.js'
+import {
+  type ArtifactStoreDeps,
+  createArtifactStore,
+  type FileArtifactStore,
+} from './artifact-store.js'
 import { type DatabaseHandle, type DatabaseMode, openDatabase } from './database.js'
+import { WritesInFlightError } from './errors.js'
 import { createEventStore, type SqliteEventStore } from './event-store.js'
 import { ChangeNotifier } from './notifier.js'
 import { createQueries, type SqliteQueries } from './queries.js'
@@ -10,21 +15,44 @@ export const DEFAULT_BASE_DIR = '.agentic'
 export const DEFAULT_DATABASE_FILE = 'state.db'
 
 export interface OpenPersistenceOptions {
-  /** Diretorio base; por padrao `.agentic` (ADR-0003). */
+  /** Diretorio de estado do projeto; por padrao `.agentic` (ADR-0003). */
   readonly baseDir?: string
-  readonly databasePath?: string
+  /**
+   * NAO existe opcao de caminho do banco.
+   *
+   * `databasePath` existiu como conveniencia e virou um escape de posse: o lock protegia
+   * `<baseDir>/control-plane.lock.db` enquanto o `state.db` mutavel podia ser apontado para
+   * QUALQUER lugar — inclusive o diretorio de um projeto que pertence a outro processo. Duas
+   * identidades para um projeto so e a forma exata do defeito que I14 existe para impedir.
+   *
+   * A regra agora e uma linha: UM PROJETO -> UM runtimeDir -> UM lock -> UM `state.db`. Quem
+   * precisa de outro banco usa outro `baseDir`, e ai leva o lock junto.
+   */
   readonly mode?: DatabaseMode
   readonly busyTimeoutMs?: number
   readonly pollIntervalMs?: number
+  /** Primitivos de arquivo do store de artefatos; so o teste os troca. */
+  readonly artifacts?: ArtifactStoreDeps
 }
 
 export interface Persistence {
   readonly database: DatabaseHandle
+  /** `readonly` = esta conexao nao escreve, e quem recusa e o SQLite. */
+  readonly mode: DatabaseMode
   readonly runs: SqliteRunStore
   readonly events: SqliteEventStore
   readonly artifacts: FileArtifactStore
   readonly queries: SqliteQueries
   readonly baseDir: string
+  /** Escritas de artefato que ja comecaram e ainda nao terminaram. */
+  readonly pendingWrites: number
+  /** Espera as escritas em voo terminarem. Quem vai fechar chama isto antes. */
+  settle(): Promise<void>
+  /**
+   * Fecha a conexao. Com escrita de artefato em voo, RECUSA (`WritesInFlightError`): fechar
+   * o banco por baixo de um `writeFile` pendente deixaria arquivo sem linha e, pior, um
+   * efeito deste processo ainda vivo depois de a posse ser devolvida (I15).
+   */
   close(): void
 }
 
@@ -34,10 +62,11 @@ export interface Persistence {
  */
 export function openPersistence(options: OpenPersistenceOptions = {}): Persistence {
   const baseDir = resolve(options.baseDir ?? DEFAULT_BASE_DIR)
-  const databasePath = options.databasePath ?? join(baseDir, DEFAULT_DATABASE_FILE)
+  const mode = options.mode ?? 'readwrite'
   const database = openDatabase({
-    path: databasePath,
-    mode: options.mode ?? 'readwrite',
+    // Derivado, nunca recebido: o banco mora ao lado do lock que o protege.
+    path: join(baseDir, DEFAULT_DATABASE_FILE),
+    mode,
     ...(options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs }),
   })
   const notifier = new ChangeNotifier()
@@ -46,14 +75,22 @@ export function openPersistence(options: OpenPersistenceOptions = {}): Persisten
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   })
 
+  const artifacts = createArtifactStore(database, baseDir, options.artifacts)
+
   return {
     database,
     runs: createRunStore(database, { notifier }),
     events,
-    artifacts: createArtifactStore(database, baseDir),
+    artifacts,
     queries: createQueries(database),
     baseDir,
+    mode,
+    get pendingWrites(): number {
+      return artifacts.pending
+    },
+    settle: () => artifacts.settle(),
     close: (): void => {
+      if (artifacts.pending > 0) throw new WritesInFlightError(artifacts.pending)
       events.close()
       database.close()
     },

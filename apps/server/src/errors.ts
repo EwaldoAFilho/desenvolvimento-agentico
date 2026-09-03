@@ -73,6 +73,9 @@ const STATUS_BY_ORCHESTRATOR_CODE: Readonly<Record<string, number>> = {
   RUN_NOT_FOUND: 404,
   TASK_NOT_FOUND: 404,
   COMMAND_REFUSED: 400,
+  // O cancelamento foi pedido mas nao assentou (grupo de processos vivo): conflito com o
+  // estado real, nao erro do pedido. O cliente repete quando o processo tiver parado.
+  CANCELLATION_UNSETTLED: 409,
 }
 
 const STATUS_BY_DOMAIN_CODE: Readonly<Record<string, number>> = {

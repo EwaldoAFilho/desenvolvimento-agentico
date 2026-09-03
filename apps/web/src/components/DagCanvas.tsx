@@ -134,31 +134,60 @@ export function DagCanvas({
   // 1366x768: o conteudo cabia (297px num canvas de 388px) mas ficava 123px deslocado para
   // baixo, deixando dois de oito nos fora da area visivel.
   //
-  // A correcao e um reenquadramento UNICO, depois que o layout assenta. Uma vez so, de
-  // proposito: a partir dai o enquadramento pertence a quem estiver olhando o grafo, e
-  // nenhum evento de SSE, abertura de painel ou redimensionamento o desfaz.
+  // A primeira correcao reenquadrava UMA vez, no primeiro frame depois da montagem. Nao
+  // bastou: a suite de navegador mediu, intermitentemente, dois nos 32px abaixo do canvas em
+  // 1366x768 — o layout ainda assentava depois daquele frame, e o enquadramento unico ja
+  // tinha sido gasto. A regra agora e por POSSE, nao por contagem: enquanto ninguem tocou o
+  // viewport, o enquadramento acompanha o tamanho do canvas (ResizeObserver); a partir do
+  // primeiro gesto de quem olha o grafo — arrastar, rolar, zoom pelos controles — o viewport
+  // e dessa pessoa, e nenhum evento de SSE, abertura de painel ou redimensionamento o desfaz.
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null)
-  const jaAssentou = useRef(false)
+  const viewportDoUsuario = useRef(false)
+  const quadroRef = useRef<number | null>(null)
 
-  const handleInit = useCallback((instance: ReactFlowInstance<Node, Edge>) => {
-    flowRef.current = instance
-  }, [])
-
-  useEffect(() => {
-    if (jaAssentou.current) return
-    const assentar = (): void => {
-      if (jaAssentou.current) return
+  const agendarEnquadramento = useCallback(() => {
+    if (viewportDoUsuario.current) return
+    if (quadroRef.current !== null) cancelAnimationFrame(quadroRef.current)
+    quadroRef.current = requestAnimationFrame(() => {
+      quadroRef.current = null
+      if (viewportDoUsuario.current) return
       const alvo = canvasRef.current
       const instancia = flowRef.current
       if (alvo === null || instancia === null) return
       if (alvo.clientHeight <= 0 || alvo.clientWidth <= 0) return
-      jaAssentou.current = true
       void instancia.fitView(FIT_OPTIONS)
+    })
+  }, [])
+
+  const handleInit = useCallback(
+    (instance: ReactFlowInstance<Node, Edge>) => {
+      flowRef.current = instance
+      agendarEnquadramento()
+    },
+    [agendarEnquadramento],
+  )
+
+  /** Gesto de gente. `event` nulo e movimento programatico — o proprio `fitView`, por exemplo. */
+  const handleMoveStart = useCallback((event: MouseEvent | TouchEvent | null) => {
+    if (event !== null) viewportDoUsuario.current = true
+  }, [])
+
+  const reivindicarViewport = useCallback(() => {
+    viewportDoUsuario.current = true
+  }, [])
+
+  useEffect(() => {
+    const alvo = canvasRef.current
+    if (alvo === null) return
+    const observador = new ResizeObserver(agendarEnquadramento)
+    observador.observe(alvo)
+    return () => {
+      observador.disconnect()
+      if (quadroRef.current !== null) cancelAnimationFrame(quadroRef.current)
+      quadroRef.current = null
     }
-    const quadro = requestAnimationFrame(assentar)
-    return () => cancelAnimationFrame(quadro)
-  })
+  }, [agendarEnquadramento])
 
   const layout = useMemo(() => layoutDag(snapshot.graph, grouping), [snapshot.graph, grouping])
   const nodes = useMemo(
@@ -220,12 +249,18 @@ export function DagCanvas({
           fitView
           fitViewOptions={FIT_OPTIONS}
           onInit={handleInit}
+          onMoveStart={handleMoveStart}
           // O piso de zoom precisa deixar o enquadramento recuar o quanto o grafo exigir.
           minZoom={0.05}
           maxZoom={1.6}
         >
           <Background gap={24} />
-          <Controls showInteractive={false} />
+          <Controls
+            showInteractive={false}
+            onZoomIn={reivindicarViewport}
+            onZoomOut={reivindicarViewport}
+            onFitView={reivindicarViewport}
+          />
         </ReactFlow>
       </div>
     </section>

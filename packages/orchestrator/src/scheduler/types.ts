@@ -73,8 +73,19 @@ export interface SchedulerInput {
   readonly now: Date
 }
 
-/** Unico motivo de bloqueio decidido pelo scheduler hoje (I10, transicao 12b). */
-export type SchedulerBlockReason = 'CROSS_PROVIDER_UNAVAILABLE'
+/**
+ * Motivos de bloqueio decididos pelo scheduler (transicao 12b). Os tres sao PERMANENTES:
+ * nenhum se resolve esperando o proximo tick, e por isso nenhum pode virar espera calada.
+ *
+ * `CROSS_PROVIDER_UNAVAILABLE` e I10: politica exigida sem segundo fornecedor apto.
+ * `SIMULATED_REVIEWER_ONLY` e a recusa de eleger um agente de ENSAIO como revisor real.
+ * `NO_REVIEWER_AVAILABLE` e o projeto que nao declarou revisor NENHUM — falta de VAGA e
+ * outra coisa, tratada depois, no orcamento, e essa sim espera.
+ */
+export type SchedulerBlockReason =
+  | 'CROSS_PROVIDER_UNAVAILABLE'
+  | 'SIMULATED_REVIEWER_ONLY'
+  | 'NO_REVIEWER_AVAILABLE'
 
 export interface DispatchExecutorDecision {
   readonly kind: 'dispatch-executor'
@@ -97,6 +108,8 @@ export interface BlockTaskDecision {
   readonly kind: 'block-task'
   readonly taskId: TaskId
   readonly reason: SchedulerBlockReason
+  /** A politica REALMENTE resolvida para a task; o bloqueio nao inventa uma. */
+  readonly policy: ReviewPolicy
 }
 
 /** Decisao, nao efeito: o orquestrador e quem adquire lock, workspace e despacha. */

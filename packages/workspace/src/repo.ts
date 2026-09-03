@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises'
+import { realpath, rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import type { CommitRef } from '@agentic/domain'
 import { WorkspaceError, type WorkspaceStage } from './errors.js'
 import { git, gitText } from './git.js'
@@ -93,6 +94,27 @@ export async function worktreeOnBranch(
   return entries.find((entry) => entry.branch === branch)
 }
 
+/**
+ * A worktree que ESTE repositorio registra naquele caminho, se houver.
+ *
+ * A comparacao passa por `realpath` dos dois lados: o git responde o caminho ja resolvido,
+ * e um `worktreeRoot` sob link simbolico (o `/tmp` da suite, por exemplo) daria uma
+ * diferenca puramente textual. Nao encontrar aqui e a resposta que autoriza NAO remover
+ * nada: diretorio que este repositorio nao reconhece como worktree sua nao e nosso.
+ */
+export async function worktreeAtPath(
+  cwd: string,
+  path: string,
+): Promise<WorktreeEntry | undefined> {
+  const wanted = await realpath(path).catch(() => resolve(path))
+  const entries = await listWorktrees(cwd)
+  for (const entry of entries) {
+    const candidate = await realpath(entry.path).catch(() => resolve(entry.path))
+    if (candidate === wanted) return entry
+  }
+  return undefined
+}
+
 /** Cria a branch da missao se ainda nao existir; idempotente por natureza. */
 export async function ensureBranch(
   cwd: string,
@@ -111,6 +133,17 @@ export async function ensureBranch(
   return { sha, branch }
 }
 
+/** Sufixo da branch de tentativa que sobrou de um run anterior da MESMA missao. */
+export const STALE_BRANCH_SUFFIX = '.stale.'
+
+/**
+ * Cria a worktree numa branch NOVA. Se a branch ja existir — sobra de um run anterior da
+ * mesma missao, que nomeia a tentativa por `task/<missao>/<task>/a<n>` sem o run — ela e
+ * RENOMEADA (nunca apagada: a evidencia daquela tentativa continua referenciada) e o nome
+ * fica livre. Sem isto, o segundo run de uma missao travava para sempre em
+ * `git worktree add -b` (F2 do relatorio da DA-UX-001): o despacho falhava, era tentado de
+ * novo a cada tick e a task nunca escalava para BLOCKED.
+ */
 export async function addWorktree(
   cwd: string,
   path: string,
@@ -118,6 +151,20 @@ export async function addWorktree(
   startPoint: string,
   stage: WorkspaceStage = 'acquire',
 ): Promise<void> {
+  if (await branchExists(cwd, branch)) {
+    // Renomear so o que NAO esta em uso: o git renomeia um ref checked out e arrasta o HEAD
+    // da worktree viva junto — uma tentativa em andamento de outro run passaria a escrever
+    // numa branch com outro nome e a integracao pegaria a errada. Branch viva = conflito de
+    // verdade, e conflito recusa em vez de sequestrar.
+    const live = await worktreeOnBranch(cwd, branch)
+    if (live !== undefined) {
+      throw new WorkspaceError(stage, `branch ${branch} esta em uso por outra worktree`, {
+        detail: live.path,
+      })
+    }
+    const stale = `${branch}${STALE_BRANCH_SUFFIX}${Date.now().toString(36)}`
+    await git(['branch', '-m', branch, stale], { cwd, stage })
+  }
   await git(['worktree', 'add', '-b', branch, path, startPoint], { cwd, stage })
 }
 
@@ -128,6 +175,32 @@ export async function addWorktreeForBranch(
   stage: WorkspaceStage = 'integrate',
 ): Promise<void> {
   await git(['worktree', 'add', path, branch], { cwd, stage })
+}
+
+/**
+ * Worktree presa a um COMMIT, sem anexar branch. O git recusa duas worktrees na mesma
+ * branch; quando so precisamos LER a arvore de um commit — o caso do mission gate — o
+ * detach evita a colisao sem forcar nada nem mexer em quem ja segura a branch.
+ */
+export async function addWorktreeDetached(
+  cwd: string,
+  path: string,
+  commit: string,
+  stage: WorkspaceStage = 'acquire',
+): Promise<void> {
+  await git(['worktree', 'add', '--detach', path, commit], { cwd, stage })
+}
+
+/**
+ * Remocao que NAO apaga por conta propria: se o git recusar devolver a worktree, o
+ * diretorio fica onde esta e o chamador decide. E o oposto de `removeWorktree`, e existe
+ * para quem prefere recusar a operacao a destruir algo que nao entendeu.
+ */
+export async function removeWorktreeStrict(cwd: string, path: string): Promise<boolean> {
+  const result = await git(['worktree', 'remove', '--force', path], { cwd, allowFailure: true })
+  if (result.exitCode !== 0) return false
+  await git(['worktree', 'prune'], { cwd, allowFailure: true })
+  return true
 }
 
 /** Remocao tolerante: o disco precisa ficar limpo mesmo se o registro do git ja divergiu. */

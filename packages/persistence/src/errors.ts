@@ -32,6 +32,49 @@ export class SchemaVersionError extends PersistenceError {
   }
 }
 
+/**
+ * O banco operacional ainda nao existe, e ABRI-LO seria inicializar o projeto.
+ *
+ * Criar `state.db` e migrar sao ESCRITAS, e escrita pertence a quem possui o projeto (I14).
+ * Um comando de leitura — `status`, `report`, `doctor` — que abrisse o banco em `readwrite`
+ * inicializaria um projeto de terceiro so por ter sido chamado ali, e num diretorio que pode
+ * nem ser o certo. Recusar com um tipo proprio deixa a CLI dizer a frase util ("rode `agentic
+ * mission start`") em vez de vazar `SQLITE_CANTOPEN`.
+ */
+export class DatabaseNotInitializedError extends PersistenceError {
+  readonly path: string
+
+  constructor(path: string) {
+    super(
+      'DATABASE_NOT_INITIALIZED',
+      `projeto ainda nao inicializado: ${path} nao existe. Leitura nao cria banco — quem ` +
+        'inicializa e o dono do projeto (I14)',
+    )
+    this.path = path
+  }
+}
+
+/**
+ * Fechar com escrita de artefato em voo seria devolver o projeto com efeito vivo (I15).
+ *
+ * A escrita ja passou pela guarda e esta entre o `mkdir` e o `writeFile`: cancelar nao e
+ * possivel, e fechar o banco por baixo dela deixaria um arquivo sem linha. Quem fecha
+ * espera `settle()` antes; quem nao esperou recebe esta recusa — e o lease, ao ve-la,
+ * NAO solta o lock do arquivo.
+ */
+export class WritesInFlightError extends PersistenceError {
+  readonly pending: number
+
+  constructor(pending: number) {
+    super(
+      'WRITES_IN_FLIGHT',
+      `${pending} escrita(s) de artefato ainda em voo: fechar agora deixaria efeito vivo ` +
+        'depois da posse (I15); espere settle() antes de fechar',
+    )
+    this.pending = pending
+  }
+}
+
 export class ReadOnlyDatabaseError extends PersistenceError {
   constructor(operation: string) {
     super('READ_ONLY', `operacao de escrita "${operation}" em conexao readonly (I7)`)

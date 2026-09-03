@@ -12,6 +12,10 @@ coverage/
 .agentic/state.db-*
 .agentic/runs/
 .agentic/worktrees/
+# Descoberta e posse: valem enquanto um processo vive nesta maquina
+.agentic/control-plane.json
+.agentic/control-plane.lock.db
+.agentic/control-plane.lock.db-*
 
 # build
 dist/
@@ -19,3 +23,7 @@ dist/
 
 # vitest
 .vitest/
+.vscode-test/
+
+# pacote da extensao VS Code gerado localmente (npm run vscode:package)
+*.vsix

@@ -62,6 +62,7 @@ describe('contrato do --json (saida real dos comandos)', () => {
     workspace = await createWorkspace()
     const captured = captureDeps({
       cwd: workspace.dir,
+      waitForShutdown: () => Promise.resolve(),
       bootServer: () =>
         Promise.resolve({ url: 'http://127.0.0.1:4317', close: () => Promise.resolve() }),
     })

@@ -54,6 +54,17 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'vscode-extension',
+          root: `${root}extensions/vscode`,
+          include: ['src/**/*.test.ts'],
+          environment: 'node' as const,
+          testTimeout: 60_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'tools',
           root,
           include: ['tests/tools/**/*.test.ts'],

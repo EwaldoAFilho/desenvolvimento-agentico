@@ -343,10 +343,12 @@ instalada e **todo** gate falha. Mas se `node_modules` estiver **rastreado pelo 
 criado; a guarda de aquisição de workspace reprova; e nenhuma task em `RUNNING` pode existir
 sem workspace válido. O run fica correto e parado ao mesmo tempo.
 
-**O que fazer.** Pare de versionar `node_modules` (é o que se espera de qualquer jeito):
+**O que fazer.** Pare de versionar `node_modules` (é o que se espera de qualquer jeito). Os
+padrões do estado local do Agentic o `agentic init` já acrescenta ao seu `.gitignore`;
+`node_modules` é do seu projeto:
 
 ```sh
-printf 'node_modules/\n.agentic/state.db\n.agentic/runs/\n.agentic/worktrees/\n.agentic/control-plane.json\n' >> .gitignore
+printf 'node_modules/\n' >> .gitignore
 git rm -r --cached node_modules
 git commit -m "para de versionar node_modules"
 ```
@@ -415,6 +417,90 @@ Depois disso, confirme que o `agentic` que você chama é o dessa instalação
 (`command -v agentic`). E lembre que, na mesma missão, `attachServer` passou a publicar a
 porta **real** em `.agentic/control-plane.json`, em vez da configurada — então
 `cat .agentic/control-plane.json` é a fonte confiável do endereço.
+
+### `agentic serve` diz que o control plane já está no ar
+
+**Sintoma.** O segundo terminal não sobe nada:
+
+```console
+$ agentic serve
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+nada a fazer: START MISSION pelo dashboard ou `agentic mission start`.
+```
+
+**Isto é o comportamento correto, não uma falha.** Um projeto tem **um** control plane owner
+(I14, ADR-0013). O segundo processo descobre o dono e termina com sucesso — abra o endereço
+informado, ou use `agentic mission start`, que entrega o START ao dono.
+
+A garantia é por projeto, não por porta:
+
+```console
+$ agentic serve --port 4401
+control plane ja no ar em http://127.0.0.1:4317 (pid 12345)
+este projeto ja tem dono: `--port` nao cria um segundo control plane.
+```
+
+Isso é deliberado. Antes, `--port` criava um segundo control plane sobre o **mesmo**
+`state.db`: os dois adotavam o mesmo run, disputavam a mesma worktree e o trabalho de um deles
+era descartado sem aviso.
+
+Projetos diferentes continuam podendo rodar ao mesmo tempo — a chave é o diretório do
+projeto, resolvido com `realpath` (então um link simbólico para o mesmo repositório também
+não cria um segundo dono).
+
+**Se o dono não existe mais.** Não existe lock a limpar: a posse morre com o processo,
+inclusive sob `kill -9` ou queda de energia. Se o `serve` insiste que há dono, existe um
+processo vivo — encontre-o pelo pid que a mensagem informa:
+
+```sh
+cat .agentic/control-plane.json     # endereco e pid do dono
+ps -p "$(node -e "console.log(require('./.agentic/control-plane.json').pid)")"
+```
+
+`.agentic/control-plane.lock.db` é um arquivo de zero byte e **não guarda estado nenhum** —
+apagá-lo não libera nada enquanto o dono vive, e não é o caminho para resolver problema algum.
+
+---
+
+### Ctrl+C demora, ou o control plane diz que não encerrou limpo
+
+**Sintoma.** Depois do Ctrl+C, `agentic serve` leva alguns segundos para sair — ou termina
+com:
+
+```console
+o control plane nao encerrou limpo:
+run 01M1...: encerramento excedeu 30000ms com efeito ainda em voo (2 efeito(s)
+assincrono(s); tentativas T03-a2-...); a posse do projeto NAO e devolvida enquanto isso durar (I15)
+```
+
+**A demora é o encerramento gracioso fazendo o trabalho dele** (ADR-0014). Ele para de
+atender, cancela os processos de agente e de gate (SIGTERM, e SIGKILL dois segundos depois
+se ignorarem — e o que sobrar no grupo de processos deles recebe SIGKILL junto), espera uma
+integração em curso terminar, grava o que já chegou e só então devolve o projeto. Um agente
+que ignora SIGTERM custa esses dois segundos; um `git rebase` em andamento custa o tempo
+dele.
+
+**A mensagem de "não encerrou limpo" é rara e é honesta.** Algum efeito não parou dentro do
+prazo, e o control plane preferiu **segurar a posse** a entregar o projeto com efeito vivo —
+que era o dano medido em D4. O processo sai logo depois, e o sistema operacional solta o lock
+no mesmo instante; o próximo `agentic serve` adota o run e reconcilia a tentativa que ficou
+em voo como `INTERRUPTED`. Nada precisa ser limpo à mão. Se acontecer com frequência, o
+detalhe da mensagem diz qual efeito não parou — é isso que vale relatar.
+
+**A mensagem de "não encerrou limpo" não encerra o processo.** Ele fica no ar, dono do
+projeto, e o próximo Ctrl+C tenta o encerramento outra vez — sair soltaria a posse com o
+efeito vivo, que é o que a regra proíbe. Quando o efeito termina (a integração acaba, o gate
+morre), o Ctrl+C seguinte devolve o projeto e o processo sai.
+
+**Um segundo Ctrl+C durante o encerramento não mata o processo.** Ele é registrado (a CLI
+avisa em stderr) e, se o encerramento em curso falhar, dispara a nova tentativa sozinho. Isso
+é deliberado: o tratador padrão do Node mataria o processo no meio da drenagem e a posse
+sairia com efeito vivo.
+
+**Derrubar à força é `kill -9`.** Nada é drenado, a posse morre com o processo e um comando
+de gate ou de `workspaceSetup` que estava rodando fica órfão até terminar sozinho — sem
+alcançar o banco. Funciona, mas é queda, não encerramento; o próximo `agentic serve` adota
+o run e reconcilia.
 
 ---
 
@@ -771,7 +857,20 @@ médio, cuja política é `cross-provider-preferred`: o scheduler procura um rev
 **outro** fornecedor — e o `mock` se qualifica, porque ele é, de fato, outro fornecedor. O
 `mock` é determinístico e não emite veredito, então a revisão nunca conclui.
 
-**O que fazer.** Não deixe o `mock` disponível como revisor num projeto real:
+**Consertado na 0.3.0.** Um fornecedor `kind: inprocess` é um agente de **ensaio**, e ensaio
+não revisa tentativa real — em política nenhuma, nem em `fresh-session`. O escalonamento
+recusa antes de despachar e a task vai para `BLOCKED` com o motivo e o conserto na tela, em
+vez de queimar o orçamento de tentativas:
+
+```console
+bloqueio: [POLICY] SIMULATED_REVIEWER_ONLY — precisa: um fornecedor real declarado como
+revisor: agente de ensaio nao revisa tentativa real
+```
+
+Não há mais nada a configurar para evitar o sintoma acima; `roles: [executor, reviewer]` num
+provider `inprocess` (inclusive o padrão, quando `roles` é omitido) não o torna revisor.
+
+**O que fazer** se você caiu nesse bloqueio: declare um fornecedor real no `registry`.
 
 ```yaml
 providers:
@@ -783,20 +882,9 @@ providers:
       versionArgs: ["--version"]
       maxConcurrent: 2
       roles: [executor, reviewer]
-    # sem `mock` aqui. Se você quiser mantê-lo para ensaios, use um project.yaml separado.
 ```
 
-Cuidado com o padrão: **`roles` omitido vale por `[executor, reviewer]`**. Declarar
-
-```yaml
-    mock:
-      kind: inprocess
-      maxConcurrent: 4
-```
-
-deixa o mock apto a revisar do mesmo jeito.
-
-Depois de retirar o `mock`, a mesma missão rodou até `COMPLETED`, com a revisão indo para
+Com o fornecedor real no lugar, a mesma missão rodou até `COMPLETED`, com a revisão indo para
 uma sessão nova do fornecedor real e o rebaixamento registrado:
 
 ```console

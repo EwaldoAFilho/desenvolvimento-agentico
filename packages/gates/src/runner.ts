@@ -62,6 +62,20 @@ export class GateRunner {
       if (command === undefined) continue
       const required = command.required ?? true
 
+      // Cancelado pelo chamador: o que nao rodou fica registrado como nao medido, e a
+      // razao e outra — ninguem reprovou, o control plane esta encerrando.
+      if (request.signal?.aborted === true) {
+        skipped.push({
+          index,
+          command: command.run,
+          cwd: displayGateCwd(workspace, command.cwd),
+          required,
+          reason: 'ABORTED',
+          after: results.length - 1,
+        })
+        continue
+      }
+
       if (abortedAt !== null) {
         skipped.push({
           index,
@@ -74,7 +88,14 @@ export class GateRunner {
         continue
       }
 
-      const record = await this.#runCommand(command, index, required, workspace, env)
+      const record = await this.#runCommand(
+        command,
+        index,
+        required,
+        workspace,
+        env,
+        request.signal,
+      )
       results.push(record)
       // Fail-fast: seguir depois de um obrigatorio que falhou so produziria ruido, e o
       // relatorio precisa dizer que os proximos NAO foram medidos.
@@ -93,6 +114,7 @@ export class GateRunner {
       status: gateStatusFromResults(request.gate.commands, results),
       results,
       skipped,
+      residualProcess: results.some((record) => !record.groupTerminated),
       cwd: workspace,
       envAllow,
     }
@@ -104,6 +126,7 @@ export class GateRunner {
     required: boolean,
     workspace: string,
     env: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
   ): Promise<GateCommandRecord> {
     const startedAt = new Date(this.#now())
     let cwd = workspace
@@ -136,6 +159,7 @@ export class GateRunner {
         env,
         timeoutMs: command.timeoutMs ?? this.#defaultTimeoutMs,
         maxOutputBytes: this.#maxOutputBytes,
+        ...(signal === undefined ? {} : { signal }),
       },
       this.#processDeps,
     )
@@ -153,6 +177,8 @@ export class GateRunner {
       exitCode: run.code,
       signal: run.signal,
       timedOut: run.timedOut,
+      groupTerminated: run.groupTerminated,
+      pid: run.pid,
       durationMs: run.durationMs,
       startedAt,
       finishedAt: new Date(this.#now()),
@@ -178,6 +204,8 @@ export class GateRunner {
     const message = describeUnknownError(error)
     const finishedAt = new Date(this.#now())
     return {
+      groupTerminated: true,
+      pid: null,
       index,
       command: command.run,
       cwd,

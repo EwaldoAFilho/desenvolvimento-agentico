@@ -42,7 +42,7 @@ export class SqliteEventStore implements EventStore {
   }
 
   append(event: DomainEventInput): Promise<DomainEvent> {
-    if (this.#handle.mode === 'readonly') throw new ReadOnlyDatabaseError('append')
+    if (!this.#handle.writable) throw new ReadOnlyDatabaseError('append')
     const written = writeEvent(this.db, event)
     this.#notifier.notify()
     return Promise.resolve(written)

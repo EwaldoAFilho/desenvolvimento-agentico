@@ -1,12 +1,95 @@
+import type { DiscoveredCommand, GateCommandId } from './gate-discovery.js'
+
 /**
  * Modelos escritos por `agentic init`. Sao YAML porque humano le, comenta e revisa o
  * arquivo — e ele e o contrato versionado (MISSION-FORMAT 1).
+ *
+ * Nada aqui e presumido. Nome do projeto, fornecedores e gates saem do que o `init`
+ * OBSERVOU na maquina e no projeto; o que nao foi observado nao vira linha de configuracao.
  */
-export const PROJECT_TEMPLATE = `apiVersion: agentic/v1
+
+/** Aspas duplas para qualquer nome de pasta: `meu projeto`, `app.v2`, `1-coisa`. */
+function yamlString(value: string): string {
+  return JSON.stringify(value)
+}
+
+export interface ProviderTemplateEntry {
+  readonly id: string
+  readonly command: string
+  readonly maxConcurrent: number
+  readonly versionArgs: readonly string[]
+}
+
+/**
+ * Fornecedores que o `init` sabe sondar sozinho, na ordem em que sao oferecidos.
+ *
+ * Ficam AQUI, na interface, e nao no dominio: P18 proibe o dominio citar fornecedor. A
+ * ordem e a de declaracao — o primeiro observado pronto vira `providers.default`, e nada
+ * alem disso a distingue.
+ */
+export const PROVIDER_CANDIDATES: readonly ProviderTemplateEntry[] = [
+  { id: 'claude-code', command: 'claude', maxConcurrent: 3, versionArgs: ['--version'] },
+  { id: 'codex', command: 'codex', maxConcurrent: 2, versionArgs: ['--version'] },
+]
+
+/** Provider de ensaio: entra so quando NAO ha CLI real pronta, e nomeado como tal. */
+export const REHEARSAL_PROVIDER_ID = 'mock'
+
+export interface ProjectTemplateInput {
+  readonly name: string
+  /** Vazio = nenhuma CLI real pronta; o modelo cai no provider de ensaio, dizendo isso. */
+  readonly providers: readonly ProviderTemplateEntry[]
+  /** `undefined` = nenhum gate detectado; `project.gates.missionGate` nem e escrito. */
+  readonly missionGate?: string
+}
+
+function providerBlock(providers: readonly ProviderTemplateEntry[]): string {
+  if (providers.length === 0) {
+    return `  # Nenhuma CLI de agente foi observada PRONTA nesta maquina, entao o registry ficou
+  # com o agente de ENSAIO. Ele nao escreve codigo e nao revisa: serve para conhecer o
+  # formato. Instale e autentique uma CLI (${PROVIDER_CANDIDATES.map((p) => p.command).join(', ')}),
+  # rode \`agentic providers\` e troque \`default\` pelo id dela.
+  default: ${REHEARSAL_PROVIDER_ID}
+  registry:
+    ${REHEARSAL_PROVIDER_ID}:
+      kind: inprocess
+      maxConcurrent: 4
+      roles: [executor]`
+  }
+  const lines = [
+    '  # CLIs locais ja instaladas e autenticadas pelo usuario. Nenhuma API key (P17).',
+    `  default: ${providers[0]?.id}`,
+    '  registry:',
+  ]
+  for (const provider of providers) {
+    lines.push(
+      `    ${provider.id}:`,
+      '      kind: local-cli',
+      `      command: ${provider.command}`,
+      `      versionArgs: [${provider.versionArgs.map((arg) => yamlString(arg)).join(', ')}]`,
+      `      maxConcurrent: ${provider.maxConcurrent}`,
+      '      roles: [executor, reviewer]',
+    )
+  }
+  return lines.join('\n')
+}
+
+export function projectTemplate(input: ProjectTemplateInput): string {
+  const gates =
+    input.missionGate === undefined
+      ? `gates:
+  file: .agentic/gates.yaml
+  # Nenhum gate foi detectado neste projeto: declare os seus em .agentic/gates.yaml e
+  # aponte o mission gate aqui.`
+      : `gates:
+  file: .agentic/gates.yaml
+  missionGate: ${input.missionGate}`
+
+  return `apiVersion: agentic/v1
 kind: Project
 
 project:
-  name: meu-projeto
+  name: ${yamlString(input.name)}
   repoRoot: .
 
 execution:
@@ -51,48 +134,118 @@ integration:
   autoPush: false
 
 providers:
-  # CLIs locais ja instaladas e autenticadas pelo usuario. Nenhuma API key (P17).
-  default: mock
-  registry:
-    mock:
-      kind: inprocess
-      maxConcurrent: 4
-      roles: [executor, reviewer]
+${providerBlock(input.providers)}
 
-gates:
-  file: .agentic/gates.yaml
-  missionGate: mission
+${gates}
 
 server:
   host: 127.0.0.1
   port: 4317
 `
+}
 
-export const GATES_TEMPLATE = `apiVersion: agentic/v1
+/** Perfil rapido: o que um humano roda a cada mudanca. `build` e caro demais para isso. */
+const FAST_COMMANDS: readonly GateCommandId[] = ['lint', 'typecheck', 'test']
+/** Quando o projeto tem um comando guarda-chuva, o mission gate e ele — e so ele. */
+const UMBRELLA_COMMAND: GateCommandId = 'verify'
+
+export interface GateProfilePlan {
+  readonly id: string
+  readonly commands: readonly DiscoveredCommand[]
+}
+
+export interface GatesPlan {
+  readonly profiles: readonly GateProfilePlan[]
+  /** Gate usado pelas tasks; `undefined` quando nada foi detectado. */
+  readonly taskGate?: string
+  readonly missionGate?: string
+}
+
+/**
+ * Traduz comandos DETECTADOS em perfis. Sem deteccao nao ha perfil: um `gates.yaml` vazio
+ * e a resposta honesta para um projeto cujos comandos nos nao conhecemos.
+ */
+export function planGates(commands: readonly DiscoveredCommand[]): GatesPlan {
+  if (commands.length === 0) return { profiles: [] }
+  const umbrella = commands.find((command) => command.id === UMBRELLA_COMMAND)
+  const fast = commands.filter((command) => FAST_COMMANDS.includes(command.id))
+  const unit = fast.length > 0 ? fast : commands
+  const mission = umbrella === undefined ? commands : [umbrella]
+  return {
+    profiles: [
+      { id: 'unit', commands: unit },
+      { id: 'mission', commands: mission },
+    ],
+    taskGate: 'unit',
+    missionGate: 'mission',
+  }
+}
+
+/** Teto por comando: generoso, mas finito — gate sem prazo trava o run em silencio. */
+const GATE_TIMEOUT_MS: Readonly<Record<GateCommandId, number>> = {
+  lint: 300_000,
+  typecheck: 300_000,
+  test: 900_000,
+  build: 900_000,
+  verify: 1_800_000,
+}
+
+export function gatesTemplate(plan: GatesPlan): string {
+  const header = `apiVersion: agentic/v1
 kind: Gates
 
 # Comandos do SEU projeto, em qualquer linguagem. O control plane executa, mede e guarda
 # a evidencia — nao tem opiniao sobre eles.
+`
+  if (plan.profiles.length === 0) {
+    return `${header}
+# Nenhum comando foi detectado neste projeto. Declare os seus abaixo — por exemplo:
+#
+# profiles:
+#   unit:
+#     commands:
+#       - run: <o comando de teste do seu projeto>
+#         timeoutMs: 900000
 
-profiles:
-  unit:
-    commands:
-      - run: npm run lint
-      - run: npm run test
-        timeoutMs: 900000
-
-  mission:
-    commands:
-      - run: npm run verify
-        timeoutMs: 1800000
+profiles: {}
 
 env:
   allow: [PATH, HOME, NODE_ENV, CI, LANG]
 `
+  }
+  const blocks = plan.profiles.map((profile) => {
+    const lines = [`  ${profile.id}:`, '    commands:']
+    for (const command of profile.commands) {
+      lines.push(`      - run: ${command.run}`, `        timeoutMs: ${GATE_TIMEOUT_MS[command.id]}`)
+    }
+    return lines.join('\n')
+  })
+  return `${header}
+profiles:
+${blocks.join('\n\n')}
+
+env:
+  allow: [PATH, HOME, NODE_ENV, CI, LANG]
+`
+}
 
 export const EXAMPLE_MISSION_ID = 'EXEMPLO-001'
 
-export const MISSION_TEMPLATE = `apiVersion: agentic/v1
+export interface MissionTemplateInput {
+  readonly taskGate?: string
+  readonly missionGate?: string
+}
+
+/** `gate:` so aparece quando o gate existe: apontar para um perfil ausente nao compila. */
+function gateLine(gate: string | undefined, indent: string): string {
+  return gate === undefined ? '' : `\n${indent}gate: ${gate}`
+}
+
+export function missionTemplate(input: MissionTemplateInput = {}): string {
+  const task = input.taskGate
+  const mission = input.missionGate
+  const leafGate = mission ?? task
+  return `apiVersion: agentic/v1
 kind: Mission
 
 id: ${EXAMPLE_MISSION_ID}
@@ -114,8 +267,7 @@ acceptanceCriteria:
 
 defaults:
   requireReview: true
-  maxAttempts: 3
-  gate: unit
+  maxAttempts: 3${gateLine(task, '  ')}
 
 phases:
   - id: foundation
@@ -134,8 +286,7 @@ tasks:
     touches:
       - src/contratos/
     validation:
-      - Schema rejeita entrada invalida
-    gate: unit
+      - Schema rejeita entrada invalida${gateLine(task, '    ')}
     risk: low
     estimate: 2
 
@@ -149,8 +300,7 @@ tasks:
     reads:
       - src/contratos/
     validation:
-      - Caso de uso cobre o caminho feliz e o de erro
-    gate: unit
+      - Caso de uso cobre o caminho feliz e o de erro${gateLine(task, '    ')}
     risk: medium
     estimate: 3
 
@@ -164,8 +314,7 @@ tasks:
     reads:
       - src/contratos/
     validation:
-      - Tela renderiza estado de erro
-    gate: unit
+      - Tela renderiza estado de erro${gateLine(task, '    ')}
     risk: low
     estimate: 2
 
@@ -178,10 +327,8 @@ tasks:
     touches:
       - tests/integracao/
     validation:
-      - Fluxo passa duas vezes seguidas sem intervencao
-    gate: mission
+      - Fluxo passa duas vezes seguidas sem intervencao${gateLine(leafGate, '    ')}
     risk: low
     estimate: 2
-
-missionGate: mission
-`
+${mission === undefined ? '' : `\nmissionGate: ${mission}\n`}`
+}

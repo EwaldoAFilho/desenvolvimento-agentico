@@ -10,4 +10,9 @@ export interface AttemptLease extends WorkspaceLeaseRequest {
   readonly attemptNumber?: number
   readonly touches?: readonly PathScope[]
   readonly denyPaths?: readonly PathScope[]
+  /**
+   * Cancelamento cooperativo do `workspaceSetup` (encerramento do control plane). Um
+   * `npm ci` de minutos nao pode segurar o encerramento nem virar processo orfao.
+   */
+  readonly signal?: AbortSignal
 }

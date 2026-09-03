@@ -1,0 +1,44 @@
+/* Ajustes do dashboard dentro do editor: fundo e fonte do tema, portao de partida. */
+body {
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  background: var(--vscode-editor-background, #fff);
+  color: var(--vscode-foreground, #1f2328);
+}
+.gate {
+  padding: 24px 28px;
+  max-width: 720px;
+}
+.gate h1 {
+  margin: 0 0 8px;
+  font-size: 1.4em;
+}
+.gate__status {
+  color: var(--vscode-descriptionForeground, #57606a);
+}
+.gate__failure {
+  white-space: pre-wrap;
+  color: var(--vscode-errorForeground, #cf222e);
+  font-size: 0.9em;
+}
+.gate__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.gate button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground, #1f2328);
+  background: var(--vscode-button-secondaryBackground, #eaeef2);
+  border: 1px solid transparent;
+}
+.gate button.primary {
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0969da);
+}
+.gate button[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}

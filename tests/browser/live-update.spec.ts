@@ -38,6 +38,10 @@ test('tempo real: o dependente vira READY sem refetch do snapshot', async ({ pag
 
   await openMission(page, env)
   await approveInUi(page)
+  // A tela da missao ja desenha o DAG do RASCUNHO (PlanReview pede o snapshot do run DRAFT,
+  // que e o mesmo run que vai partir). O que este teste mede e a tela do RUN: a contagem
+  // comeca no START.
+  chamadas.length = 0
   await startInUi(page)
   await expectRunView(page)
 

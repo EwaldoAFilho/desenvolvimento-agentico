@@ -16,8 +16,10 @@ export {
 } from './diff.js'
 export type { WorkspaceErrorOptions, WorkspaceStage } from './errors.js'
 export {
+  isResidualProcessError,
   isWorkspaceBusyError,
   isWorkspaceError,
+  residualGroupOf,
   toFailureReason,
   WORKSPACE_STAGES,
   WorkspaceBusyError,
@@ -34,6 +36,16 @@ export type { GitIntegratorConfig } from './integrator.js'
 export { GitIntegrator } from './integrator.js'
 export type { BusyPolicy } from './lease.js'
 export { Mutex, WriteGate } from './lease.js'
+export {
+  MISSION_OWNER_FILE,
+  MISSION_OWNER_KIND,
+  MISSION_OWNER_VERSION,
+  type MissionOwnerMarker,
+  missionOwnerPath,
+  type OwnershipProof,
+  proveMissionOwnership,
+  writeMissionOwner,
+} from './mission-owner.js'
 export {
   attemptDirName,
   attemptWorktreePath,
@@ -72,6 +84,7 @@ export {
 export type {
   SetupCommandResult,
   SetupLinkSkip,
+  SetupProcessDeps,
   SetupSkipReason,
   WorkspaceSetup,
   WorkspaceSetupCommand,

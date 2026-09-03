@@ -13,7 +13,15 @@ import {
 } from './outcome.js'
 
 function exit(overrides: Partial<ExitStatus> = {}): ExitStatus {
-  return { code: 0, signal: null, timedOut: false, cancelled: false, durationMs: 10, ...overrides }
+  return {
+    code: 0,
+    signal: null,
+    timedOut: false,
+    cancelled: false,
+    groupTerminated: true,
+    durationMs: 10,
+    ...overrides,
+  }
 }
 
 describe('outcomeStatusFromExit — o processo decide, nao o agente (P05)', () => {
@@ -59,6 +67,29 @@ describe('claimsFromOutput — relato, nunca fato', () => {
   it('cai para stderr quando stdout esta mudo', () => {
     const claims = claimsFromOutput([], ['erro de compilacao'], exit({ code: 1 }))
     expect(claims.summary).toBe('erro de compilacao')
+  })
+
+  it('saida mal sucedida resume pelo stderr, nao pelo progresso em stdout', () => {
+    // A causa de uma falha mora no stderr; stdout, nesse instante, so tem a ultima linha
+    // de progresso — e era ela que chegava a tela como se fosse o motivo.
+    const claims = claimsFromOutput(
+      ['analisando arquivos...'],
+      ['sessao expirada: rode `login`'],
+      exit({ code: 1 }),
+    )
+    expect(claims.summary).toBe('sessao expirada: rode `login`')
+    expect(claims.detail).toContain('analisando arquivos...')
+  })
+
+  it('timeout e cancelamento tambem leem o stderr primeiro', () => {
+    for (const status of [exit({ timedOut: true }), exit({ cancelled: true })]) {
+      expect(claimsFromOutput(['progresso'], ['a causa'], status).summary).toBe('a causa')
+    }
+  })
+
+  it('saida bem sucedida continua resumindo pelo stdout', () => {
+    const claims = claimsFromOutput(['entreguei tudo'], ['aviso qualquer'], exit())
+    expect(claims.summary).toBe('entreguei tudo')
   })
 
   it('sem saida nenhuma, diz explicitamente que nao houve relato', () => {

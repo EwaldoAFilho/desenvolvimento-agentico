@@ -10,9 +10,23 @@ import {
 import type { ProjectContext } from './context.js'
 import type { CommandDeps } from './deps.js'
 import { withPlane } from './plane.js'
-import { messageOf } from './result.js'
+import { codeOf, messageOf } from './result.js'
 
 export const PERSISTED_SOURCE = 'estado persistido'
+
+/**
+ * Projeto que ainda nao tem `state.db`. E uma leitura VALIDA, e o numero e ZERO.
+ *
+ * "Nao inicializado" e "nao consegui apurar" parecem o mesmo caso e nao sao. Um projeto sem
+ * banco nao tem run nenhum — dizer `unknown` ali seria esconder um fato conhecido atras de
+ * uma duvida, e pior: deixaria a interface exibir a contabilidade EM MEMORIA do processo,
+ * que e exatamente o numero errado que a 003 removeu do doctor.
+ *
+ * Antes desta fatia a distincao nao existia porque a pergunta CRIAVA o banco. Ler nao pode
+ * inicializar projeto (I14), entao a distincao passou a ser necessaria — e ela e barata.
+ */
+export const NOT_INITIALIZED_SOURCE = 'projeto ainda nao inicializado (nenhum run)'
+const NOT_INITIALIZED_CODE = 'DATABASE_NOT_INITIALIZED'
 
 /**
  * De onde saiu o `running` exibido. `derived: false` significa que NAO foi possivel abrir
@@ -42,6 +56,9 @@ export async function readPersistedRunning(
     const tally = await withPlane(deps, context, (plane) => persistedRunning(plane.persistence))
     return { derived: true, tally, source: PERSISTED_SOURCE }
   } catch (error) {
+    if (codeOf(error) === NOT_INITIALIZED_CODE) {
+      return { derived: true, tally: EMPTY_TALLY, source: NOT_INITIALIZED_SOURCE }
+    }
     return undeterminedReading(messageOf(error))
   }
 }

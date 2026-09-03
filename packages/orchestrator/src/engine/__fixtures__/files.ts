@@ -79,6 +79,8 @@ export interface ProjectFixture {
   readonly reviewDefault?: string
   readonly missionGate?: string | null
   readonly denyPaths?: readonly string[]
+  /** Comandos de `execution.workspaceSetup`, na ordem: rodam em toda worktree nova. */
+  readonly workspaceSetup?: readonly string[]
 }
 
 export function projectYaml(project: ProjectFixture = {}): string {
@@ -98,6 +100,13 @@ export function projectYaml(project: ProjectFixture = {}): string {
     `  defaultMaxAttempts: ${project.defaultMaxAttempts ?? 3}`,
     `  attemptTimeoutMinutes: ${project.attemptTimeoutMinutes ?? 5}`,
     `  retryBackoffSeconds: ${project.retryBackoffSeconds ?? 0}`,
+    ...(project.workspaceSetup === undefined
+      ? []
+      : [
+          '  workspaceSetup:',
+          '    commands:',
+          ...project.workspaceSetup.map((command) => `      - run: ${JSON.stringify(command)}`),
+        ]),
     'policies:',
     '  enforceTouches: true',
     '  requireReviewByDefault: false',
@@ -115,10 +124,15 @@ export function projectYaml(project: ProjectFixture = {}): string {
     `  default: ${providers[0]?.id ?? 'mock'}`,
     '  registry:',
   ]
+  // `local-cli`, e nao `inprocess`: `inprocess` e a marca de ENSAIO no contrato, e agente
+  // de ensaio nao revisa tentativa real. O que torna estes fornecedores baratos e a
+  // substituicao do FACTORY pelo harness (`factoriesOf`) — nenhuma CLI e construida, o
+  // `command` abaixo nunca e executado — e nao uma declaracao que muda a semantica testada.
   for (const provider of providers) {
     lines.push(
       `    ${provider.id}:`,
-      '      kind: inprocess',
+      '      kind: local-cli',
+      `      command: agente-roteirizado-${provider.id}`,
       `      maxConcurrent: ${provider.maxConcurrent}`,
       '      roles: [executor, reviewer]',
     )

@@ -23,6 +23,13 @@ export interface ExitStatus {
   readonly signal: string | null
   readonly timedOut: boolean
   readonly cancelled: boolean
+  /**
+   * O lider saiu E o grupo de processos dele assentou (confirmado por quem executa). `false` =
+   * algum descendente continuava vivo quando o teto venceu: o resultado NAO esta assentado, e
+   * quem decide o encerramento precisa saber (I15). Vale para toda forma de saida — natural,
+   * cancelada, por timeout ou por sinal.
+   */
+  readonly groupTerminated: boolean
   readonly durationMs: number
 }
 

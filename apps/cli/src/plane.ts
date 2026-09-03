@@ -1,20 +1,39 @@
 import type { Run, RunId, TaskId } from '@agentic/domain'
 import { isRunId, isTaskId } from '@agentic/domain'
-import type { ControlPlane } from '@agentic/orchestrator'
+import type { ControlPlane, OwnershipLease } from '@agentic/orchestrator'
 import type { ProjectContext } from './context.js'
 import type { CommandDeps } from './deps.js'
 import { describeEndpoint, resolveEndpoint } from './discovery.js'
 import type { ControlPlaneLink } from './link.js'
 import { CliError, usageError } from './result.js'
 
-/** Abre o control plane local a partir do projeto ja validado. */
-export function openPlane(deps: CommandDeps, context: ProjectContext): ControlPlane {
+/**
+ * Abre o control plane local a partir do projeto ja validado.
+ *
+ * O diretorio de ESTADO nao viaja mais daqui: `createControlPlane` o deriva de `repoRoot`
+ * pela mesma conta que `projectIdentityOf` — enquanto dois lugares faziam a conta, dois
+ * lugares podiam divergir, e um `state.db` fora da posse e um segundo estado para o mesmo
+ * projeto (I14).
+ *
+ * Com `lease`, a conexao abre `readwrite`, porque este processo provou ser o dono. Sem
+ * `lease`, ela abre `readonly` — um comando de leitura nao precisa disputar posse, e um
+ * comando de mutacao nao consegue esquecer de disputar: nao ha conexao que o atenda.
+ */
+export function openPlane(
+  deps: CommandDeps,
+  context: ProjectContext,
+  lease?: OwnershipLease,
+): ControlPlane {
   return deps.controlPlane({
     project: context.project,
     gatesFile: context.gatesFile,
+    // O TEXTO dos dois arquivos, como o servidor faz: a configuracao mora em `projectDir`,
+    // que pode nao ser o `repoRoot` — e o plane nao sabe achar o primeiro a partir do segundo.
+    projectText: context.projectText,
+    gatesText: context.gatesText,
     repoRoot: context.repoRoot,
-    baseDir: context.baseDir,
     registry: deps.registry(context.project),
+    ...(lease === undefined ? {} : { lease }),
   })
 }
 
@@ -23,8 +42,9 @@ export async function withPlane<T>(
   deps: CommandDeps,
   context: ProjectContext,
   work: (plane: ControlPlane) => Promise<T>,
+  lease?: OwnershipLease,
 ): Promise<T> {
-  const plane = openPlane(deps, context)
+  const plane = openPlane(deps, context, lease)
   try {
     return await work(plane)
   } finally {
@@ -118,7 +138,7 @@ export async function requireLink(
   port?: number,
 ): Promise<ControlPlaneLink> {
   const resolved = await resolveEndpoint(context, port === undefined ? {} : { port })
-  const link = await deps.connect(resolved.endpoint)
+  const link = await deps.connect(resolved.endpoint, { repoRoot: context.repoRoot })
   if (link === undefined) {
     throw new CliError(
       'NO_CONTROL_PLANE',

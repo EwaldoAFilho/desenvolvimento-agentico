@@ -1,13 +1,14 @@
-import { readFile, stat } from 'node:fs/promises'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CompiledGraph } from '@agentic/compiler'
 import type { MissionSpec, Run, RunStatus } from '@agentic/domain'
 import { runId as toRunId } from '@agentic/domain'
-import { toCompileReport } from '@agentic/orchestrator'
-import type { CompileReportDto } from '@agentic/schemas'
-import { parseMissionFile, toMissionSpec } from '@agentic/schemas'
+import { toCompileReport, UNKNOWN_MISSION } from '@agentic/orchestrator'
+import type { CompileReportDto, MissionSummaryDto, RunSummaryDto } from '@agentic/schemas'
+import { missionStateOf, parseMissionFile, toMissionSpec } from '@agentic/schemas'
 import type { ServerDeps } from './deps.js'
-import { badRequest, notFound } from './errors.js'
+import { toRunSummary, toTaskCounters } from './dto.js'
+import { badRequest, HttpError, notFound } from './errors.js'
 
 export interface MissionSource {
   readonly path: string
@@ -61,6 +62,80 @@ export async function resolveMissionPath(deps: ServerDeps, ref: string): Promise
 export async function readMissionSource(deps: ServerDeps, ref: string): Promise<MissionSource> {
   const path = await resolveMissionPath(deps, ref)
   return { path, text: await readFile(path, 'utf8') }
+}
+
+/**
+ * Caminho de SAIDA e sempre relativo a raiz do projeto: onde o repositorio mora no disco —
+ * e o nome do usuario que aparece nesse caminho — nao atravessa para o navegador
+ * (ARCHITECTURE 9).
+ */
+export function repoRelativePath(deps: ServerDeps, path: string): string {
+  return relative(deps.repoRoot, path).split(sep).join('/')
+}
+
+function errnoOf(error: unknown): string | undefined {
+  const code =
+    typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
+  return typeof code === 'string' ? code : undefined
+}
+
+/** Arquivo ou diretorio que nao existe. Ausencia e um caso; ilegivel e outro. */
+function isMissing(error: unknown): boolean {
+  return errnoOf(error) === 'ENOENT'
+}
+
+/**
+ * Motivo da falha de leitura sem a mensagem do sistema: a do Node embute o caminho ABSOLUTO
+ * do host, que e exatamente o que nao pode atravessar. O codigo errno diz o que consertar.
+ */
+function readFailureOf(deps: ServerDeps, path: string, error: unknown): string {
+  return `nao foi possivel ler ${repoRelativePath(deps, path)} (${errnoOf(error) ?? 'erro desconhecido'})`
+}
+
+const MISSION_FILE_SUFFIXES = ['.yaml', '.yml']
+
+/**
+ * Missoes do repositorio, em ordem estavel. Diretorio ausente e projeto SEM missao, nao
+ * falha — e o estado normal de quem acabou de comecar. Qualquer outra falha de leitura vira
+ * erro com codigo: engolir tudo numa lista vazia fazia um diretorio ilegivel se passar por
+ * projeto novo, e o operador nao tinha o que consertar.
+ */
+export async function listMissionFiles(deps: ServerDeps): Promise<string[]> {
+  let entries: string[]
+  try {
+    entries = await readdir(deps.missionsDir)
+  } catch (error) {
+    if (isMissing(error)) return []
+    throw new HttpError(
+      500,
+      'MISSIONS_DIR_UNREADABLE',
+      readFailureOf(deps, deps.missionsDir, error),
+    )
+  }
+  return entries
+    .filter((name) => MISSION_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix)))
+    .sort()
+    .map((name) => join(deps.missionsDir, name))
+}
+
+/**
+ * Le e compila cada missao do diretorio. Arquivo que sumiu ENTRE listar e ler e ignorado —
+ * corrida legitima com quem edita o repositorio. Qualquer outra falha de leitura vira erro
+ * com codigo: item omitido em silencio seria a Home afirmando que a missao nao existe.
+ */
+export async function compileMissionCatalog(deps: ServerDeps): Promise<CompiledMission[]> {
+  const catalog: CompiledMission[] = []
+  for (const path of await listMissionFiles(deps)) {
+    let text: string
+    try {
+      text = await readFile(path, 'utf8')
+    } catch (error) {
+      if (isMissing(error)) continue
+      throw new HttpError(500, 'MISSION_FILE_UNREADABLE', readFailureOf(deps, path, error))
+    }
+    catalog.push(compileMissionSource(deps, { path, text }))
+  }
+  return catalog
 }
 
 /**
@@ -132,4 +207,76 @@ export async function findRuns(deps: ServerDeps, lookup: RunLookup): Promise<Run
 
 export async function findRun(deps: ServerDeps, lookup: RunLookup): Promise<Run | undefined> {
   return (await findRuns(deps, lookup))[0]
+}
+
+/**
+ * Runs do projeto, do mais recente para o mais antigo, com os contadores apurados no banco.
+ * Leitura pura: nenhum estado e derivado aqui.
+ */
+export async function listRunSummaries(deps: ServerDeps): Promise<RunSummaryDto[]> {
+  const summaries: RunSummaryDto[] = []
+  for (const row of deps.plane.persistence.queries.listRuns({})) {
+    const id = toRunId(row.id)
+    const run = await deps.plane.persistence.runs.loadRun(id)
+    if (run === undefined) continue
+    const tasks = await deps.plane.persistence.runs.loadTaskRuns(id)
+    summaries.push(toRunSummary(run, toTaskCounters(tasks)))
+  }
+  return summaries
+}
+
+/** O run mais recente de cada missao — a lista ja chega do mais novo para o mais antigo. */
+export function lastRunByMission(runs: readonly RunSummaryDto[]): Map<string, RunSummaryDto> {
+  const last = new Map<string, RunSummaryDto>()
+  for (const run of runs) {
+    if (!last.has(run.missionId)) last.set(run.missionId, run)
+  }
+  return last
+}
+
+/**
+ * Uma missao como a Home mostra. `state` sai de `missionStateOf`, do contrato, e nao de uma
+ * regra local: terminal e dashboard precisam pintar a MESMA situacao do mesmo jeito.
+ *
+ * Missao que nao compila continua na lista — some-la esconderia justamente o que precisa de
+ * conserto — mas vai sem titulo: preferimos vazio a um titulo que o arquivo quebrado nao
+ * chegou a declarar de forma confiavel.
+ */
+export function toMissionSummary(
+  deps: ServerDeps,
+  compiled: CompiledMission,
+  lastRun?: RunSummaryDto,
+): MissionSummaryDto {
+  const report = compiled.report
+  const parsed = parseMissionFile(compiled.source.text)
+  return {
+    ...(report.missionId === UNKNOWN_MISSION ? {} : { id: report.missionId }),
+    file: repoRelativePath(deps, compiled.source.path),
+    title: report.ok && parsed.ok ? parsed.value.title : '',
+    state: missionStateOf({
+      compiles: report.ok,
+      ...(lastRun === undefined ? {} : { lastRunStatus: lastRun.status }),
+    }),
+    tasks: report.stats.tasks,
+    phases: report.stats.phases,
+    errors: report.stats.errors,
+    warnings: report.stats.warnings,
+    ...(lastRun === undefined ? {} : { lastRun }),
+  }
+}
+
+/**
+ * Catalogo de missoes com o estado que a Home precisa. Os runs vem de fora para que a Home
+ * apure a lista UMA vez: a mesma leitura serve a coluna de execucoes e ao ultimo run de
+ * cada missao.
+ */
+export async function missionSummaries(
+  deps: ServerDeps,
+  runs: readonly RunSummaryDto[],
+): Promise<MissionSummaryDto[]> {
+  const last = lastRunByMission(runs)
+  const catalog = await compileMissionCatalog(deps)
+  return catalog.map((compiled) =>
+    toMissionSummary(deps, compiled, last.get(compiled.report.missionId)),
+  )
 }

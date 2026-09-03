@@ -21,6 +21,14 @@ export interface AgentOutcome {
   readonly claims: AgentClaims
   readonly usage?: Usage
   readonly logsRef: string
+  /**
+   * O processo do agente saiu E o grupo de processos dele assentou. `false` = um descendente
+   * sobreviveu ao encerramento alem do teto: o desfecho nao esta assentado, a worktree pode
+   * ainda estar sendo mutada, e a posse do projeto nao pode sair enquanto isso durar (I15).
+   * O adapter NAO pode omitir nem inferir este campo: ele vem do `ExitStatus` do processo.
+   * Um agente sem processo (in-process) nao tem grupo: `true` por definicao.
+   */
+  readonly groupTerminated: boolean
 }
 
 /** Contrato fechado: contexto minimo suficiente, sem dump do projeto inteiro (P14). */

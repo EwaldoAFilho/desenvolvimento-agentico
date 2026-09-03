@@ -1,0 +1,34 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "baseUrl": "../..",
+    "paths": {
+      "@agentic/agent-runtime": ["./packages/agent-runtime/src/index.ts"],
+      "@agentic/compiler": ["./packages/compiler/src/index.ts"],
+      "@agentic/domain": ["./packages/domain/src/index.ts"],
+      "@agentic/gates": ["./packages/gates/src/index.ts"],
+      "@agentic/graph": ["./packages/graph/src/index.ts"],
+      "@agentic/orchestrator": ["./packages/orchestrator/src/index.ts"],
+      "@agentic/persistence": ["./packages/persistence/src/index.ts"],
+      "@agentic/process": ["./packages/process/src/index.ts"],
+      "@agentic/providers": ["./packages/providers/src/index.ts"],
+      "@agentic/schemas": ["./packages/schemas/src/index.ts"],
+      "@agentic/workspace": ["./packages/workspace/src/index.ts"],
+      "@agentic/server": ["./apps/server/src/index.ts"],
+      "@agentic/cli": ["./apps/cli/src/index.ts"],
+      "@agentic/web": ["./apps/web/src/index.ts"]
+    },
+    "jsx": "react-jsx"
+  },
+  "include": ["src/**/*", "media/**/*"],
+  "exclude": ["**/dist/**", "**/node_modules/**", "**/__fixtures__/**"]
+}

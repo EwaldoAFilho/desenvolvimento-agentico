@@ -187,7 +187,10 @@ export class SqliteRunStore implements RunStore {
   }
 
   async #execute<T>(work: (uow: BufferedUnitOfWork) => Promise<T>): Promise<CommitResult<T>> {
-    if (this.#handle.mode === 'readonly') throw new ReadOnlyDatabaseError('withTransaction')
+    // `writable`, nao `mode`: depois que a posse fecha a conexao, recusar aqui devolve um
+    // erro do produto em vez do `TypeError` cru do driver — e recusa ANTES de rodar o
+    // `work`, que pode ter efeitos proprios.
+    if (!this.#handle.writable) throw new ReadOnlyDatabaseError('withTransaction')
     const uow = new BufferedUnitOfWork()
     const result = await work(uow)
     const pending = uow.drain()
@@ -202,6 +205,20 @@ export class SqliteRunStore implements RunStore {
 
     if (emitted.length > 0) this.#notifier?.notify()
     return { result, events: emitted }
+  }
+
+  /**
+   * Uma execucao de gate pelo id — a do MISSION gate, que nao pertence a tentativa nenhuma.
+   *
+   * I12 diz que um run em VERIFYING tem gate em voo OU resultado persistido. A segunda
+   * metade so vale se o resultado persistido for LIDO depois de um reinicio; sem esta
+   * consulta o proximo dono refazia o gate e gravava uma segunda execucao.
+   */
+  loadGateExecution(id: string): Promise<GateExecution | undefined> {
+    const row = prepareCached(this.db, 'SELECT * FROM gate_executions WHERE id = ?').get(id) as
+      | GateExecutionRow
+      | undefined
+    return Promise.resolve(row === undefined ? undefined : rowToGateExecution(row))
   }
 
   #hydrateAttempt(row: AttemptRow): Attempt {

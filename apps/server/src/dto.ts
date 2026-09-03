@@ -1,7 +1,7 @@
-import type { Run, RunId, TaskId } from '@agentic/domain'
-import { isRunId, isTaskId } from '@agentic/domain'
+import type { Run, RunId, TaskId, TaskRun, TaskStatus } from '@agentic/domain'
+import { isRunId, isTaskId, TASK_STATUSES } from '@agentic/domain'
 import { isoOf } from '@agentic/orchestrator'
-import type { RunHeaderDto } from '@agentic/schemas'
+import type { RunHeaderDto, RunSummaryDto, TaskCountersDto } from '@agentic/schemas'
 import { notFound } from './errors.js'
 
 /**
@@ -13,6 +13,7 @@ export function toRunHeader(run: Run): RunHeaderDto {
     id: run.id,
     missionId: run.missionId,
     status: run.status,
+    specHash: run.specHash,
     timestamps: {
       createdAt: run.createdAt.toISOString(),
       approvedAt: isoOf(run.approvedAt),
@@ -32,6 +33,38 @@ export function toRunHeader(run: Run): RunHeaderDto {
     },
     missionGate: run.missionGateId,
     integrationBranch: run.integrationBranch,
+  }
+}
+
+/**
+ * Contadores por estado das tasks de um run. `undefined` quando nao ha nenhuma task run
+ * gravada: o contrato pede ausencia, e nao uma linha de zeros que parece apuracao feita.
+ */
+export function toTaskCounters(tasks: readonly TaskRun[]): TaskCountersDto | undefined {
+  if (tasks.length === 0) return undefined
+  const counters = Object.fromEntries(TASK_STATUSES.map((status) => [status, 0])) as Record<
+    TaskStatus,
+    number
+  >
+  for (const task of tasks) counters[task.status] += 1
+  return counters
+}
+
+/**
+ * Execucao vista de fora, para listagem. Mesma traducao pura do cabecalho — `Date` vira
+ * ISO-8601 e nada e derivado aqui: quem conta as tasks e o banco, nao esta funcao.
+ */
+export function toRunSummary(run: Run, counters?: TaskCountersDto): RunSummaryDto {
+  const startedAt = isoOf(run.startedAt)
+  const finishedAt = isoOf(run.finishedAt)
+  return {
+    id: run.id,
+    missionId: run.missionId,
+    status: run.status,
+    createdAt: run.createdAt.toISOString(),
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+    ...(counters === undefined ? {} : { counters }),
   }
 }
 

@@ -1,4 +1,5 @@
 import type {
+  AgentClaims,
   AgentOutcomeStatus,
   FailureReason,
   Observation,
@@ -7,6 +8,7 @@ import type {
   Workspace,
 } from '@agentic/domain'
 import { failureReasonOf } from './errors.js'
+import { redactLogText } from './redact.js'
 import type { ArtifactWriter, AttemptWorkspaceProvider } from './types.js'
 
 export interface ObserveInput {
@@ -17,6 +19,16 @@ export interface ObserveInput {
   readonly attemptNumber: number
   readonly workspace: Workspace
   readonly agentStatus: AgentOutcomeStatus
+  /**
+   * A ULTIMA LINHA significativa que a CLI do fornecedor escreveu, ja redigida e limitada
+   * (ver `agentFailureCause`). Entra no `detail` da falha e em lugar nenhum mais.
+   *
+   * Isto NAO e o relato decidindo a transicao (P05/ADR-0006): o codigo continua saindo do
+   * exit do processo — `agentStatus` — e nada aqui pode transformar `failed` em outra
+   * coisa. O que muda e so o texto que o humano le: `AGENT_ERROR` sozinho manda a pessoa
+   * ao arquivo de log, que e exatamente o que a tela existe para evitar.
+   */
+  readonly agentCause?: string
   readonly enforceTouches: boolean
   readonly commitMessage: string
 }
@@ -31,6 +43,32 @@ const AGENT_FAILURES: Readonly<Record<AgentOutcomeStatus, FailureReason | undefi
   failed: { code: 'AGENT_ERROR', detail: 'agente encerrou com status failed' },
   timeout: { code: 'AGENT_TIMEOUT', detail: 'agente excedeu o tempo da tentativa' },
   cancelled: { code: 'INTERRUPTED', detail: 'tentativa cancelada antes de concluir' },
+}
+
+/** Teto do texto que vai para o banco e para a tela: causa, nunca despejo de stderr. */
+export const AGENT_CAUSE_MAX_CHARS = 300
+
+/**
+ * Causa observada da falha do agente: a ultima linha significativa que a CLI escreveu.
+ *
+ * Redigida e limitada de proposito. Esta razao viaja para `attempt.failed`, para o banco e
+ * para a UI, entao nao pode virar canal de vazamento de segredo nem despejo de saida — e
+ * uma linha em branco nao ajuda ninguem, entao vira ausencia de causa.
+ */
+export function agentFailureCause(claims: AgentClaims | undefined): string | undefined {
+  const summary = claims?.summary
+  if (typeof summary !== 'string') return undefined
+  const cause = redactLogText(summary).replace(/\s+/g, ' ').trim().slice(0, AGENT_CAUSE_MAX_CHARS)
+  return cause.length === 0 ? undefined : cause
+}
+
+/**
+ * `AGENT_ERROR` continua sendo a classificacao estavel — decidida so pelo exit. A causa e
+ * acrescentada ao detalhe quando existe, e nunca substitui a classificacao.
+ */
+function withCause(failure: FailureReason, cause: string | undefined): FailureReason {
+  if (cause === undefined || failure.detail?.includes(cause) === true) return failure
+  return { ...failure, detail: `${failure.detail ?? ''}: ${cause}` }
 }
 
 export function attemptDirectory(taskId: TaskId, attemptNumber: number): string {
@@ -66,7 +104,9 @@ export async function observeAttempt(input: ObserveInput): Promise<ObserveOutcom
     }
 
     const agentFailure = AGENT_FAILURES[input.agentStatus]
-    if (agentFailure !== undefined) return { observation: observed, failure: agentFailure }
+    if (agentFailure !== undefined) {
+      return { observation: observed, failure: withCause(agentFailure, input.agentCause) }
+    }
 
     // P04: escopo declarado e contrato. Violacao reprova a tentativa antes de qualquer gate.
     if (input.enforceTouches && observed.scopeCheck === 'VIOLATION') {

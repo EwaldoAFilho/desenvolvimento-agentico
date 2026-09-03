@@ -786,6 +786,14 @@ body {
   justify-items: start;
 }
 
+/* Os dois caminhos de partida lado a lado: o ato único e a partida de sempre. */
+.start__acts {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .start__confirm {
   display: grid;
   gap: 8px;
@@ -812,6 +820,218 @@ body {
   place-items: center;
   height: 100%;
   color: var(--fg-muted);
+}
+
+/* ---------- home do projeto ---------- */
+
+.home {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: grid;
+  gap: 18px;
+}
+
+.home__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+
+.home__name {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.home__meta {
+  grid-column: 1;
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.home__head-actions {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.home__block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.home__block--warn {
+  border-color: color-mix(in srgb, var(--st-amber) 55%, transparent);
+}
+
+.home__block h2 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.home__verdict {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.home__verdict strong {
+  font-weight: 700;
+}
+
+.home__verdict span:last-child {
+  color: var(--fg-muted);
+}
+
+/*
+ * Veredito do ambiente: o tom acompanha o icone e o rotulo, nunca os substitui. `unknown`
+ * nao e verde nem vermelho — e tracejado e cinza, como no painel de providers.
+ */
+.home__verdict[data-verdict="READY"] strong {
+  color: var(--st-green);
+}
+
+.home__verdict[data-verdict="ATTENTION"] strong {
+  color: var(--st-red);
+}
+
+.home__verdict[data-verdict="INDETERMINATE"] strong {
+  color: var(--fg-muted);
+}
+
+.home__empty {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.home__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.home-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) minmax(0, auto) 190px;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.home-row:first-child {
+  border-top: 0;
+}
+
+.home-row__state {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--fg-muted);
+  letter-spacing: 0.06em;
+}
+
+.home-row__state[data-state="RUNNING"] {
+  color: var(--st-blue-strong);
+}
+
+.home-row__state[data-state="COMPLETED"] {
+  color: var(--st-green);
+}
+
+.home-row__state[data-state="FAILED"],
+.home-row__state[data-state="INVALID"] {
+  color: var(--st-red);
+}
+
+.home-row__state[data-state="BLOCKED"],
+.home-row__state[data-state="PAUSED"] {
+  color: var(--st-amber);
+}
+
+.home-row__name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row__file {
+  color: var(--fg-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row__numbers {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.home-row__action {
+  justify-self: end;
+  text-align: right;
+}
+
+/* Sem acao possivel: o motivo ocupa o lugar do botao — nao ha botao desligado enganando. */
+.home-row__blocked {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+/* ---------- falha com saida ---------- */
+
+.failure {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 60px 20px;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.failure__title {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+}
+
+.failure__message {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.failure__hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.failure__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* ---------- foco visivel ---------- */
@@ -954,4 +1174,420 @@ body {
 .start__phase {
   margin: 0;
   color: var(--fg-muted);
+}
+
+/* ---------- nova missao: de texto livre a rascunho desenhado ---------- */
+
+.plan {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+/* Com o DAG desenhado a tela deixa de ser formulario e passa a precisar de largura. */
+.plan--drawn {
+  max-width: 1240px;
+}
+
+.plan__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+
+.plan__title {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.plan__state {
+  color: var(--fg-muted);
+  letter-spacing: 0.08em;
+}
+
+.plan__lead,
+.plan__stats,
+.plan__origin {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__field {
+  display: grid;
+  gap: 6px;
+}
+
+.plan__label {
+  color: var(--fg);
+}
+
+.plan__form {
+  display: grid;
+  gap: 16px;
+}
+
+.plan__prompt {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.plan__select {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 4px 7px;
+  font: inherit;
+  justify-self: start;
+  min-width: 260px;
+}
+
+.plan__hint,
+.plan__only,
+.plan__empty {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__only {
+  color: var(--fg);
+}
+
+.plan__empty-state {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__empty-state h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+/*
+ * O aviso de consumo nao e decoracao: ele aparece ANTES da acao e o icone vem acompanhado de
+ * frase, para que a diferenca entre "gasta assinatura" e "simulado" nao dependa de cor.
+ */
+.plan__notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__notice[data-consumes="true"] {
+  border-left-color: var(--st-amber);
+}
+
+.plan__notice p {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__notice-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.plan__accept {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.plan__accept label {
+  color: var(--fg);
+}
+
+.plan__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.plan__phase {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan__failure {
+  border: 1px solid color-mix(in srgb, var(--st-red) 45%, transparent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.plan__failure-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.plan__failure-origin {
+  margin: 0;
+  color: var(--fg-dim);
+}
+
+.plan__failure-message {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.plan__problems {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.plan__problems li {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.plan__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+.plan__simulated {
+  margin: 0;
+  color: var(--st-amber);
+}
+
+.plan__rationale {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.plan__rationale h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.plan__rationale p {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+/*
+ * O canvas precisa de altura propria aqui: a tela do rascunho e uma coluna que rola, e um
+ * grafo sem altura minima colapsaria para nada — que e o mesmo que nao desenhar o DAG.
+ */
+.plan--drawn .dag {
+  min-height: 460px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* ---------- revisao do plano: numeros, conflitos, no aberto e ajuste ---------- */
+
+/*
+ * Conflito e o PAR de tasks, nao o texto do aviso: o par vem primeiro na linha porque e o que
+ * o olho procura. Sem cor sozinha — o tipo do conflito vem escrito ao lado.
+ */
+.conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.conflicts li {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.conflicts__pair {
+  color: var(--fg);
+  letter-spacing: 0.04em;
+}
+
+.conflicts__kind {
+  color: var(--fg-muted);
+}
+
+.conflicts li[data-severity="ERROR"] .conflicts__pair {
+  color: var(--st-red);
+}
+
+.conflicts li[data-severity="WARNING"] .conflicts__pair {
+  color: var(--st-amber);
+}
+
+.plan-review {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.plan-review__head {
+  display: grid;
+  gap: 4px;
+}
+
+.plan-review__subtitle {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plan-review__hint,
+.plan-review__phase {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan-review__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Grafo e no lado a lado enquanto houver largura; embaixo quando nao houver. O canvas precisa
+ * de altura propria: dentro de uma coluna que rola, um grafo sem minimo colapsa para nada.
+ */
+.plan-review__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .plan-review__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.plan-review__body .dag {
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.plan-node {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.plan-node--empty {
+  align-content: center;
+}
+
+.plan-node__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.plan-node__id {
+  margin: 0;
+  color: var(--fg-dim);
+  letter-spacing: 0.12em;
+}
+
+.plan-node__title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.plan-node__hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.plan-node__error {
+  margin: 0;
+  color: var(--st-red);
+  overflow-wrap: anywhere;
+}
+
+/* Risco e texto ao lado do rotulo; a cor apenas reforca o que ja esta escrito. */
+.plan-node [data-risk="high"] {
+  color: var(--st-red);
+}
+
+.plan-node [data-risk="medium"] {
+  color: var(--st-amber);
+}
+
+.plan-review__adjust {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.plan-review__file {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+/* Acoes de editor (so existem quando um editor as fornece — ver editor-actions.ts) */
+.detail__action {
+  font: inherit;
+  font-size: 0.85em;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border, #c9d1d9);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--link, #0969da);
+  cursor: pointer;
+}
+.detail__action:hover {
+  text-decoration: underline;
+}
+.detail__action:focus-visible {
+  outline: 2px solid var(--focus, #0969da);
+  outline-offset: 2px;
 }

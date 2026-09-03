@@ -53,6 +53,7 @@ function startCommandOf(raw: unknown): StartRunCommand {
     ...(body.missionId === undefined || path !== undefined ? {} : { missionId: body.missionId }),
     acceptWarnings: body.acceptWarnings ?? false,
     actor: body.actor,
+    ...(body.specHash === undefined ? {} : { specHash: body.specHash }),
   })
   if (!parsed.success) {
     throw badRequest('START_COMMAND_INVALID', 'START MISSION recusado: comando invalido', {
@@ -84,6 +85,23 @@ async function startRun(deps: ServerDeps, raw: unknown): Promise<StartRunResult>
   }
   if (missionId === undefined) {
     throw badRequest('MISSION_REF_REQUIRED', 'informe a missao em `file`')
+  }
+  // A partida e do PLANO INSPECIONADO (U16/MVP-002): o hash declarado pelo cliente manda;
+  // sem ele, o arquivo e recompilado e a partida fica presa a versao que esta no disco.
+  // Em nenhum caso "qualquer run APPROVED desta missao" serve — um APPROVED antigo faria
+  // partir um plano que ninguem inspecionou.
+  if (specHash === undefined) {
+    // So `missionId`: o arquivo e recompilado SEMPRE, com ou sem hash declarado — o hash do
+    // cliente e a versao inspecionada, e a do disco e a que partiria; as duas tem de bater.
+    const compiled = await compileMissionRef(deps, missionId)
+    refuseOnErrors(compiled)
+    specHash = compiled.graph?.specHash
+  }
+  if (command.specHash !== undefined && specHash !== undefined && specHash !== command.specHash) {
+    throw badRequest(
+      'MISSION_CHANGED',
+      `missao ${missionId} mudou desde a inspecao: o arquivo compila para outro plano`,
+    )
   }
 
   const lookup = { missionId, ...(specHash === undefined ? {} : { specHash }) }

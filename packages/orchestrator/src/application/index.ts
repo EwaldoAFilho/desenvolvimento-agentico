@@ -20,6 +20,23 @@ export type { ApplicationDeps, ApplicationStore, ArtifactReader } from './deps.j
 export { COMPILE_REPORT_ARTIFACT, MISSION_ARTIFACT, MISSION_GATE_ARTIFACT } from './deps.js'
 export type { GraphView } from './graph-view.js'
 export { DEFAULT_ESTIMATE, graphViewOf } from './graph-view.js'
+export type { MissionYamlRefused, MissionYamlResult, MissionYamlWritten } from './mission-yaml.js'
+export { canonicalMissionSpec, missionFileOf, missionYamlOf, renderYaml } from './mission-yaml.js'
+export type {
+  MissionArtifactStore,
+  PlanMissionInput,
+  PlanMissionResult,
+  PlannedMission,
+  PlanningDeps,
+  ProjectSourceText,
+  RefusedPlanning,
+  RepoObserver,
+} from './planning.js'
+export {
+  DEFAULT_PLANNING_TIMEOUT_MS,
+  MissionFileExistsError,
+  planMission,
+} from './planning.js'
 export type {
   MissionReport,
   ReportBlockage,

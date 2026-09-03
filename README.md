@@ -1,5 +1,7 @@
 # Desenvolvimento Agêntico
 
+[![ci](https://github.com/EwaldoAFilho/desenvolvimento-agentico/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EwaldoAFilho/desenvolvimento-agentico/actions/workflows/ci.yml)
+
 **Um control plane para coordenar múltiplos agentes de IA numa mesma entrega de software —
 com dependências explícitas, isolamento real, revisão independente e evidência medida pela
 plataforma, nunca declarada pelo agente.**
@@ -198,6 +200,32 @@ agentic run report --md             # relatório final com caminho crítico real
 
 ---
 
+### Dentro do VS Code
+
+A extensão em [`extensions/vscode`](extensions/vscode/README.md) faz a mesma jornada sem
+terminal: abrir a pasta → **Agentic** na Activity Bar → projeto detectado → *Start* (reutiliza
+o control plane que já existir) → providers e missions na sidebar → *Open Agentic* abre o
+painel. `npm run vscode:package` gera o VSIX. A extensão é cliente do control plane e não
+contém o orquestrador (ADR-0015).
+
+**Instalar a alpha (VSIX).** A extensão ainda não está no Marketplace; a pré-release
+[`vscode-v0.2.0-alpha.1`](https://github.com/EwaldoAFilho/desenvolvimento-agentico/releases/tag/vscode-v0.2.0-alpha.1)
+traz o `.vsix`:
+
+1. Baixe `desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix` da GitHub Release.
+2. VS Code → **Extensions** → menu `...` → **Install from VSIX...**.
+3. **Developer: Reload Window**.
+4. Abra a pasta do projeto e clique em **Agentic** na Activity Bar.
+
+Ou pela linha de comando:
+
+```bash
+code --install-extension desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix
+```
+
+O VSIX não embute a CLI `agentic`: este repositório clonado e construído (acima) continua
+necessário. Em outro projeto, aponte `agentic.cliPath` para `apps/cli/bin/agentic.mjs`.
+
 ## Stack
 
 Escolhida para ser previsível e local, não para impressionar.
@@ -252,6 +280,8 @@ apps/      cli · server · web
 | [MÉTODO](docs/development/AGENTIC-DEVELOPMENT-METHOD.md) | o método orientado a grafos |
 | [ADRs](docs/adr/) | 12 decisões arquiteturais com alternativas recusadas |
 | [PRODUCT-READINESS](docs/product/PRODUCT-READINESS.md) | matriz de prontidão, sem porcentagem inventada |
+| [PLANO 0.3.0](docs/product/V0.3.0-PLAN.md) | próxima versão: instalar e começar — epics, lotes e critérios |
+| [CONTRIBUTING](CONTRIBUTING.md) | Node suportado, `verify`, extensão, PR e o que nunca entra no commit |
 
 ---
 

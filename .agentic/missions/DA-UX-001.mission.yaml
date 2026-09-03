@@ -1,0 +1,311 @@
+apiVersion: agentic/v1
+kind: Mission
+
+id: DA-UX-001
+title: Experiencia de projeto sem atrito
+objective: >
+  Entregar a espinha da jornada principal `cd projeto && agentic`: o launcher resolve
+  ambiente e control plane, o navegador abre sozinho numa Home real do projeto, e a criacao
+  de uma missao nova acontece por linguagem natural com plano compilado e aprovado na tela,
+  sem que o desenvolvedor precise conhecer YAML, subcomando ou URL.
+
+description: >
+  O motor esta pronto (v0.1.0-rc.1). Esta missao nao reconstroi produto, dominio nem
+  orquestrador: ela remove o produto da frente do usuario. CLI e YAML continuam existindo
+  como modo avancado e nenhuma capacidade atual pode regredir.
+
+scope:
+  - Comportamento de launcher para `agentic` sem argumento, com abertura de navegador
+  - Home do projeto no dashboard, com estados vazio, de erro e de carregamento finitos
+  - Descoberta automatica de missoes, stack, scripts de qualidade e fornecedores
+  - Onboarding visual de projeto ainda nao configurado
+  - Planejamento de missao por linguagem natural com saida estruturada e validada
+  - Rascunho compilado, DAG revisavel e aprovacao humana pela interface
+  - Aceitacao em navegador de verdade da jornada nova
+
+outOfScope:
+  # Adiado para DA-UX-002 por decisao do supervisor, nao por descoberta tecnica. O plano
+  # completo de 17 tasks esta no commit 8dbbc25 e continua valido.
+  - Onboarding de projeto nao configurado (deteccao de stack, gates sugeridos, tela)
+  - Guarda contra fornecedor de teste virar revisor real, e template do init
+  - Regressoes de launcher e de partida limpa, e aceitacao em navegador
+  - Quickstart, README e matriz de prontidao
+  - Smoke de planejamento com fornecedor real
+  - Servidor multi-projeto e troca de projeto pela interface
+  - Editor visual completo de DAG ou de YAML
+  - Publicacao em npm e instalador do produto
+  - Instalacao automatica de Node, git ou de qualquer CLI de agente
+  - Analytics, telemetria externa, execucao remota, multi-usuario
+  - Qualquer provider por API paga
+
+constraints:
+  - Nenhuma API key; somente CLIs locais ja autenticadas por assinatura (P17)
+  - Nenhum nome de fornecedor em domain, graph, compiler ou orchestrator (P18)
+  - Teste automatizado jamais consome quota de assinatura; planejamento real e opt-in
+  - Nao afrouxar assercao existente nem remover opcao atual da CLI para ficar verde
+  - O agente planejador nao aprova, nao executa, nao altera politica, gate ou codigo
+  - O arquivo da missao e escrito pelo control plane, nunca pelo agente
+  - Nao alterar scripts/boundaries.config.mjs para viabilizar o planejamento
+  - Uso headless (CI, SSH, sem GUI) continua possivel sem depender de desktop
+
+acceptanceCriteria:
+  - Em projeto configurado, `agentic` sozinho abre o navegador na Home do projeto
+  - Sem run e sem missao na URL a Home mostra estado real, nunca carregamento infinito
+  - Falha de backend na Home vira mensagem com acao de tentar novamente
+  - Uma missao nova nasce de texto livre, vira rascunho compilado e DAG revisavel
+  - Rascunho jamais chega a APPROVED sem ato humano registrado com actor
+  - Da entrada no projeto ate o DAG da missao nova: 1 comando e no maximo 3 interacoes
+  - build e verify passam ao final
+
+defaults:
+  requireReview: true
+  maxAttempts: 3
+  gate: unit
+  agentProfile: executor
+
+phases:
+  - id: contrato
+    title: Contrato
+  - id: backend
+    title: Backend
+  - id: planejamento
+    title: Planejamento
+  - id: interface
+    title: Interface
+
+tasks:
+  - id: U01
+    phase: contrato
+    title: Contratos de planejamento e de Home
+    objective: >
+      Declarar a porta de planejamento no dominio, o contrato validado da proposta de plano
+      e os DTOs que a Home precisa, e tornar reutilizavel pela interface a derivacao de
+      estado de fornecedor que hoje so existe na CLI.
+    description: >
+      A cadeia server -> orchestrator -> providers -> agent-runtime -> process ja e legal em
+      scripts/boundaries.config.mjs. A porta nova existe para que o planejamento nao precise
+      de Assignment (que exige task, tentativa e worktree) e para que a saida estruturada nao
+      passe por claims, cujo detalhe e truncado em 8000 caracteres. ADR obrigatorio: e
+      mudanca arquitetural relevante. Nenhum nome de fornecedor pode entrar no dominio.
+    dependencies: []
+    touches:
+      - docs/adr/ADR-0016-planejamento-por-agente-local.md
+      - packages/domain/src/ports/
+      - packages/domain/src/index.ts
+      - packages/schemas/src/
+      - apps/cli/src/commands/provider-view.ts
+      - apps/cli/src/commands/provider-view.test.ts
+    validation:
+      - A porta nao exige taskId, attemptId nem workspacePath para planejar
+      - A proposta invalida do planejador e recusada pelo contrato com motivo legivel
+      - Nenhum nome de fornecedor aparece em domain, graph, compiler ou orchestrator
+      - packages/schemas continua sem importar modulo nativo do Node
+      - A derivacao de estado de fornecedor passa a ser importavel pelo dashboard
+      - O ADR registra contexto, alternativas recusadas e consequencias
+    gate: unit
+    risk: high
+    reviewPolicy: cross-provider-required
+    estimate: 5
+
+  - id: U02
+    phase: contrato
+    title: Launcher `agentic` sem argumento
+    objective: >
+      Fazer `agentic` sem argumento resolver o projeto do diretorio atual, diagnosticar o
+      ambiente, reaproveitar ou subir o control plane e abrir o navegador, mantendo uso
+      headless possivel e sem remover nenhum subcomando ou opcao existente.
+    description: >
+      Hoje `agentic` sem argumento imprime ajuda no stderr e sai 0, sem nada no stdout, e
+      nenhum teste protege esse contrato. A abertura de navegador precisa passar por
+      @agentic/process, o unico lugar autorizado a codigo de sistema operacional; nunca por
+      node:child_process direto. `agentic serve` continua com o comportamento atual.
+    dependencies: []
+    touches:
+      - apps/cli/src/commands/launch.ts
+      - apps/cli/src/commands/launch.test.ts
+      - apps/cli/src/commands/serve.ts
+      - apps/cli/src/browser.ts
+      - apps/cli/src/browser.test.ts
+      - apps/cli/src/program.ts
+      - apps/cli/src/program.test.ts
+      - apps/cli/src/deps.ts
+      - apps/cli/src/index.ts
+      - apps/cli/src/json-contract.test.ts
+      - apps/cli/src/commands/mission-start-serve.test.ts
+      - apps/cli/src/commands/control-plane-ux.test.ts
+    validation:
+      - "`agentic` sem argumento usa o cwd como projeto-alvo, nunca o repositorio do produto"
+      - Control plane ja ativo e reaproveitado, nao duplicado
+      - Ambiente sem GUI nao tenta abrir navegador e informa a URL
+      - "`--no-open` desliga a abertura e o comportamento de `agentic serve` nao muda"
+      - Nenhum subcomando ou opcao existente foi removido
+      - A abertura do navegador passa por @agentic/process, nao por node:child_process
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: U04
+    phase: backend
+    title: API do Project Home e do rascunho
+    objective: >
+      Expor o que a Home precisa ler numa chamada previsivel: identidade do projeto, saude do
+      ambiente, missoes com estado suficiente e runs, e permitir criar um rascunho compilado
+      sem aprovar.
+    description: >
+      Hoje GET /api/missions devolve apenas {file, path} e vaza o caminho absoluto do host
+      para o navegador; nao existe GET /api/project; e o unico jeito de criar um run por HTTP
+      e POST /api/missions/approve, que cria e aprova no mesmo ato. O snapshot de um run em
+      DRAFT ja carrega a geometria do grafo que o canvas atual desenha.
+    dependencies: [U01]
+    touches:
+      - apps/server/src/routes/project.ts
+      - apps/server/src/routes/project.test.ts
+      - apps/server/src/routes/missions.ts
+      - apps/server/src/routes/missions.test.ts
+      - apps/server/src/missions.ts
+      - apps/server/src/dto.ts
+      - apps/server/src/server.ts
+      - apps/server/src/index.ts
+    validation:
+      - A listagem de missoes deixa de expor caminho absoluto do host
+      - Cada missao listada traz id, titulo, estado, contagem de tasks e ultimo run
+      - Existe leitura de projeto e ambiente que responde sem nenhum run criado
+      - Um rascunho pode ser criado e ter o DAG lido sem aprovacao
+      - Rascunho criado duas vezes para a mesma versao do plano nao duplica run
+      - Erro de leitura vira resposta de erro com codigo, nunca resposta pendurada
+    gate: unit
+    risk: high
+    estimate: 6
+
+  - id: U05
+    phase: backend
+    title: Planejador local implementando a porta
+    objective: >
+      Implementar a porta de planejamento sobre CLI local de agente, em modo de leitura, e
+      transformar a saida do processo em proposta validada ou em falha explicada.
+    description: >
+      O planejador propoe missao; nao escreve codigo, nao aprova e nao executa. Se a CLI
+      precisar de acesso a arquivos, leitura basta. Testes usam CLI falsa por script, jamais
+      a CLI real: nenhuma suite pode consumir assinatura.
+    dependencies: [U01]
+    touches:
+      - packages/providers/src/planner.ts
+      - packages/providers/src/planner.test.ts
+      - packages/providers/src/index.ts
+      - packages/providers/src/__fixtures__/
+    validation:
+      - Saida fora do contrato vira falha de planejamento explicada, nao plano parcial
+      - O processo do planejador roda sem permissao de escrita no repositorio
+      - Nenhum teste automatizado invoca CLI real de fornecedor
+      - Nenhuma credencial e lida, guardada ou injetada
+      - Saida volumosa nao trava nem e truncada em silencio
+    gate: unit
+    risk: high
+    reviewPolicy: cross-provider-required
+    estimate: 6
+
+  - id: U06
+    phase: planejamento
+    title: Planejamento no control plane com reparo limitado
+    objective: >
+      Ligar texto livre a rascunho compilado dentro do control plane: acionar o planejador,
+      validar a proposta, gravar o arquivo da missao, compilar, e pedir correcao ao
+      planejador no maximo duas vezes antes de devolver a decisao ao humano.
+    description: >
+      Quem escreve o arquivo da missao e o control plane, nunca o agente. Depois do
+      planejamento o repositorio nao pode ter arquivo alterado alem do artefato da missao.
+      Rascunho nasce DRAFT e nunca APPROVED.
+    dependencies: [U04, U05]
+    touches:
+      - packages/orchestrator/src/application/
+      - packages/orchestrator/src/engine/control-plane.ts
+      - packages/orchestrator/src/index.ts
+      - apps/server/src/routes/planning.ts
+      - apps/server/src/routes/planning.test.ts
+      - apps/server/src/server.ts
+    validation:
+      - Texto livre vira missao gravada pelo control plane e compilada automaticamente
+      - Depois do planejamento nenhum arquivo do repositorio mudou alem do artefato da missao
+      - Plano invalido tenta correcao no maximo duas vezes e depois devolve ao humano
+      - Plano semanticamente identico ao anterior interrompe o ciclo em vez de repetir
+      - O resultado do planejamento nunca nasce aprovado
+      - Arquivo de missao existente nunca e sobrescrito em silencio
+      - Falha de planejamento e reportada com motivo, nao como plano vazio
+    gate: unit
+    risk: high
+    reviewPolicy: cross-provider-required
+    estimate: 7
+
+  - id: U08
+    phase: interface
+    title: Home do projeto no dashboard
+    objective: >
+      Substituir o carregamento infinito por uma Home real: identidade do projeto, saude do
+      ambiente, execucoes, missoes com acao coerente com o estado, estado vazio honesto e
+      erro com acao de tentar novamente.
+    description: >
+      Hoje, sem run e sem missao na URL, o boot sai sem escrever estado e a tela fica em
+      "carregando missao compilada" para sempre; e listRuns engole erro de servidor. A guarda
+      de run tem que continuar ganhando para nao regredir o dashboard de execucao.
+    dependencies: [U02, U04]
+    touches:
+      - apps/web/src/
+    validation:
+      - Sem run e sem missao na URL a Home aparece e nenhum carregamento fica indefinido
+      - Falha de backend vira mensagem com acao de tentar novamente, nao tela pendurada
+      - Missao sem acao possivel nao oferece acao impossivel
+      - Com run ativo ou com run na URL o dashboard de execucao continua ganhando
+      - Estado indeterminado de fornecedor nunca e pintado como pronto
+      - A tela nova respeita foco visivel, rotulo acessivel e nao depende de cor
+    gate: web
+    risk: high
+    estimate: 7
+
+  - id: U10
+    phase: interface
+    title: Nova missao por linguagem natural
+    objective: >
+      Levar o usuario de um texto livre ate um rascunho compilado desenhado como DAG, sem
+      que ele peca validacao nem compilacao e sabendo antes que a acao aciona fornecedor
+      real.
+    dependencies: [U06, U08]
+    touches:
+      - apps/web/src/
+    validation:
+      - De texto livre a DAG desenhado sem o usuario pedir validacao ou compilacao
+      - O consumo de assinatura e avisado antes de acionar fornecedor real
+      - Escolher quem planeja e possivel, com padrao sensato quando houver so um
+      - Falha de planejamento vira diagnostico legivel, nunca tela pendurada
+      - Fornecedor de teste nao se apresenta como capaz de planejar de verdade
+      - A tela nova respeita foco visivel, rotulo acessivel e nao depende de cor
+    gate: web
+    risk: high
+    estimate: 6
+
+  - id: U16
+    phase: interface
+    title: Revisao do plano, ajuste minimo e aprovacao
+    objective: >
+      Deixar o humano revisar o plano proposto com os numeros do compilador, inspecionar
+      cada no, ajustar o minimo necessario, registrar quem aprova e disparar a execucao num
+      ato so, indo direto para o DAG vivo.
+    description: >
+      Ajuste minimo apenas; editor visual completo de DAG esta fora de escopo e o caminho de
+      abrir o YAML continua disponivel. Aprovar e executar sao duas chamadas em ordem, e um
+      clique duplo nao pode criar dois runs.
+    dependencies: [U10]
+    touches:
+      - apps/web/src/
+    validation:
+      - O plano mostra contagem de tasks, paralelismo, avisos, caminho critico e conflitos
+      - Clicar num no mostra objetivo, dependencias, escopo, validacao, gate, risco e revisao
+      - Ajuste minimo e possivel sem editor visual de grafo
+      - Aprovacao registra o operador e nada e executado sem ato humano
+      - Clique duplo em aprovar e executar nao cria dois runs
+      - Depois de aprovar, a tela vai sozinha para o DAG vivo
+      - A tela nova respeita foco visivel, rotulo acessivel e nao depende de cor
+    gate: mission
+    risk: high
+    estimate: 6
+
+missionGate: mission

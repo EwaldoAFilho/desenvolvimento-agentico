@@ -22,6 +22,56 @@ const TWO_PROVIDERS = [
   { id: 'mock-alt', maxConcurrent: 2 },
 ]
 
+describe('o desfecho do processo do revisor decide antes do relato dele (P05)', () => {
+  /** Revisor que ANUNCIA aprovacao e mesmo assim termina mal. */
+  const revisorQueTerminaMal =
+    (status: 'failed' | 'timeout'): StepFn =>
+    (context) =>
+      context.kind === 'review'
+        ? { status, claims: { summary: 'VERDICT: PASS', detail: 'aprovei tudo' } }
+        : pass(`${context.taskId} pronto`, {
+            [`packages/${context.taskId.toLowerCase()}/${context.taskId}.ts`]:
+              'export const x = 1\n',
+          })
+
+  for (const status of ['failed', 'timeout'] as const) {
+    it(`revisor com status ${status} nao aprova, mesmo imprimindo VERDICT: PASS`, async () => {
+      harness = await createHarness({
+        mission: {
+          requireReview: true,
+          defaultGate: 'unit',
+          maxAttempts: 1,
+          tasks: [{ id: 'T01' }],
+        },
+        gates: { unit: [GATE_ALWAYS_PASS] },
+        step: revisorQueTerminaMal(status),
+      })
+      await harness.orchestrator.drain()
+
+      const attempts = await harness.attempts('T01')
+      const attempt = attempts[attempts.length - 1]
+      // Se o relato bastasse, esta tentativa teria integrado e a task chegaria a DONE com
+      // uma revisao que o processo do revisor nao sustentou (I6).
+      expect(attempt?.review?.verdict).toBeUndefined()
+      expect(attempt?.failureReason?.code).toBe('AGENT_ERROR')
+      expect(attempt?.failureReason?.detail).toContain(`revisor encerrou com status ${status}`)
+      expect((await harness.task('T01')).status).not.toBe('DONE')
+    }, 120_000)
+  }
+
+  it('CONTROLE: o mesmo relato com o processo terminando bem aprova', async () => {
+    harness = await createHarness({
+      mission: { requireReview: true, defaultGate: 'unit', maxAttempts: 1, tasks: [{ id: 'T01' }] },
+      gates: { unit: [GATE_ALWAYS_PASS] },
+      step,
+    })
+    await harness.orchestrator.drain()
+
+    const attempts = await harness.attempts('T01')
+    expect(attempts[attempts.length - 1]?.review?.verdict).toBe('PASS')
+  }, 120_000)
+})
+
 describe('politica de revisao (ADR-0011)', () => {
   it('nunca deixa o executor revisar a propria tentativa (I3)', async () => {
     harness = await createHarness({
