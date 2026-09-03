@@ -152,6 +152,16 @@ export async function addWorktree(
   stage: WorkspaceStage = 'acquire',
 ): Promise<void> {
   if (await branchExists(cwd, branch)) {
+    // Renomear so o que NAO esta em uso: o git renomeia um ref checked out e arrasta o HEAD
+    // da worktree viva junto — uma tentativa em andamento de outro run passaria a escrever
+    // numa branch com outro nome e a integracao pegaria a errada. Branch viva = conflito de
+    // verdade, e conflito recusa em vez de sequestrar.
+    const live = await worktreeOnBranch(cwd, branch)
+    if (live !== undefined) {
+      throw new WorkspaceError(stage, `branch ${branch} esta em uso por outra worktree`, {
+        detail: live.path,
+      })
+    }
     const stale = `${branch}${STALE_BRANCH_SUFFIX}${Date.now().toString(36)}`
     await git(['branch', '-m', branch, stale], { cwd, stage })
   }

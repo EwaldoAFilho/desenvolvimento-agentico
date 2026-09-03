@@ -1036,7 +1036,8 @@ export function createControlPlane(config: ControlPlaneConfig): ControlPlane {
    * orquestrador que nao drena.
    */
   const drainPlanning = async (options: CloseOptions): Promise<void> => {
-    if (planningInFlight.size === 0) return
+    // SEM atalho por lista vazia: um residuo (grupo de processos que sobreviveu ao lider) vive
+    // no adapter do planejador, nao na lista de promessas — e so o `cancel()` dele o sonda.
     const graceMs = options.graceMs ?? DEFAULT_SHUTDOWN_GRACE_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<'timeout'>((resolve) => {

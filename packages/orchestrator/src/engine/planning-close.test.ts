@@ -171,3 +171,13 @@ describe('close() com residuo de processo do planejador', () => {
     await plane.close({ graceMs: 2_000 }).catch(() => undefined)
   })
 })
+
+describe('close() sem planejamento em voo, mas com residuo no adapter', () => {
+  it('o cancel() do planejador e chamado mesmo sem promessa em voo; residuo vivo segura a posse', async () => {
+    const planner = new PlannerComResiduo()
+    const plane = await planeCom(planner)
+    // Nenhum planMission em voo: o residuo (grupo que sobreviveu ao lider) so existe no adapter.
+    await expect(plane.close({ graceMs: 2_000 })).rejects.toThrow(/ainda vivo/)
+    expect(plane.lifecycle).not.toBe('closed')
+  })
+})

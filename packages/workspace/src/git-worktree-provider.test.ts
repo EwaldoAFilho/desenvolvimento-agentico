@@ -63,6 +63,25 @@ describe('GitWorktreeWorkspaceProvider.acquire', () => {
     await expect(provider.acquire(lease())).rejects.toThrow(/ja existe/)
   })
 
+  it('branch de tentativa ainda em uso por outra worktree (release keep) NAO e renomeada: recusa', async () => {
+    repo = await createTestRepo()
+    const provider = providerFor(repo.root)
+    const first = await provider.acquire(lease({ task: 'T01' }))
+    // `keep` preserva a worktree — e a branch continua checked out nela.
+    await provider.release(first, 'keep')
+    await expect(
+      provider.acquire({
+        ...lease({ task: 'T01' }),
+        runId: '01J0000000000000000000000B' as typeof RUN,
+        attemptId: attemptId('01J0000000000000000000000B:T01:a1'),
+      }),
+    ).rejects.toThrow(/em uso por outra worktree/)
+    const { stdout } = await exec('git', ['branch', '--list', `${first.branch}*`], {
+      cwd: repo.root,
+    })
+    expect(stdout).not.toContain('.stale.')
+  })
+
   it('segundo run da mesma missao: a branch da tentativa anterior e renomeada, nao trava (F2)', async () => {
     repo = await createTestRepo()
     const provider = providerFor(repo.root)

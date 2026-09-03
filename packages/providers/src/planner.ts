@@ -888,6 +888,10 @@ export class LocalCliMissionPlanner implements MissionPlanner {
   async cancel(reason: string): Promise<void> {
     const running = [...this.#running]
     const outcomes = await Promise.allSettled(running.map((proc) => proc.cancel(reason)))
+    outcomes.forEach((outcome, index) => {
+      // Grupo provado morto: o handle sai; o que rejeitou fica, para a proxima sonda.
+      if (outcome.status === 'fulfilled') this.#running.delete(running[index] as LocalAgentProcess)
+    })
     const vivos = outcomes.filter((o): o is PromiseRejectedResult => o.status === 'rejected')
     if (vivos.length === 0) return
     // Sinal enviado nao e processo morto: `cancel()` so resolve com o grupo provado morto. Um
