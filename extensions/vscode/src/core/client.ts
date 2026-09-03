@@ -79,6 +79,30 @@ export class AgenticClient {
     return this.get<CompileReportDto>(`/api/missions/compile?file=${encodeURIComponent(file)}`)
   }
 
+  /**
+   * Chamada CRUA para a ponte da webview: status e corpo como texto, sem interpretar. O
+   * dashboard valida o corpo pelos schemas do contrato do lado de la; aqui so viaja.
+   */
+  async raw(
+    method: 'GET' | 'POST',
+    apiPath: string,
+    body: string | undefined,
+    timeoutMs: number,
+  ): Promise<{ readonly status: number; readonly ok: boolean; readonly text: string }> {
+    const headers: Record<string, string> = {
+      [PROJECT_HEADER]: this.repoRoot,
+      accept: 'application/json',
+    }
+    if (body !== undefined) headers['content-type'] = 'application/json'
+    const response = await this.fetchFn(`${this.baseUrl}/api${apiPath}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return { status: response.status, ok: response.ok, text: await response.text() }
+  }
+
   async get<T>(path: string): Promise<T> {
     return this.send<T>('GET', path)
   }

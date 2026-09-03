@@ -26,7 +26,8 @@
       "@agentic/server": ["./apps/server/src/index.ts"],
       "@agentic/cli": ["./apps/cli/src/index.ts"],
       "@agentic/web": ["./apps/web/src/index.ts"]
-    }
+    },
+    "jsx": "react-jsx"
   },
   "include": ["src/**/*", "media/**/*"],
   "exclude": ["**/dist/**", "**/node_modules/**", "**/__fixtures__/**"]

@@ -22,10 +22,33 @@ const extension = {
   logLevel: 'info',
 }
 
+const repoRoot = new URL('../../', import.meta.url).pathname
+const packages = [
+  'agent-runtime',
+  'compiler',
+  'domain',
+  'gates',
+  'graph',
+  'orchestrator',
+  'persistence',
+  'process',
+  'providers',
+  'schemas',
+  'workspace',
+]
+/** `@agentic/*` resolvido para o FONTE, como o vitest e o tsconfig fazem — sem build previo. */
+const alias = Object.fromEntries(
+  packages.map((p) => [`@agentic/${p}`, `${repoRoot}packages/${p}/src/index.ts`]),
+)
+
+/**
+ * O dashboard do produto (React) dentro da webview: o MESMO `App` de apps/web, com o
+ * transporte trocado por postMessage (media/app.tsx). CSS vai para dist/webview/app.css.
+ */
 /** @type {import('esbuild').BuildOptions} */
 const webview = {
-  entryPoints: ['media/home.ts'],
-  outfile: 'dist/webview/home.js',
+  entryPoints: ['media/app.tsx'],
+  outfile: 'dist/webview/app.js',
   bundle: true,
   format: 'iife',
   platform: 'browser',
@@ -34,6 +57,10 @@ const webview = {
   minify,
   charset: 'utf8',
   logLevel: 'info',
+  jsx: 'automatic',
+  alias,
+  define: { 'process.env.NODE_ENV': minify ? '"production"' : '"development"' },
+  loader: { '.css': 'css', '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
 }
 
 if (watch) {

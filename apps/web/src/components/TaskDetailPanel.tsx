@@ -1,5 +1,6 @@
 import type { TaskDetail } from '@agentic/schemas'
 import type { JSX, ReactNode } from 'react'
+import { useEditorActions } from '../editor-actions.js'
 import { type ActivityStep, activityPulse } from '../lib/activity.js'
 import { AGENT_LOG_ROLE_LABEL, agentLogView, MAX_LISTED_LOGS } from '../lib/agent-log.js'
 import { blockedViewOf, failureViewOf } from '../lib/failure.js'
@@ -89,6 +90,7 @@ export function TaskDetailPanel({
   onUnblock,
   onSkip,
 }: TaskDetailPanelProps): JSX.Element {
+  const editor = useEditorActions()
   if (task === undefined) {
     return (
       <aside className="detail detail--empty" aria-label="Detalhe da task">
@@ -511,6 +513,15 @@ export function TaskDetailPanel({
             <span className="detail__path">
               <code data-testid="worktree-path">{isolation.worktreePath}</code>
               <CopyButton value={isolation.worktreePath} />
+              {editor?.openPath === undefined ? null : (
+                <button
+                  type="button"
+                  className="detail__action"
+                  onClick={() => editor.openPath?.(isolation.worktreePath ?? '')}
+                >
+                  abrir no editor
+                </button>
+              )}
             </span>
           )}
         </Field>
@@ -573,6 +584,23 @@ export function TaskDetailPanel({
                   <span className="files__kind">{file.change}</span>
                   <code>{file.path}</code>
                   <span className="files__stat">{`+${file.added} −${file.removed}`}</span>
+                  {editor?.openDiff === undefined ||
+                  isolation.baseCommit === undefined ||
+                  (isolation.commit ?? isolation.branch) === undefined ? null : (
+                    <button
+                      type="button"
+                      className="detail__action"
+                      onClick={() =>
+                        editor.openDiff?.({
+                          path: file.path,
+                          base: isolation.baseCommit ?? '',
+                          head: isolation.commit ?? isolation.branch ?? '',
+                        })
+                      }
+                    >
+                      diff
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -623,6 +651,15 @@ export function TaskDetailPanel({
                   </span>
                   <code>{artifact.path}</code>
                   <CopyButton value={artifact.path} label="copiar caminho do log" />
+                  {editor?.openPath === undefined ? null : (
+                    <button
+                      type="button"
+                      className="detail__action"
+                      onClick={() => editor.openPath?.(artifact.path)}
+                    >
+                      abrir log
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

@@ -6,6 +6,7 @@ import type {
   TaskDetail,
 } from '@agentic/schemas'
 import type { JSX, ReactNode } from 'react'
+import { useEditorActions } from '../editor-actions.js'
 import { conflictKindOf, dependentsOf, RISK_LABEL, reviewReadingOf } from '../lib/plan-review.js'
 
 const EMPTY = '—'
@@ -65,6 +66,7 @@ export function PlanNodePanel({
   diagnostics,
   onClose,
 }: PlanNodePanelProps): JSX.Element {
+  const editor = useEditorActions()
   if (node === undefined) {
     return (
       <aside className="plan-node plan-node--empty" aria-label="Nó do plano">
@@ -126,7 +128,20 @@ export function PlanNodePanel({
           {onCriticalPath ? 'sim — atrasar esta task atrasa a missão' : 'não'}
         </Field>
         <Field label="escopo de escrita" testId="plan-node-scope">
-          {list(node.touches)}
+          {editor?.openPath === undefined || node.touches.length === 0
+            ? list(node.touches)
+            : node.touches.map((scope, index) => (
+                <span key={scope}>
+                  {index === 0 ? '' : ', '}
+                  <button
+                    type="button"
+                    className="detail__action"
+                    onClick={() => editor.openPath?.(scope)}
+                  >
+                    {scope}
+                  </button>
+                </span>
+              ))}
         </Field>
         <Field label="leituras declaradas" testId="plan-node-reads">
           {detail === undefined ? missing : list(detail.scope.reads)}

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import { isGitRef, isRepoPath } from '../webview/protocol.js'
+import type { AppPanel } from './app-panel.js'
 import {
   GIT_SCHEME,
   GitContentProvider,
@@ -8,7 +9,6 @@ import {
   openPath,
   type PathAuthorization,
 } from './git-content.js'
-import type { HomePanel } from './home-panel.js'
 import type { AgenticHost } from './host.js'
 import type { AgenticLog } from './log.js'
 
@@ -16,7 +16,7 @@ import type { AgenticLog } from './log.js'
 export function registerCommands(
   context: vscode.ExtensionContext,
   host: AgenticHost,
-  panel: HomePanel,
+  panel: AppPanel,
   log: AgenticLog,
 ): void {
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
@@ -29,11 +29,19 @@ export function registerCommands(
     await host.detect()
     await host.refresh({ data: true })
   })
-  register('agentic.open', () => panel.open())
+  register('agentic.open', () => panel.open({}))
+  register('agentic.newMission', () => panel.open({ new: true }))
+  register('agentic.openRun', (runId) => {
+    if (typeof runId === 'string' && runId.length > 0) panel.open({ run: runId })
+    else panel.open({})
+  })
   register('agentic.showLog', () => log.show())
   register('agentic.openMission', (file) => {
-    if (typeof file === 'string') panel.open(file)
-    else panel.open()
+    // A sidebar passa o ARQUIVO; o dashboard navega por id de mission.
+    const mission =
+      typeof file === 'string' ? host.data.missions.find((m) => m.file === file) : undefined
+    if (mission !== undefined) panel.open({ mission: mission.id })
+    else panel.open({})
   })
   /** Comandos com caminho so abrem dentro do projeto detectado (o mesmo limite do painel). */
   const scopeOf = (): { repoRoot: string; auth: PathAuthorization } | undefined => {

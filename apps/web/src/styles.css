@@ -1571,3 +1571,23 @@ body {
   align-items: baseline;
   flex-wrap: wrap;
 }
+
+/* Acoes de editor (so existem quando um editor as fornece — ver editor-actions.ts) */
+.detail__action {
+  font: inherit;
+  font-size: 0.85em;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border, #c9d1d9);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--link, #0969da);
+  cursor: pointer;
+}
+.detail__action:hover {
+  text-decoration: underline;
+}
+.detail__action:focus-visible {
+  outline: 2px solid var(--focus, #0969da);
+  outline-offset: 2px;
+}

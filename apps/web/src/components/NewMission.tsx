@@ -61,6 +61,8 @@ interface Draft {
 
 export interface NewMissionProps {
   readonly deps?: Partial<NewMissionDeps>
+  /** Preenchimento inicial do `actor`; continua editavel e continua obrigatorio. */
+  readonly defaultActor?: string
   /** Fornecedor padrao do projeto, quando ele declara um. Nunca inventamos um. */
   readonly defaultPlannerId?: string
   readonly onCancel: () => void
@@ -167,6 +169,7 @@ export function NewMission({
   onCancel,
   onOpenMission,
   readTimeoutMs = READ_TIMEOUT_MS,
+  defaultActor,
 }: NewMissionProps): JSX.Element {
   const api = useMemo<NewMissionDeps>(() => ({ ...DEFAULT_DEPS, ...deps }), [deps])
 
@@ -175,7 +178,7 @@ export function NewMission({
   const [attempt, setAttempt] = useState(0)
 
   const [prompt, setPrompt] = useState('')
-  const [actor, setActor] = useState('')
+  const [actor, setActor] = useState(defaultActor ?? '')
   const [picked, setPicked] = useState<string | undefined>(undefined)
   const [accepts, setAccepts] = useState(false)
 

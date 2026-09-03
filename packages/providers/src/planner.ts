@@ -7,7 +7,6 @@ import type {
   MissionPlanner,
   MissionPlannerRegistry,
   MissionProposal,
-  PathScope,
   PlanningCapabilities,
   PlanningContext,
   PlanningFailure,

@@ -1,9 +1,10 @@
 import * as vscode from 'vscode'
+import { AppPanel } from './vscode/app-panel.js'
 import { registerCommands } from './vscode/commands.js'
-import { HomePanel } from './vscode/home-panel.js'
 import { AgenticHost } from './vscode/host.js'
 import { AgenticLog } from './vscode/log.js'
 import { MissionsTreeProvider } from './vscode/missions-view.js'
+import { RunTreeProvider } from './vscode/run-view.js'
 import { StatusTreeProvider } from './vscode/status-view.js'
 
 /**
@@ -26,12 +27,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Agenti
   context.subscriptions.push(log)
   host = new AgenticHost(log)
   context.subscriptions.push(host)
-  const panel = new HomePanel(context, host, log)
+  const panel = new AppPanel(context, host, log)
   context.subscriptions.push(panel)
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('agentic.status', new StatusTreeProvider(host)),
     vscode.window.registerTreeDataProvider('agentic.missions', new MissionsTreeProvider(host)),
+    vscode.window.registerTreeDataProvider('agentic.activeRun', new RunTreeProvider(host)),
   )
   registerCommands(context, host, panel, log)
   log.info('extensao ativada')

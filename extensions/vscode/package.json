@@ -54,6 +54,12 @@
           "name": "Missions",
           "icon": "resources/agentic.svg",
           "contextualTitle": "Agentic"
+        },
+        {
+          "id": "agentic.activeRun",
+          "name": "Active Run",
+          "icon": "resources/agentic.svg",
+          "contextualTitle": "Agentic"
         }
       ]
     },
@@ -67,6 +73,11 @@
         "view": "agentic.status",
         "contents": "Abra uma pasta para o Agentic detectar o projeto.\n[Abrir pasta](command:vscode.openFolder)",
         "when": "workbenchState == empty"
+      },
+      {
+        "view": "agentic.missions",
+        "contents": "Nenhuma mission ainda.\n[+ Nova Mission](command:agentic.newMission)",
+        "when": "agentic.project == detected && agentic.missions == none"
       }
     ],
     "commands": [
@@ -126,10 +137,26 @@
         "title": "Show Agentic Log",
         "category": "Agentic",
         "icon": "$(output)"
+      },
+      {
+        "command": "agentic.newMission",
+        "title": "New Mission",
+        "category": "Agentic",
+        "icon": "$(add)"
+      },
+      {
+        "command": "agentic.openRun",
+        "title": "Open Run",
+        "category": "Agentic"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "agentic.newMission",
+          "when": "view == agentic.missions",
+          "group": "navigation@0"
+        },
         {
           "command": "agentic.start",
           "when": "view == agentic.status && agentic.controlPlane == stopped",
@@ -159,6 +186,11 @@
           "command": "agentic.showLog",
           "when": "view == agentic.status",
           "group": "2_log"
+        },
+        {
+          "command": "agentic.refresh",
+          "when": "view == agentic.activeRun",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -183,6 +215,10 @@
         },
         {
           "command": "agentic.openDiff",
+          "when": "false"
+        },
+        {
+          "command": "agentic.openRun",
           "when": "false"
         }
       ]
@@ -221,7 +257,9 @@
     "@types/vscode": "^1.134.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.0",
-    "esbuild": "^0.28.0"
+    "esbuild": "^0.28.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
   },
   "dependencies": {
     "yaml": "^2.8.0"

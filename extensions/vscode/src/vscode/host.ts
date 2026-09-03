@@ -11,13 +11,11 @@ import {
   type MissionSummary,
   missionFilesOnDisk,
   summariesFromControlPlane,
-  withReport,
 } from '../core/missions.js'
 import { type DetectedProject, detectProject, messageOf } from '../core/project.js'
 import { AgenticService, type ServiceView } from '../core/service.js'
 import { childEnv, resolveToolchain } from '../core/toolchain.js'
-import type { HomeProject, MissionDetail } from '../webview/protocol.js'
-import { discoveryDeps, projectIo, sendSignal, sleep, toolchainIo } from './io.js'
+import { discoveryDeps, exec, projectIo, sendSignal, sleep, toolchainIo } from './io.js'
 import type { AgenticLog } from './log.js'
 
 /**
@@ -39,6 +37,8 @@ const DATA_POLL_MS = 15_000
 export class AgenticHost implements vscode.Disposable {
   project: DetectedProject | undefined
   service: AgenticService | undefined
+  /** Sugestao para o `actor` (git config user.name); nunca assumida em silencio — a tela exige o campo. */
+  defaultActor: string | undefined
   data: HostData = { missions: [] }
   busy: string | undefined
 
@@ -104,6 +104,7 @@ export class AgenticHost implements vscode.Disposable {
     this.data = { missions: [] }
     if (detected !== undefined) {
       this.log.info(`projeto detectado: ${detected.name} (${detected.repoRoot})`)
+      this.defaultActor = await suggestedActor(detected.repoRoot)
       this.service = this.createService(detected)
       this.disposables.push({
         dispose: this.service.onDidChange((view) => {
@@ -176,17 +177,6 @@ export class AgenticHost implements vscode.Disposable {
     return this.service?.view()
   }
 
-  homeProject(): HomeProject | undefined {
-    if (this.project === undefined) return undefined
-    return {
-      name: this.project.name,
-      repoRoot: this.project.repoRoot,
-      projectFile: this.project.projectFile,
-      gitRepository: this.project.git.repository,
-      ...(this.project.git.branch === undefined ? {} : { branch: this.project.git.branch }),
-    }
-  }
-
   client(): AgenticClient | undefined {
     const view = this.view()
     if (this.project === undefined || view?.state !== 'RUNNING' || view.live === undefined)
@@ -250,36 +240,6 @@ export class AgenticHost implements vscode.Disposable {
     }
   }
 
-  async missionDetail(file: string): Promise<MissionDetail> {
-    const summary = this.data.missions.find((m) => m.file === file)
-    if (summary === undefined) throw new Error(`mission nao listada: ${file}`)
-    const client = this.client()
-    if (client === undefined) {
-      return { summary, runs: [], error: 'control plane parado: runs nao apurados' }
-    }
-    try {
-      const report = await client.compile(summary.file).catch(() => undefined)
-      const enriched = withReport(summary, report)
-      const runs = (this.data.runs ?? (await client.runs())).filter(
-        (run) => run.missionId === enriched.id,
-      )
-      const last = runs[0]
-      if (last === undefined)
-        return { summary: enriched, runs, ...(report === undefined ? {} : { report }) }
-      const snapshot = await client.snapshot(last.id)
-      const tasks = await Promise.all(snapshot.tasks.map((task) => client.task(last.id, task.id)))
-      return {
-        summary: enriched,
-        runs,
-        snapshot,
-        tasks,
-        ...(report === undefined ? {} : { report }),
-      }
-    } catch (error) {
-      return { summary, runs: [], error: messageOf(error) }
-    }
-  }
-
   async lifecycle(operation: 'start' | 'stop' | 'restart'): Promise<ServiceView | undefined> {
     const service = this.service
     if (service === undefined) {
@@ -327,6 +287,11 @@ export class AgenticHost implements vscode.Disposable {
 
   private setContexts(): void {
     const state = this.view()?.state ?? 'STOPPED'
+    void vscode.commands.executeCommand(
+      'setContext',
+      'agentic.missions',
+      this.data.missions.length === 0 ? 'none' : 'some',
+    )
     void vscode.commands.executeCommand(
       'setContext',
       'agentic.project',
@@ -382,4 +347,15 @@ export class AgenticHost implements vscode.Disposable {
 
 export function firstLine(text: string): string {
   return text.split('\n')[0] ?? text
+}
+
+/** `git config user.name` do repositorio (ou global): sugestao de `actor`, editavel na tela. */
+async function suggestedActor(repoRoot: string): Promise<string | undefined> {
+  try {
+    const result = await exec('git', ['config', 'user.name'], repoRoot)
+    const name = result.code === 0 ? result.stdout.trim() : ''
+    return name.length === 0 ? undefined : name
+  } catch {
+    return undefined
+  }
 }

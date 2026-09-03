@@ -33,6 +33,8 @@ export interface StartMissionProps {
    * tela continua oferecendo os dois atos separados, e nada muda para quem ja aprovou.
    */
   readonly onApproveAndStart?: (acceptWarnings: boolean, actor: string, note: string) => void
+  /** Preenchimento inicial do `actor`; continua editavel e continua obrigatorio. */
+  readonly defaultActor?: string
 }
 
 function DiagnosticList({
@@ -73,8 +75,9 @@ export function StartMission({
   onApprove,
   onStart,
   onApproveAndStart,
+  defaultActor,
 }: StartMissionProps): JSX.Element {
-  const [actor, setActor] = useState('')
+  const [actor, setActor] = useState(defaultActor ?? '')
   const [note, setNote] = useState('')
   const [confirming, setConfirming] = useState<Confirming | undefined>(undefined)
   const [pressed, setPressed] = useState(false)

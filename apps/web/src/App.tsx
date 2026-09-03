@@ -137,6 +137,17 @@ export interface AppProps {
    */
   readonly planReview?: Partial<PlanReviewDeps>
   readonly bootTimeoutMs?: number
+  /**
+   * `history` (padrao): a rota vive na URL, com voltar/avancar do navegador. `memory`: a rota
+   * vive so no estado — e o que a webview do editor usa, onde a URL nao e nossa.
+   */
+  readonly navigation?: 'history' | 'memory'
+  /** Rota inicial em modo `memory` (em `history` a URL manda). */
+  readonly initialRoute?: Route
+  /** Observador de navegacao (o host do editor guarda a rota para restaurar a aba). */
+  readonly onNavigate?: (route: Route) => void
+  /** Sugestao para o campo `actor` das telas de aprovacao/planejamento (ex.: git user.name). */
+  readonly defaultActor?: string
 }
 
 /**
@@ -149,10 +160,16 @@ export function App({
   newMission,
   planReview,
   bootTimeoutMs = BOOT_TIMEOUT_MS,
+  navigation = 'history',
+  initialRoute,
+  onNavigate,
+  defaultActor,
 }: AppProps = {}): JSX.Element {
   const api = useMemo<AppDeps>(() => ({ ...DEFAULT_DEPS, ...deps }), [deps])
 
-  const [route, setRoute] = useState<Route>(currentRoute)
+  const [route, setRoute] = useState<Route>(() =>
+    navigation === 'memory' ? (initialRoute ?? {}) : currentRoute(),
+  )
   const [boot, setBoot] = useState<Boot>({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
@@ -166,22 +183,31 @@ export function App({
   /** Quantas vezes ESTA tela foi pedida de novo. Zera quando a rota muda. */
   const retries = useRef(0)
 
-  const navigate = useCallback((next: Route, replace = false): void => {
-    if (typeof window !== 'undefined') {
-      const url = `${window.location.pathname}${searchOf(next)}`
-      if (replace) window.history.replaceState({}, '', url)
-      else window.history.pushState({}, '', url)
-    }
-    setRoute(next)
-  }, [])
+  const navigate = useCallback(
+    (next: Route, replace = false): void => {
+      if (navigation === 'history' && typeof window !== 'undefined') {
+        const url = `${window.location.pathname}${searchOf(next)}`
+        if (replace) window.history.replaceState({}, '', url)
+        else window.history.pushState({}, '', url)
+      }
+      setRoute(next)
+      onNavigate?.(next)
+    },
+    [navigation, onNavigate],
+  )
 
   // Voltar e avancar no navegador sao navegacao de verdade: a tela acompanha a URL.
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (navigation !== 'history' || typeof window === 'undefined') return
     const onPop = (): void => setRoute(currentRoute())
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [])
+  }, [navigation])
+
+  // Em modo memoria, quem hospeda pode mandar a tela para outra rota (ex.: item da sidebar).
+  useEffect(() => {
+    if (navigation === 'memory' && initialRoute !== undefined) setRoute(initialRoute)
+  }, [navigation, initialRoute])
 
   useEffect(() => {
     const previous = booted.current
@@ -404,6 +430,7 @@ export function App({
       <NewMission
         {...(newMission === undefined ? {} : { deps: newMission })}
         {...(suggested === undefined ? {} : { defaultPlannerId: suggested })}
+        {...(defaultActor === undefined ? {} : { defaultActor })}
         onCancel={goHome}
         onOpenMission={openMission}
       />
@@ -441,6 +468,7 @@ export function App({
       <StartMission
         report={boot.report}
         approved={boot.approved}
+        {...(defaultActor === undefined ? {} : { defaultActor })}
         providers={boot.providers}
         busy={busy}
         error={error}

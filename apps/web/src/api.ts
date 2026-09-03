@@ -93,17 +93,44 @@ export function describeFailure(cause: unknown): string {
   return text.length > FAILURE_MAX ? `${text.slice(0, FAILURE_MAX - 1)}…` : text
 }
 
+/**
+ * Por onde as requisicoes saem. O padrao e `fetch` relativo a `/api` (dashboard servido pelo
+ * proprio control plane). Um host que nao tem rede — a webview do editor — instala o seu:
+ * mesma API, mesmos schemas, outro transporte. `path` chega SEM o prefixo `/api`.
+ */
+export interface TransportResponse {
+  readonly status: number
+  readonly ok: boolean
+  text(): Promise<string>
+}
+
+export interface ApiTransport {
+  request(path: string, init?: RequestInit): Promise<TransportResponse>
+}
+
+const fetchTransport: ApiTransport = {
+  request: (path, init) =>
+    fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: { accept: 'application/json', ...(init?.headers ?? {}) },
+    }),
+}
+
+let transport: ApiTransport = fetchTransport
+
+export function setApiTransport(next: ApiTransport | undefined): void {
+  transport = next ?? fetchTransport
+}
+
 async function request(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { accept: 'application/json', ...(init?.headers ?? {}) },
-  })
+  const response = await transport.request(path, init)
   if (!response.ok) {
-    const detail = await response.text().catch(() => response.statusText)
-    throw new ApiError(response.status, detail || response.statusText)
+    const detail = await response.text().catch(() => String(response.status))
+    throw new ApiError(response.status, detail || String(response.status))
   }
   if (response.status === 204) return undefined
-  return response.json()
+  const text = await response.text()
+  return text.length === 0 ? undefined : JSON.parse(text)
 }
 
 async function post(path: string, body: unknown): Promise<unknown> {
