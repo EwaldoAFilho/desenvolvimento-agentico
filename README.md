@@ -1,5 +1,7 @@
 # Desenvolvimento Agêntico
 
+[![ci](https://github.com/EwaldoAFilho/desenvolvimento-agentico/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EwaldoAFilho/desenvolvimento-agentico/actions/workflows/ci.yml)
+
 **Um control plane para coordenar múltiplos agentes de IA numa mesma entrega de software —
 com dependências explícitas, isolamento real, revisão independente e evidência medida pela
 plataforma, nunca declarada pelo agente.**
@@ -279,6 +281,7 @@ apps/      cli · server · web
 | [ADRs](docs/adr/) | 12 decisões arquiteturais com alternativas recusadas |
 | [PRODUCT-READINESS](docs/product/PRODUCT-READINESS.md) | matriz de prontidão, sem porcentagem inventada |
 | [PLANO 0.3.0](docs/product/V0.3.0-PLAN.md) | próxima versão: instalar e começar — epics, lotes e critérios |
+| [CONTRIBUTING](CONTRIBUTING.md) | Node suportado, `verify`, extensão, PR e o que nunca entra no commit |
 
 ---
 
