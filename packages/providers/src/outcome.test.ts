@@ -69,6 +69,29 @@ describe('claimsFromOutput — relato, nunca fato', () => {
     expect(claims.summary).toBe('erro de compilacao')
   })
 
+  it('saida mal sucedida resume pelo stderr, nao pelo progresso em stdout', () => {
+    // A causa de uma falha mora no stderr; stdout, nesse instante, so tem a ultima linha
+    // de progresso — e era ela que chegava a tela como se fosse o motivo.
+    const claims = claimsFromOutput(
+      ['analisando arquivos...'],
+      ['sessao expirada: rode `login`'],
+      exit({ code: 1 }),
+    )
+    expect(claims.summary).toBe('sessao expirada: rode `login`')
+    expect(claims.detail).toContain('analisando arquivos...')
+  })
+
+  it('timeout e cancelamento tambem leem o stderr primeiro', () => {
+    for (const status of [exit({ timedOut: true }), exit({ cancelled: true })]) {
+      expect(claimsFromOutput(['progresso'], ['a causa'], status).summary).toBe('a causa')
+    }
+  })
+
+  it('saida bem sucedida continua resumindo pelo stdout', () => {
+    const claims = claimsFromOutput(['entreguei tudo'], ['aviso qualquer'], exit())
+    expect(claims.summary).toBe('entreguei tudo')
+  })
+
   it('sem saida nenhuma, diz explicitamente que nao houve relato', () => {
     const claims = claimsFromOutput([], [], exit({ code: 3 }))
     expect(claims.summary).toContain('nao produziu relato')

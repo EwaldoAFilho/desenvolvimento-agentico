@@ -274,7 +274,7 @@ describe('select — drenar antes de encher (inanicao)', () => {
     ])
   })
 
-  it('revisao pendente sem candidato nao consome vaga de execucao', () => {
+  it('revisao pendente sem candidato bloqueia a task e nao consome vaga de execucao', () => {
     const decisions = select(
       input({
         graph: graphOf(tasks),
@@ -286,7 +286,11 @@ describe('select — drenar antes de encher (inanicao)', () => {
         capacity: capacity({ global: { maxParallelTasks: 2 } }),
       }),
     )
-    expect(kinds(decisions)).toEqual(['dispatch-executor', 'dispatch-executor'])
+    // Bloquear nao gasta vaga: as duas execucoes saem na mesma leva. E T03 nao fica mais
+    // girando em VERIFYING sem motivo na tela — nenhum tick futuro traria um revisor que o
+    // projeto nao declarou.
+    expect(kinds(decisions)).toEqual(['block-task', 'dispatch-executor', 'dispatch-executor'])
+    expect(ids(decisions)).toEqual(['T03', 'T01', 'T02'])
   })
 })
 
@@ -457,8 +461,28 @@ describe('select — politica de revisao', () => {
   })
 
   it('a identidade do executor nunca revisa a propria tentativa (I3)', () => {
+    // I3 continua valendo: o executor NAO e eleito. O que mudou e o desfecho de nao haver
+    // mais ninguem — impossivel nao espera, bloqueia com motivo.
     const decisions = select(review({ reviewCandidates: [EXECUTOR] }))
-    expect(decisions).toEqual([])
+    expect(decisions).toEqual([
+      {
+        kind: 'block-task',
+        taskId: T('T01'),
+        reason: 'NO_REVIEWER_AVAILABLE',
+        policy: 'fresh-session',
+      },
+    ])
+  })
+
+  it('projeto sem revisor declarado bloqueia, em vez de esperar para sempre', () => {
+    expect(select(review({ reviewCandidates: [] }))).toEqual([
+      {
+        kind: 'block-task',
+        taskId: T('T01'),
+        reason: 'NO_REVIEWER_AVAILABLE',
+        policy: 'fresh-session',
+      },
+    ])
   })
 
   it('cross-provider-required com segundo fornecedor sem capacidade espera, nao bloqueia', () => {

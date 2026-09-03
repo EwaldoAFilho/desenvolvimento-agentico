@@ -46,6 +46,15 @@ function readyRegistry(...ids: readonly string[]): ReturnType<typeof fakeRegistr
   )
 }
 
+/** `gates.yaml` do humano, com os perfis que ELE escolheu. */
+function gatesYaml(profiles: Readonly<Record<string, string>>): string {
+  const linhas = ['apiVersion: agentic/v1', 'kind: Gates', 'profiles:']
+  for (const [id, run] of Object.entries(profiles)) {
+    linhas.push(`  ${id}:`, '    commands:', `      - run: ${run}`)
+  }
+  return `${linhas.join('\n')}\n`
+}
+
 async function dataOf(root: string, deps = captureDeps({ cwd: root }).deps): Promise<InitData> {
   const result = await initCommand({}, deps)
   return result.data as InitData
@@ -271,6 +280,75 @@ describe('init: gates detectados', () => {
     const data = await dataOf(root)
 
     expect(data.gates).toEqual([])
+  })
+})
+
+describe('init: gates.yaml preexistente manda', () => {
+  it('perfis proprios: a missao e o project.yaml nao apontam gates que nao existem', async () => {
+    const root = await scratch()
+    await withScripts(root, { test: 'node --test', lint: 'x' })
+    await mkdir(join(root, '.agentic'), { recursive: true })
+    await writeFile(join(root, '.agentic/gates.yaml'), gatesYaml({ custom: 'make check' }), 'utf8')
+
+    const data = await dataOf(root)
+    const projectText = await readFile(join(root, '.agentic/project.yaml'), 'utf8')
+    const missionText = await readFile(
+      join(root, '.agentic/missions/EXEMPLO-001.mission.yaml'),
+      'utf8',
+    )
+    const gatesText = await readFile(join(root, '.agentic/gates.yaml'), 'utf8')
+
+    expect(data.skipped).toContain('.agentic/gates.yaml')
+    expect(gatesText).toContain('make check')
+    // O conjunto tem de COMPILAR, e nao so passar em cada schema isoladamente.
+    const report = toCompileReport(
+      compileMission({ missionText, projectFile: projectText, gatesFile: gatesText }),
+      missionText,
+    )
+    expect(report.diagnostics).toEqual([])
+    expect(report.ok).toBe(true)
+  })
+
+  it('perfis `unit` e `mission` proprios continuam sendo referenciados', async () => {
+    const root = await scratch()
+    await mkdir(join(root, '.agentic'), { recursive: true })
+    await writeFile(
+      join(root, '.agentic/gates.yaml'),
+      gatesYaml({ unit: 'make test', mission: 'make all' }),
+      'utf8',
+    )
+
+    await dataOf(root)
+    const projectText = await readFile(join(root, '.agentic/project.yaml'), 'utf8')
+    const missionText = await readFile(
+      join(root, '.agentic/missions/EXEMPLO-001.mission.yaml'),
+      'utf8',
+    )
+    const gatesText = await readFile(join(root, '.agentic/gates.yaml'), 'utf8')
+
+    expect(projectText).toContain('missionGate: mission')
+    const report = toCompileReport(
+      compileMission({ missionText, projectFile: projectText, gatesFile: gatesText }),
+      missionText,
+    )
+    expect(report.diagnostics).toEqual([])
+  })
+
+  it('gates.yaml ilegivel: preserva e nao aponta gate nenhum', async () => {
+    const root = await scratch()
+    await withScripts(root, { test: 'node --test' })
+    await mkdir(join(root, '.agentic'), { recursive: true })
+    await writeFile(join(root, '.agentic/gates.yaml'), 'isto: [nao\n  e: valido\n', 'utf8')
+
+    await dataOf(root)
+    const projectText = await readFile(join(root, '.agentic/project.yaml'), 'utf8')
+    const missionText = await readFile(
+      join(root, '.agentic/missions/EXEMPLO-001.mission.yaml'),
+      'utf8',
+    )
+
+    expect(projectText).not.toContain('missionGate:')
+    expect(missionText).not.toContain('gate:')
   })
 })
 

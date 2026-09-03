@@ -275,6 +275,10 @@ planejamento`.
 Rodar `agentic init` de novo é seguro: arquivo que já existe é preservado, e o `.gitignore`
 só recebe o padrão que faltava.
 
+Se você **já tem** um `.agentic/gates.yaml`, ele manda: o `init` preserva o arquivo e o
+`project.yaml` e a missão de exemplo só referenciam perfis que existem lá dentro. Sem isso o
+produto entregaria três arquivos válidos um a um e uma missão que não compila.
+
 ### Se nenhuma CLI estiver pronta
 
 O `init` **não finge** que o projeto está executável. Ele escreve o registry com o agente de

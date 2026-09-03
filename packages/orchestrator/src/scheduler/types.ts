@@ -74,13 +74,18 @@ export interface SchedulerInput {
 }
 
 /**
- * Motivos de bloqueio decididos pelo scheduler (transicao 12b).
+ * Motivos de bloqueio decididos pelo scheduler (transicao 12b). Os tres sao PERMANENTES:
+ * nenhum se resolve esperando o proximo tick, e por isso nenhum pode virar espera calada.
  *
  * `CROSS_PROVIDER_UNAVAILABLE` e I10: politica exigida sem segundo fornecedor apto.
- * `SIMULATED_REVIEWER_ONLY` e a recusa de eleger um agente de ENSAIO como revisor real —
- * o conserto e declarar um fornecedor de verdade, nao esperar uma vaga.
+ * `SIMULATED_REVIEWER_ONLY` e a recusa de eleger um agente de ENSAIO como revisor real.
+ * `NO_REVIEWER_AVAILABLE` e o projeto que nao declarou revisor NENHUM — falta de VAGA e
+ * outra coisa, tratada depois, no orcamento, e essa sim espera.
  */
-export type SchedulerBlockReason = 'CROSS_PROVIDER_UNAVAILABLE' | 'SIMULATED_REVIEWER_ONLY'
+export type SchedulerBlockReason =
+  | 'CROSS_PROVIDER_UNAVAILABLE'
+  | 'SIMULATED_REVIEWER_ONLY'
+  | 'NO_REVIEWER_AVAILABLE'
 
 export interface DispatchExecutorDecision {
   readonly kind: 'dispatch-executor'

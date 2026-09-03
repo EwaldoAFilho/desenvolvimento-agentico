@@ -28,19 +28,19 @@ export function planReviews(
 
     // Viabilidade e questao de politica: avaliada sobre todos os candidatos, sem capacidade.
     const feasible = selectReviewer(input.reviewCandidates, pending.executor, resolved.policy)
+    // Viabilidade avaliada sobre TODOS os candidatos declarados, sem olhar capacidade: o que
+    // reprova aqui e permanente. I10 (`cross-provider-required` sem segundo fornecedor apto)
+    // nunca rebaixa; revisor de ENSAIO nunca vira revisor real; e projeto que nao declarou
+    // revisor nenhum nao ganha um esperando. Os tres viram BLOCKED com motivo — antes, o
+    // terceiro caso ficava girando em `VERIFYING` para sempre, com a tela sem dizer nada.
+    // Falta de VAGA nao passa por aqui: e medida abaixo, no orcamento, e essa sim espera.
     if (!feasible.ok) {
-      // I10: `cross-provider-required` vira BLOCKED, nunca rebaixa. Revisor de ENSAIO
-      // tambem vira BLOCKED, em qualquer politica: o conserto e humano (declarar um
-      // fornecedor real), e esperar o proximo tick nunca o traria. Falta de revisor apto
-      // por capacidade continua sendo transitoria e so espera.
-      if (feasible.reason !== 'NO_REVIEWER_AVAILABLE') {
-        decisions.push({
-          kind: 'block-task',
-          taskId: pending.taskId,
-          reason: feasible.reason,
-          policy: resolved.policy,
-        })
-      }
+      decisions.push({
+        kind: 'block-task',
+        taskId: pending.taskId,
+        reason: feasible.reason,
+        policy: resolved.policy,
+      })
       continue
     }
 

@@ -55,6 +55,11 @@ function lastMeaningfulLine(lines: readonly string[]): string | undefined {
 /**
  * Relato do agente, montado a partir do que ele escreveu. Continua sendo `claims`: o
  * control plane armazena e nunca decide por ele.
+ *
+ * Quando o processo TERMINOU MAL, a ordem de leitura inverte: a causa mora em `stderr`, e
+ * `stdout` costuma trazer a ultima linha de progresso. Preferir stdout ali entregava
+ * "analisando arquivos..." como resumo de uma falha cuja causa real — "sessao expirada" —
+ * estava a uma linha de distancia, no outro fluxo.
  */
 export function claimsFromOutput(
   stdout: readonly string[],
@@ -66,7 +71,9 @@ export function claimsFromOutput(
     spawnError !== undefined
       ? `agente nao iniciou (${spawnError.code})`
       : `agente nao produziu relato (exit ${exit.code ?? '-'})`
-  const summary = lastMeaningfulLine(stdout) ?? lastMeaningfulLine(stderr) ?? fallback
+  const malSucedido = exit.cancelled || exit.timedOut || exit.code !== 0
+  const [primeiro, segundo] = malSucedido ? [stderr, stdout] : [stdout, stderr]
+  const summary = lastMeaningfulLine(primeiro) ?? lastMeaningfulLine(segundo) ?? fallback
   const detail = [...stdout, ...stderr].join('\n')
   const claims: AgentClaims = {
     summary: truncate(summary, MAX_CLAIM_SUMMARY_CHARS),

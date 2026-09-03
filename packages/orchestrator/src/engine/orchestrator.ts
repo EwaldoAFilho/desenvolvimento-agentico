@@ -54,6 +54,7 @@ import { isResidualProcessError, residualGroupOf } from '@agentic/workspace'
 import type {
   ActiveLock,
   PendingReview,
+  SchedulerBlockReason,
   SchedulerDecision,
   SchedulerInput,
 } from '../scheduler/index.js'
@@ -1093,14 +1094,28 @@ export class Orchestrator {
     const outcome = message.outcome
     const parsed = parseReview(outcome?.claims)
 
-    if (message.failure !== undefined || outcome === undefined || parsed.verdict === undefined) {
+    // O desfecho do PROCESSO do revisor decide antes do relato dele (P05). Um revisor que
+    // imprime `VERDICT: PASS` e sai com codigo != 0 — ou estoura o tempo, ou e cancelado —
+    // nao emitiu veredito valido: aceitar o texto ali seria deixar o relato do agente
+    // decidir a transicao, e um `PASS` de mentira atravessaria a integracao ate DONE (I6).
+    const revisorTerminouBem = outcome?.status === 'completed'
+    if (
+      message.failure !== undefined ||
+      outcome === undefined ||
+      !revisorTerminouBem ||
+      parsed.verdict === undefined
+    ) {
       // Mesma regra do executor: a causa observada acompanha a falha. "revisor nao emitiu
       // veredito" sozinho nao diz se a CLI recusou, expirou a sessao ou respondeu fora do
       // contrato — e sem isso a pessoa so descobre abrindo o log.
       const cause = agentFailureCause(outcome?.claims)
+      const motivo =
+        outcome !== undefined && !revisorTerminouBem
+          ? `revisor encerrou com status ${outcome.status}; veredito nao vale`
+          : 'revisor nao emitiu veredito; revisao nao concluiu'
       const failure = message.failure ?? {
         code: 'AGENT_ERROR' as const,
-        detail: `revisor nao emitiu veredito; revisao nao concluiu${cause === undefined ? '' : `: ${cause}`}`,
+        detail: `${motivo}${cause === undefined ? '' : `: ${cause}`}`,
       }
       await this.#failAttempt(state, taskRun, inflight.attempt, failure, inflight)
       return
@@ -2416,10 +2431,15 @@ export class Orchestrator {
     if (taskRun === undefined || taskRun.status !== 'VERIFYING') return
     const inflight = [...this.#inflight.values()].find((item) => item.spec.id === decision.taskId)
     const now = this.#deps.clock.now()
-    const needs =
-      decision.reason === 'SIMULATED_REVIEWER_ONLY'
-        ? 'um fornecedor real declarado como revisor: agente de ensaio nao revisa tentativa real'
-        : 'segundo fornecedor apto a revisar, ou mudanca explicita da politica de revisao'
+    const NEEDS: Readonly<Record<SchedulerBlockReason, string>> = {
+      SIMULATED_REVIEWER_ONLY:
+        'um fornecedor real declarado como revisor: agente de ensaio nao revisa tentativa real',
+      NO_REVIEWER_AVAILABLE:
+        'um fornecedor com o papel `reviewer` no registry: o projeto nao declarou nenhum',
+      CROSS_PROVIDER_UNAVAILABLE:
+        'segundo fornecedor apto a revisar, ou mudanca explicita da politica de revisao',
+    }
+    const needs = NEEDS[decision.reason]
     await this.#blockTask(
       state,
       taskRun,

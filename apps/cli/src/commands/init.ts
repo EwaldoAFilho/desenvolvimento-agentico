@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join, relative, resolve } from 'node:path'
 import { toProviderHealthDto } from '@agentic/orchestrator'
-import { type ProviderHealthDto, parseProjectFile, providerStateOf } from '@agentic/schemas'
+import {
+  type ProviderHealthDto,
+  parseGatesFile,
+  parseProjectFile,
+  providerStateOf,
+} from '@agentic/schemas'
 import { AGENTIC_DIR, GATES_FILE, MISSIONS_DIR, PROJECT_FILE } from '../context.js'
 import type { CommandDeps } from '../deps.js'
 import { discoverGateCommands } from '../gate-discovery.js'
@@ -11,6 +16,7 @@ import { sanitize } from '../redact.js'
 import { type CommandResult, ok } from '../result.js'
 import {
   EXAMPLE_MISSION_ID,
+  type GatesPlan,
   gatesTemplate,
   missionTemplate,
   PROVIDER_CANDIDATES,
@@ -104,6 +110,29 @@ async function probeProviders(
 }
 
 /**
+ * Perfis do `gates.yaml` que ja esta no disco, ou `undefined` se nao ha arquivo.
+ *
+ * Arquivo ilegivel devolve lista VAZIA, e nao ausencia: ele existe, vai ser preservado, e
+ * apontar gates para dentro dele seria apostar num conteudo que nem parseia.
+ */
+async function existingGateProfiles(path: string): Promise<readonly string[] | undefined> {
+  const text = await readIfPresent(path)
+  if (text === undefined) return undefined
+  const parsed = parseGatesFile(text)
+  return parsed.ok ? Object.keys(parsed.value.profiles) : []
+}
+
+/** Referencia so o que existe naquele arquivo: gate ausente nao vira linha de configuracao. */
+function planFrom(profiles: readonly string[]): GatesPlan {
+  const has = (id: string): boolean => profiles.includes(id)
+  return {
+    profiles: [],
+    ...(has('unit') ? { taskGate: 'unit' } : {}),
+    ...(has('mission') ? { missionGate: 'mission' } : {}),
+  }
+}
+
+/**
  * `agentic init`: cria `.agentic/` com projeto, gates e uma missao de exemplo, protege o
  * estado local no `.gitignore` e escreve APENAS o que foi observado.
  *
@@ -116,8 +145,13 @@ export async function initCommand(args: InitArgs, deps: CommandDeps): Promise<Co
   const baseDir = join(root, AGENTIC_DIR)
   await mkdir(join(baseDir, MISSIONS_DIR), { recursive: true })
 
+  // O `gates.yaml` que JA existe manda. Sem isto, um projeto com um `gates.yaml` humano de
+  // perfis proprios recebia um `project.yaml` e uma missao apontando para `unit`/`mission`
+  // — cada arquivo valido sozinho, e a missao sem compilar. Preservar um arquivo e escrever
+  // os outros como se ele nao existisse e a mesma mentira que este lote veio desfazer.
+  const existentes = await existingGateProfiles(join(baseDir, GATES_FILE))
   const discovery = await discoverGateCommands(root)
-  const plan = planGates(discovery.commands)
+  const plan = existentes === undefined ? planGates(discovery.commands) : planFrom(existentes)
   const probed = await probeProviders(deps)
 
   const files: readonly (readonly [string, string])[] = [
@@ -166,7 +200,20 @@ export async function initCommand(args: InitArgs, deps: CommandDeps): Promise<Co
   out.line()
 
   out.line('gates')
-  if (plan.profiles.length === 0) {
+  if (existentes !== undefined) {
+    // O arquivo e do humano: dizemos o que ELE tem, e o que foi de fato referenciado.
+    out.line(
+      existentes.length === 0
+        ? '  .agentic/gates.yaml preservado (nao foi possivel ler os perfis dele)'
+        : `  .agentic/gates.yaml preservado; perfis: ${existentes.join(', ')}`,
+    )
+    const referenciados = [plan.taskGate, plan.missionGate].filter((id) => id !== undefined)
+    out.line(
+      referenciados.length === 0
+        ? '  nenhum gate referenciado: nao ha perfil `unit` nem `mission` nesse arquivo'
+        : `  referenciados: ${referenciados.join(', ')}`,
+    )
+  } else if (plan.profiles.length === 0) {
     out.line('  nenhum comando detectado; declare os seus em .agentic/gates.yaml')
   } else {
     for (const profile of plan.profiles) {
