@@ -278,6 +278,7 @@ apps/      cli · server · web
 | [MÉTODO](docs/development/AGENTIC-DEVELOPMENT-METHOD.md) | o método orientado a grafos |
 | [ADRs](docs/adr/) | 12 decisões arquiteturais com alternativas recusadas |
 | [PRODUCT-READINESS](docs/product/PRODUCT-READINESS.md) | matriz de prontidão, sem porcentagem inventada |
+| [PLANO 0.3.0](docs/product/V0.3.0-PLAN.md) | próxima versão: instalar e começar — epics, lotes e critérios |
 
 ---
 
