@@ -42,11 +42,13 @@ describe('bundle da extensao', () => {
   it('metafile: todo modulo empacotado e da extensao (ou projecao pura do dashboard)', () => {
     expect(inputs.length).toBeGreaterThan(0)
     // Caminhos relativos a extensions/vscode (absWorkingDir).
-    // `yaml` e biblioteca generica (parser), permitida pela regra de independencia.
+    // Caminhos do metafile sao relativos ao absWorkingDir; numa worktree com `node_modules`
+    // linkado eles atravessam o link (`../../../../node_modules/...`), entao a regra e por
+    // SEGMENTO, nunca por prefixo fixo. `yaml` e biblioteca generica (parser), permitida.
     const allowed = (input: string): boolean =>
       input.startsWith('src/') ||
-      input === '../../apps/web/src/lib/format.ts' ||
-      input.startsWith('../../node_modules/yaml/')
+      input.endsWith('apps/web/src/lib/format.ts') ||
+      /(^|\/)node_modules\/yaml\//.test(input)
     expect(inputs.filter((input) => !allowed(input))).toEqual([])
     expect(inputs.filter((input) => /(apps\/(server|cli)|packages\/)/.test(input))).toEqual([])
     expect(
