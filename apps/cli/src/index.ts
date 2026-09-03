@@ -107,6 +107,19 @@ export {
   superviseForeground,
 } from './foreground.js'
 export {
+  type DiscoveredCommand,
+  discoverGateCommands,
+  GATE_COMMAND_IDS,
+  type GateCommandId,
+  type GateDiscovery,
+} from './gate-discovery.js'
+export {
+  GITIGNORE_BLOCK,
+  GITIGNORE_PATTERNS,
+  type GitignoreMerge,
+  mergeGitignore,
+} from './gitignore.js'
+export {
   type ControlPlaneLink,
   connectHttp,
   endpointOf,
@@ -163,7 +176,14 @@ export {
 } from './running.js'
 export {
   EXAMPLE_MISSION_ID,
-  GATES_TEMPLATE,
-  MISSION_TEMPLATE,
-  PROJECT_TEMPLATE,
+  type GateProfilePlan,
+  type GatesPlan,
+  gatesTemplate,
+  missionTemplate,
+  PROVIDER_CANDIDATES,
+  type ProjectTemplateInput,
+  type ProviderTemplateEntry,
+  planGates,
+  projectTemplate,
+  REHEARSAL_PROVIDER_ID,
 } from './templates.js'

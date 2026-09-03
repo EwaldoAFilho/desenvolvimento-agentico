@@ -405,8 +405,10 @@ Artefatos em disco:
   worktrees/<runId>/<taskId>-a<N>/
 ```
 
-`.agentic/state.db`, `runs/` e `worktrees/` são gitignored. O que é versionado: missões,
-gates, políticas e o relatório final em `docs/missions/`.
+`.agentic/state.db*`, `runs/`, `worktrees/`, `control-plane.json` e `control-plane.lock.db*`
+são gitignored — e é o próprio `agentic init` que acrescenta esses padrões ao `.gitignore` do
+projeto, sem tocar no que já estava lá. O que é versionado: missões, gates, políticas e o
+relatório final em `docs/missions/`.
 
 ### 6.2 Estado materializado + event log (não event sourcing)
 
