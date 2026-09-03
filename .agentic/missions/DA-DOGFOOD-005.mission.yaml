@@ -1,0 +1,41 @@
+# Missao proposta por codex e gravada pelo control plane a pedido de dogfood@vscode.
+# Rascunho: nada foi aprovado nem executado. Revise, edite e aprove quando quiser.
+
+apiVersion: "agentic/v1"
+kind: "Mission"
+id: "DA-DOGFOOD-005"
+title: "Registrar dogfooding da jornada de missão no VS Code"
+objective: "Documentar na seção 0.2.0-alpha.1 do changelog da extensão VS Code que a jornada Nova Mission -> DAG -> aprovação -> Run foi exercitada por dogfooding real sobre o próprio repositório."
+scope:
+  - "Atualizar exclusivamente a seção 0.2.0-alpha.1 de extensions/vscode/CHANGELOG.md."
+  - "Adicionar um único item de lista descrevendo o dogfooding real da jornada no VS Code."
+outOfScope:
+  - "Alterações em código-fonte."
+  - "Alterações ou execução de testes."
+  - "Mudanças em outras seções ou arquivos."
+constraints:
+  - "Preservar o estilo e a formatação existentes do changelog."
+  - "Não declarar nem modificar caminhos proibidos."
+acceptanceCriteria:
+  - "A seção 0.2.0-alpha.1 contém um item de lista informando que a jornada Nova Mission -> DAG -> aprovação -> Run foi exercitada por dogfooding real dentro do VS Code sobre o próprio repositório."
+  - "Somente extensions/vscode/CHANGELOG.md é alterado."
+  - "Nenhum código ou teste é modificado."
+phases:
+  - id: "documentation"
+    title: "Atualização documental"
+    order: 1
+tasks:
+  - id: "T01"
+    phase: "documentation"
+    title: "Adicionar registro de dogfooding ao changelog"
+    objective: "Acrescentar à seção 0.2.0-alpha.1 o registro solicitado sobre o dogfooding da jornada completa no VS Code."
+    dependencies: []
+    touches:
+      - "extensions/vscode/CHANGELOG.md"
+    reads:
+      - "extensions/vscode/CHANGELOG.md"
+    validation:
+      - "Confirmar que o novo item está dentro da seção 0.2.0-alpha.1 e expressa integralmente a jornada Nova Mission -> DAG -> aprovação -> Run, o dogfooding real no VS Code e o uso do próprio repositório."
+      - "Confirmar que o diff contém somente a alteração documental solicitada em extensions/vscode/CHANGELOG.md."
+    risk: "low"
+    estimate: 1
