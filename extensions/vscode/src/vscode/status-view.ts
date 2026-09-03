@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import type { ProviderHealthDto } from '../core/contracts.js'
 import type { ServiceView } from '../core/service.js'
 import type { AgenticHost } from './host.js'
+import { providerIcon, providerStateLabel } from './labels.js'
 
 /**
  * Sidebar "Projeto": nome, branch, control plane, providers e a mission mais recente.
@@ -30,13 +31,6 @@ export function controlPlaneLabel(view: ServiceView | undefined, busy: string | 
     default:
       return '○ Stopped'
   }
-}
-
-export function providerStateLabel(provider: ProviderHealthDto): string {
-  if (provider.installed === false) return 'UNAVAILABLE'
-  if (provider.ready === true) return 'READY'
-  if (provider.ready === false) return 'NOT READY'
-  return 'UNKNOWN'
 }
 
 export class StatusTreeProvider implements vscode.TreeDataProvider<Row> {
@@ -114,7 +108,7 @@ export class StatusTreeProvider implements vscode.TreeDataProvider<Row> {
         item.description =
           providers === undefined
             ? 'não apurado'
-            : `${providers.filter((p) => p.ready === true).length}/${providers.length} prontos`
+            : `${providers.filter((p) => providerStateLabel(p) === 'READY').length}/${providers.length} prontos`
         item.iconPath = new vscode.ThemeIcon('organization')
         return item
       }
@@ -126,9 +120,7 @@ export class StatusTreeProvider implements vscode.TreeDataProvider<Row> {
         item.tooltip = [provider.detail, provider.readinessSource, provider.diagnostic?.remediation]
           .filter(Boolean)
           .join('\n')
-        item.iconPath = new vscode.ThemeIcon(
-          state === 'READY' ? 'check' : state === 'UNAVAILABLE' ? 'error' : 'question',
-        )
+        item.iconPath = new vscode.ThemeIcon(providerIcon(state))
         return item
       }
       case 'providersUnknown': {

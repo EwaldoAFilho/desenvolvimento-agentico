@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
-import type { RunHeaderDto } from '../core/contracts.js'
+import type { BlockageDto, RunHeaderDto } from '../core/contracts.js'
 import type { AgenticHost } from './host.js'
+import { taskTooltip } from './labels.js'
 
 /** Estados de run que ainda pedem atencao (o mesmo conjunto do dashboard: `activeRunOf`). */
 export const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
@@ -22,6 +23,8 @@ type Row =
       readonly id: string
       readonly status: string
       readonly title: string
+      /** Por que ESTA task parou. Nada a ver com a saude do fornecedor (ADR-0016). */
+      readonly blockage?: BlockageDto
     }
   | { readonly kind: 'none' }
 
@@ -52,6 +55,7 @@ export class RunTreeProvider implements vscode.TreeDataProvider<Row> {
         id: task.id,
         status: task.status,
         title: titles.get(task.id) ?? '',
+        ...(task.blockage === undefined ? {} : { blockage: task.blockage }),
       }))
     } catch {
       return []
@@ -79,6 +83,7 @@ export class RunTreeProvider implements vscode.TreeDataProvider<Row> {
     }
     const item = new vscode.TreeItem(row.id)
     item.description = `${row.status}${row.title === '' ? '' : ` · ${row.title}`}`
+    item.tooltip = taskTooltip(row.title, row.blockage)
     item.iconPath = new vscode.ThemeIcon(taskIcon(row.status))
     item.command = { command: 'agentic.openRun', title: 'Open Run', arguments: [row.run.id] }
     return item

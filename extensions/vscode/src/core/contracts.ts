@@ -7,6 +7,7 @@
  * mesmo fato.
  */
 export type {
+  BlockageDto,
   CompileReportDto,
   CompileStatsDto,
   DiagnosticDto,
