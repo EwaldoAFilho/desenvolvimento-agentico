@@ -107,6 +107,53 @@ step('Open Agentic abre o painel e a mission selecionada tem detalhes', async (c
   assert.ok(Array.isArray(detail.runs))
 })
 
+step('Open Agentic abre a aba do dashboard; New Mission muda a rota', async () => {
+  await vscode.commands.executeCommand('agentic.open')
+  const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label))
+  assert.ok(tabs.some((label) => label.startsWith('Agentic')), `aba Agentic ausente: ${tabs.join(', ')}`)
+  await vscode.commands.executeCommand('agentic.newMission')
+  const after = vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label))
+  assert.ok(after.some((label) => label.includes('nova mission')), `rota nova mission ausente: ${after.join(', ')}`)
+})
+
+step('aprovar e iniciar a mission de exemplo pelo control plane; Active Run mostra o run', async (ctx) => {
+  if (process.env.AGENTIC_IT_SKIP_RUN === '1') return
+  const client = ctx.api.host.client()
+  assert.ok(client, 'cliente do control plane')
+  const mission = ctx.api.host.data.missions.find((m) => m.id === 'EXEMPLO-001') ?? ctx.mission
+  const approved = await client.post(`/api/missions/${encodeURIComponent(mission.file)}/approve`, {
+    actor: 'integracao@vscode',
+    note: 'jornada do MVP-002',
+  })
+  assert.ok(approved.runId, 'aprovacao devolve runId')
+  const started = await client.post('/api/runs', { missionId: mission.id, acceptWarnings: true, actor: 'integracao@vscode' })
+  assert.equal(started.runId, approved.runId, 'um clique, um run: start reutiliza o run aprovado')
+  ctx.runId = started.runId
+  await vscode.commands.executeCommand('agentic.refresh')
+  const active = await until(
+    'run ativo na sidebar',
+    () => ctx.api.host.data.runs?.find((run) => run.id === ctx.runId),
+    30_000,
+    ctx,
+  )
+  assert.ok(['RUNNING', 'PAUSED', 'VERIFYING', 'BLOCKED', 'COMPLETED', 'FAILED'].includes(active.status))
+  await vscode.commands.executeCommand('agentic.openRun', ctx.runId)
+  const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label))
+  assert.ok(tabs.some((label) => label.includes('run …')), `rota do run ausente: ${tabs.join(', ')}`)
+  // O provider de exemplo e in-process (mock): o run termina sozinho, e a sidebar acompanha.
+  const final = await until(
+    'run terminal',
+    async () => {
+      await vscode.commands.executeCommand('agentic.refresh')
+      const run = ctx.api.host.data.runs?.find((r) => r.id === ctx.runId)
+      return run !== undefined && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status) ? run : undefined
+    },
+    120_000,
+    ctx,
+  )
+  assert.equal(final.status, 'COMPLETED', `run terminou em ${final.status}`)
+})
+
 step('Restart Agentic: novo dono, nunca dois', async (ctx) => {
   await vscode.commands.executeCommand('agentic.restart')
   const view = await until(

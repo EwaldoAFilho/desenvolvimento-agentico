@@ -67,9 +67,11 @@ um `stop` que a extensão chamaria.
   editor e ao Node do Electron; fere a independência do core e a posse por processo.
 - **Endpoint HTTP de shutdown.** Qualquer processo local poderia derrubar o control plane;
   o sinal ao pid publicado, com prova pelo silêncio, é o mesmo caminho do Ctrl+C.
-- **Reaproveitar o dashboard inteiro na webview.** `apps/web` roteia por
-  `window.location` e chama `/api` relativo; a fatia MVP reaproveita só as projeções puras
-  (`lib/format.ts`) e deixa RunDashboard/DagCanvas para a missão seguinte.
+- **Reaproveitar o dashboard inteiro na webview (na MVP-001).** `apps/web` roteava por
+  `window.location` e chamava `/api` relativo; a primeira fatia reaproveitou só as projeções
+  puras. **Revisto na MVP-002**: o dashboard ganhou três costuras — transporte injetável,
+  navegação em memória e um contexto de ações de editor — e passou a rodar inteiro na
+  webview atrás da ponte (ver adendo abaixo).
 
 ## Consequências
 
@@ -79,3 +81,23 @@ um `stop` que a extensão chamaria.
 - Multi-root: a primeira pasta com `.agentic/project.yaml` é o projeto da janela.
 - A dívida conhecida da 004B (cancelamento humano com gate/integração em voo) aparece na
   extensão como `Stop` → `FAILED` com o processo mantido — visível, não escondida.
+
+## Adendo (DA-VSCODE-MVP-002) — o dashboard inteiro atrás da ponte
+
+O `App` de `apps/web` é o mesmo no navegador e na aba do editor. O que muda é injetado:
+
+- **Transporte.** `setApiTransport` troca o `fetch` relativo por mensagens `api` à ponte; o
+  host executa contra o control plane do projeto detectado, com o header de guarda do
+  `repoRoot`, e devolve status e corpo. Só `/missions/plan` ganha prazo longo (15 min).
+- **Stream.** O host abre o SSE (`fetch` em stream, parser próprio) e repassa evento a
+  evento; a webview vê um `EventSourceLike`. Reconexão com cursor continua sendo do hook.
+- **Navegação.** `navigation: 'memory'`: a rota (Home / Mission / Run) vive no host, que a
+  usa para o título da aba e para a sidebar navegar.
+- **Ações de editor.** `EditorActionsContext`: abrir arquivo/worktree/log e diff nativo.
+  A autorização continua a do host: `repoRoot`, `projectDir` e as worktrees que o próprio
+  control plane devolveu em respostas de detalhe de task.
+- **Portão.** Sem control plane no ar não há dashboard: a webview mostra o estado do serviço
+  e o botão Start (mesmo `lifecycle` do host).
+
+Nada do core entrou no bundle da webview além do contrato (`@agentic/schemas` e seu
+`@agentic/domain` puro, como já ocorre no dashboard do navegador).

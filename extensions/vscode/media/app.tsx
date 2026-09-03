@@ -5,14 +5,11 @@ import './app.css'
 import { type JSX, StrictMode, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App, type Route } from '../../../apps/web/src/App.js'
-import { setApiTransport, type TransportResponse } from '../../../apps/web/src/api.js'
+import { setApiTransport } from '../../../apps/web/src/api.js'
 import { EditorActionsContext } from '../../../apps/web/src/editor-actions.js'
 import type { EventSourceLike } from '../../../apps/web/src/hooks/useRunStream.js'
-import type {
-  HostState,
-  HostToWebviewBridge,
-  WebviewToHostBridge,
-} from '../src/webview/bridge-protocol.js'
+import type { HostState, WebviewToHostBridge } from '../src/webview/bridge-protocol.js'
+import { createClientBridge } from '../src/webview/client-bridge.js'
 
 /**
  * O dashboard do produto DENTRO do editor. E o mesmo `App` de `apps/web` — mesmas telas,
@@ -22,89 +19,18 @@ import type {
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostBridge): void }
 const vscode = acquireVsCodeApi()
 
-let nextId = 1
-const pending = new Map<number, (result: TransportResponse) => void>()
-const streams = new Map<
-  number,
-  { listeners: Map<string, ((event: { data?: unknown }) => void)[]> }
->()
+const bridge = createClientBridge((message) => vscode.postMessage(message))
+setApiTransport({ request: (path, init) => bridge.request(path, init ?? {}) })
+const createEventSource = (url: string): EventSourceLike => bridge.createEventSource(url)
+window.addEventListener('message', (event: MessageEvent<unknown>) => bridge.dispatch(event.data))
 
 function send(message: WebviewToHostBridge): void {
   vscode.postMessage(message)
 }
 
-setApiTransport({
-  request: (path, init) =>
-    new Promise<TransportResponse>((resolve) => {
-      const id = nextId++
-      const method = init?.method === 'POST' ? 'POST' : 'GET'
-      const body = typeof init?.body === 'string' ? init.body : undefined
-      pending.set(id, resolve)
-      send({ type: 'api', id, method, path, ...(body === undefined ? {} : { body }) })
-    }),
-})
-
-/** `EventSourceLike` da webview: o host abre o SSE e repassa evento a evento. */
-function createEventSource(url: string): EventSourceLike {
-  const streamId = nextId++
-  const listeners = new Map<string, ((event: { data?: unknown }) => void)[]>()
-  streams.set(streamId, { listeners })
-  // `url` chega como `/api/runs/<id>/stream?since=N`; a ponte quer o caminho SEM `/api`.
-  const path = url.startsWith('/api') ? url.slice(4) : url
-  send({ type: 'stream.open', streamId, path })
-  return {
-    addEventListener: (type, listener) => {
-      const list = listeners.get(type) ?? []
-      list.push(listener)
-      listeners.set(type, list)
-    },
-    close: () => {
-      streams.delete(streamId)
-      send({ type: 'stream.close', streamId })
-    },
-  }
-}
-
-const hostListeners = new Set<(state: HostState) => void>()
-
-window.addEventListener('message', (event: MessageEvent<HostToWebviewBridge>) => {
-  const message = event.data
-  if (message === null || typeof message !== 'object') return
-  switch (message.type) {
-    case 'api.result': {
-      const resolve = pending.get(message.id)
-      if (resolve === undefined) return
-      pending.delete(message.id)
-      resolve({ status: message.status, ok: message.ok, text: () => Promise.resolve(message.text) })
-      return
-    }
-    case 'stream.event': {
-      const stream = streams.get(message.streamId)
-      if (stream === undefined) return
-      for (const listener of stream.listeners.get(message.event.type) ?? [])
-        listener({ data: message.event.data })
-      return
-    }
-    case 'stream.closed': {
-      const stream = streams.get(message.streamId)
-      if (stream === undefined) return
-      for (const listener of stream.listeners.get('error') ?? []) listener({ data: message.error })
-      return
-    }
-    case 'host':
-      for (const listener of hostListeners) listener(message.state)
-      return
-  }
-})
-
 function useHostState(): HostState | undefined {
   const [state, setState] = useState<HostState | undefined>(undefined)
-  useEffect(() => {
-    hostListeners.add(setState)
-    return () => {
-      hostListeners.delete(setState)
-    }
-  }, [])
+  useEffect(() => bridge.onHostState(setState), [])
   return state
 }
 

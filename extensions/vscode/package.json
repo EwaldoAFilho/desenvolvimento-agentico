@@ -2,7 +2,7 @@
   "name": "desenvolvimento-agentico-vscode",
   "displayName": "Desenvolvimento Agêntico",
   "description": "Governança, Missions, Runs e ciclo de vida do control plane de Desenvolvimento Agêntico dentro do VS Code.",
-  "version": "0.1.0-alpha.1",
+  "version": "0.2.0-alpha.1",
   "publisher": "desenvolvimento-agentico",
   "private": true,
   "preview": true,
@@ -250,7 +250,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project vscode-extension",
     "vscode:prepublish": "npm run build",
-    "package": "npm run build && vsce package --no-dependencies --out ../../desenvolvimento-agentico-vscode-0.1.0-alpha.1.vsix",
+    "package": "npm run build && vsce package --no-dependencies --out ../../desenvolvimento-agentico-vscode-0.2.0-alpha.1.vsix",
     "test:integration": "node test/run.mjs"
   },
   "devDependencies": {
