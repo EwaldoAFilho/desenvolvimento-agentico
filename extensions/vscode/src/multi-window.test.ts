@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { discoverLive } from './core/discovery.js'
 import { launchServe, type SpawnedProcess } from './core/launcher.js'
 import { AgenticService, type ServiceDeps } from './core/service.js'
-import type { Toolchain } from './core/toolchain.js'
+import { childEnv, type Toolchain } from './core/toolchain.js'
 
 /**
  * Duas janelas, um projeto, um control plane — com processos DE VERDADE.
@@ -122,7 +122,7 @@ function windowFor(project: Project, label: string): AgenticService {
         toolchain,
         projectDir: project.root,
         repoRoot: project.root,
-        env: { ...process.env },
+        env: childEnv(process.env, toolchain.node),
       })
       spawned.push(child)
       return Promise.resolve(child)

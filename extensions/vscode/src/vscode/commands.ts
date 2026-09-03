@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import { isGitRef, isRepoPath } from '../webview/protocol.js'
 import {
   GIT_SCHEME,
   GitContentProvider,
@@ -61,9 +62,9 @@ export function registerCommands(
     const input = args as Partial<Omit<OpenDiffArgs, 'repoRoot'>> | undefined
     if (
       repoRoot === undefined ||
-      !nonEmpty(input?.path) ||
-      !nonEmpty(input?.base) ||
-      !nonEmpty(input?.head)
+      !isRepoPath(input?.path) ||
+      !isGitRef(input?.base) ||
+      !isGitRef(input?.head)
     ) {
       return undefined
     }

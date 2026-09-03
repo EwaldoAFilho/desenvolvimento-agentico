@@ -229,6 +229,100 @@ describe('AgenticService.start', () => {
   })
 })
 
+describe('corrida entre duas janelas', () => {
+  /** Dois servicos, um projeto: o mundo decide quem publica; o outro filho sai com 0. */
+  function mundoDisputado(): { w: World; a: AgenticService; b: AgenticService } {
+    const w = world()
+    let winner: FakeProcess | undefined
+    const discover = (): Promise<LiveControlPlane | undefined> => {
+      if (winner === undefined && w.spawned.length === 2) {
+        // O segundo a nascer vence (o cenario adverso: quem chegou depois publica).
+        winner = w.spawned[1]
+        for (const p of w.spawned) if (p !== winner) p.exit(0)
+      }
+      w.live = winner === undefined || winner.done ? undefined : liveOf(winner.pid)
+      return Promise.resolve(w.live)
+    }
+    // Um SIGTERM ao vencedor faz ele sair, como o serve real.
+    const signal = (pid: number): boolean => {
+      w.signals.push(pid)
+      w.spawned.find((p) => p.pid === pid)?.exit(0)
+      return true
+    }
+    const a = new AgenticService(depsOf(w, { discover, signal }))
+    const b = new AgenticService(depsOf(w, { discover, signal }))
+    return { w, a, b }
+  }
+
+  it('dois ensureRunning simultaneos: um dono, o perdedor assentado, os dois RUNNING', async () => {
+    const { w, a, b } = mundoDisputado()
+    const [va, vb] = await Promise.all([a.ensureRunning(), b.ensureRunning()])
+    expect(va.state).toBe('RUNNING')
+    expect(vb.state).toBe('RUNNING')
+    expect(va.live?.pid).toBe(vb.live?.pid)
+    expect([va.owned, vb.owned].filter(Boolean)).toHaveLength(1)
+    // O perdedor nao deixou handle vivo para tras.
+    const loser = va.owned ? vb : va
+    expect(loser.childPid).toBeUndefined()
+    expect(w.spawned.filter((p) => !p.done)).toHaveLength(1)
+  })
+
+  it('stop do lado que adotou o vencedor encerra o vencedor, nao um filho fantasma', async () => {
+    const { w, a, b } = mundoDisputado()
+    const [va, vb] = await Promise.all([a.ensureRunning(), b.ensureRunning()])
+    const loserSide = va.owned ? b : a
+    const stopped = await loserSide.stop()
+    expect(stopped.state).toBe('STOPPED')
+    expect(w.signals).toEqual([w.spawned.find((p) => !p.done)?.pid ?? w.spawned[1]?.pid])
+    void vb
+  })
+
+  it('filho saiu com 0 antes de o vencedor publicar: espera pelo vencedor, nao vira STOPPED', async () => {
+    const w = world()
+    let polls = 0
+    const service = new AgenticService(
+      depsOf(w, {
+        spawnServe: () => {
+          const proc = new FakeProcess(3000)
+          w.spawned.push(proc)
+          proc.exit(0)
+          return Promise.resolve(proc)
+        },
+        discover: () => {
+          polls += 1
+          if (polls >= 4) w.live = liveOf(999)
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    const view = await service.ensureRunning()
+    expect(view).toMatchObject({ state: 'RUNNING', owned: false })
+    expect(view.live?.pid).toBe(999)
+  })
+
+  it('filho desta janela saiu, mas outro dono continua: stop nao declara STOPPED', async () => {
+    const w = world()
+    let phase: 'own' | 'other' = 'own'
+    const service = new AgenticService(
+      depsOf(w, {
+        discover: () => {
+          const child = w.spawned[0]
+          if (phase === 'own')
+            w.live = child !== undefined && !child.done ? liveOf(child.pid) : undefined
+          else w.live = liveOf(4242)
+          return Promise.resolve(w.live)
+        },
+      }),
+    )
+    await service.start()
+    phase = 'other'
+    const view = await service.stop()
+    expect(view.state).toBe('RUNNING')
+    expect(view.owned).toBe(false)
+    expect(view.live?.pid).toBe(4242)
+  })
+})
+
 describe('AgenticService.stop', () => {
   async function running(w: World, overrides: Partial<ServiceDeps> = {}): Promise<AgenticService> {
     const service = new AgenticService(

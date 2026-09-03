@@ -217,6 +217,5 @@ describe('resolveToolchain', () => {
     }
     const child = childEnv(env, { path: 'node', version: 'v22' })
     expect(Object.keys(child).sort()).toEqual(['HOME', 'PATH'])
-    expect(childEnv(env, { path: 'node', version: 'v22' }, ['MEU_AJUSTE']).MEU_AJUSTE).toBe('ok')
   })
 })

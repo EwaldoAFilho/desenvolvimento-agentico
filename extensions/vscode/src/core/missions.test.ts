@@ -25,6 +25,11 @@ describe('missions', () => {
     expect(missionIdOfFile('x/y.yml')).toBe('y')
   })
 
+  it('prefixo textual nao e contencao: /srv/repo-config nao esta dentro de /srv/repo', () => {
+    const [item] = missionFilesOnDisk('/srv/repo-config/.agentic/missions', '/srv/repo', ['a.yaml'])
+    expect(item?.file).toBe('/srv/repo-config/.agentic/missions/a.yaml')
+  })
+
   it('lista do disco usa o mesmo filtro e o mesmo caminho relativo do servidor', () => {
     expect(
       missionFilesOnDisk('/repo/.agentic/missions', '/repo', [

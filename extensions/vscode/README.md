@@ -16,7 +16,7 @@ por repositório (I14) — que ela reutiliza quando já existe e sobe quando nã
 2. Clique em **Agentic** na Activity Bar: projeto, branch e estado do control plane já aparecem.
 3. **Start Agentic** (ícone ▶ na view *Projeto* ou paleta): a extensão procura um dono
    vivo pelo `.agentic/control-plane.json` + `/api/health`; se não houver, sobe
-   `agentic serve -C <repoRoot>` e espera o health.
+   `agentic serve -C <diretório que contém .agentic/project.yaml>` e espera o health.
 4. Providers e Missions ficam visíveis na sidebar; **Open Agentic** abre o painel (Project Home).
 5. **Stop Agentic** encerra graciosamente (SIGTERM → drenagem → devolução da posse) e a UI
    passa por *Stopping…* até *Stopped*. **Restart** é stop provado e depois start.
@@ -41,7 +41,6 @@ Sem porta, sem PID, sem `curl`: tudo é descoberto.
 | `agentic.cliPath` | `""` | caminho da CLI; vazio detecta `apps/cli/bin/agentic.mjs` no repo, `node_modules/.bin/agentic`, `PATH` |
 | `agentic.nodePath` | `""` | `node` >= 22 para o control plane; vazio detecta no `PATH` e no nvm |
 | `agentic.stopOnWindowClose` | `true` | ao fechar a janela, encerra o control plane que **ela** iniciou |
-| `agentic.childEnvAllow` | `[]` | variáveis de ambiente ADICIONAIS repassadas ao `agentic serve`; por padrão só a allowlist operacional (`PATH`, `HOME`, locale, proxy, certificados). Nenhum segredo herdado pelo VS Code é injetado (P17) |
 
 ## Várias janelas
 
@@ -68,8 +67,8 @@ ou use a configuração de launch da raiz.
 - A CLI `agentic` precisa existir no repositório aberto, em `node_modules/.bin` ou no `PATH`;
   a extensão não a embute.
 - Multi-root: a primeira pasta com `.agentic/project.yaml` é o projeto da janela.
-- O `agentic serve` recebe só uma allowlist de ambiente; uma variável que o seu provider CLI
-  exija precisa ser declarada em `agentic.childEnvAllow`.
+- O `agentic serve` recebe só uma allowlist fechada de ambiente (`PATH`, `HOME`, locale,
+  proxy, certificados); nenhum segredo herdado pelo VS Code é injetado (P17).
 - O painel só abre caminhos dentro do repositório, do diretório de configuração ou de
   worktrees publicadas por ele; qualquer outro é recusado.
 - Sem chat próprio, sem editor de mission, sem aprovação/DAG (próxima missão).

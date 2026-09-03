@@ -267,7 +267,6 @@ export async function resolveToolchain(
  * O extension host herda o ambiente da sessao do usuario — e ali pode haver token de nuvem,
  * chave de API, credencial de CI. Nada disso e injetado no control plane: passa so o que um
  * processo precisa para achar executaveis, o diretorio do usuario, locale, proxy e certificados.
- * Quem precisar de mais declara os nomes em `agentic.childEnvAllow`.
  */
 export const CHILD_ENV_ALLOW: readonly string[] = [
   'PATH',
@@ -317,9 +316,8 @@ export const CHILD_ENV_ALLOW: readonly string[] = [
 export function childEnv(
   env: Readonly<Record<string, string | undefined>>,
   node: NodeBinary,
-  extraAllow: readonly string[] = [],
 ): Record<string, string | undefined> {
-  const allowed = new Set([...CHILD_ENV_ALLOW, ...extraAllow])
+  const allowed = new Set(CHILD_ENV_ALLOW)
   const out: Record<string, string | undefined> = {}
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined && allowed.has(key)) out[key] = value

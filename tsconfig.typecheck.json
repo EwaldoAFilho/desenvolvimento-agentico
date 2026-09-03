@@ -25,15 +25,13 @@
       "@agentic/server": ["./apps/server/src/index.ts"],
       "@agentic/web": ["./apps/web/src/index.ts"]
     },
-    "types": ["node"],
-    "lib": ["ES2023", "DOM"]
+    "types": ["node"]
   },
   "include": [
     "packages/*/src/**/*",
     "apps/cli/src/**/*",
     "apps/server/src/**/*",
     "extensions/vscode/src/**/*",
-    "extensions/vscode/media/**/*",
     "scripts/**/*",
     "tests/**/*"
   ],

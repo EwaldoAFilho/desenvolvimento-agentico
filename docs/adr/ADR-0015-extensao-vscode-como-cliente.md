@@ -26,7 +26,8 @@ um `stop` que a extensão chamaria.
 
 2. **Um control plane por `repoRoot`, também entre janelas.** `Start` primeiro procura o
    dono vivo (`control-plane.json` com pid vivo **e** `/api/health` respondendo pelo mesmo
-   `repoRoot` canônico) e o reutiliza; só no silêncio sobe `agentic serve -C <repoRoot>`.
+   `repoRoot` canônico) e o reutiliza; só no silêncio sobe `agentic serve -C <projectDir>` (o diretório que contém
+   `.agentic/project.yaml`; a identidade continua sendo o `repoRoot` canônico).
    Se duas janelas correm, a que perde vê o `serve` sair com 0 ("já há dono") e adota o
    vencedor. Projetos diferentes têm donos independentes.
 
@@ -48,12 +49,14 @@ um `stop` que a extensão chamaria.
 
 7. **O filho recebe uma allowlist de ambiente, nunca `process.env`.** O extension host herda
    a sessão do usuário, e ali pode haver token ou chave de API; nada disso é injetado no
-   control plane (P17). Só o operacional passa (`PATH`, `HOME`, locale, proxy, certificados),
-   mais o que o usuário declarar em `agentic.childEnvAllow`.
+   control plane (P17). Só o operacional passa (`PATH`, `HOME`, locale, proxy, certificados);
+   a lista é fechada — um passthrough configurável seria a porta de volta do token.
 
 8. **A webview só abre caminhos autorizados**: dentro do `repoRoot`, do diretório de
-   configuração ou publicados pelo host (worktrees das tentativas). O payload de cada
-   mensagem é validado por inteiro antes de qualquer ação.
+   configuração ou publicados pelo host (worktrees das tentativas), comparados após
+   `realpath` (symlink não escapa). Diff só sobre `path`/refs que o host publicou, e refs
+   nunca começam com `-` (nada vira opção do git). O payload de cada mensagem é validado
+   por inteiro, sem chaves extras.
 
 9. **Ações nativas sobre dados existentes.** Abrir arquivo/pasta e diff (`git show` dos dois
    lados num `TextDocumentContentProvider`) usam o editor; nada de editor próprio.

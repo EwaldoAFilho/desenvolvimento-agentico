@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import { messageOf } from '../core/project.js'
 import type { HomeState, HostToWebview, MissionDetail } from '../webview/protocol.js'
 import { isWebviewToHost } from '../webview/protocol.js'
-import { openDiff, openPath, type PathAuthorization } from './git-content.js'
+import { canonicalOrUndefined, openDiff, openPath, type PathAuthorization } from './git-content.js'
 import type { AgenticHost } from './host.js'
 import type { AgenticLog } from './log.js'
 
@@ -20,6 +20,8 @@ export class HomePanel implements vscode.Disposable {
   private selectedFile: string | undefined
   /** Caminhos fora do repositorio que o host publicou ao painel (worktrees das tentativas). */
   private readonly published = new Set<string>()
+  /** Diffs que o painel pode pedir: exatamente os `path|base|head` que o host publicou. */
+  private readonly publishedDiffs = new Set<string>()
   private readonly disposables: vscode.Disposable[] = []
 
   constructor(
@@ -105,6 +107,12 @@ export class HomePanel implements vscode.Disposable {
         return
       case 'openDiff':
         if (repoRoot !== undefined) {
+          if (!this.publishedDiffs.has(`${raw.path}|${raw.base}|${raw.head}`)) {
+            this.log.warn(
+              `webview: diff nao publicado recusado: ${raw.path} ${raw.base}..${raw.head}`,
+            )
+            return
+          }
           await openDiff({ repoRoot, path: raw.path, base: raw.base, head: raw.head }).catch(
             (error: unknown) =>
               vscode.window.showWarningMessage(`Agentic: diff indisponível: ${messageOf(error)}`),
@@ -119,10 +127,18 @@ export class HomePanel implements vscode.Disposable {
     try {
       this.selected = await this.host.missionDetail(file)
       for (const task of this.selected.tasks ?? []) {
-        if (task.isolation.worktreePath !== undefined)
-          this.published.add(task.isolation.worktreePath)
-        for (const attempt of task.attempts) {
-          if (attempt.worktreePath !== undefined) this.published.add(attempt.worktreePath)
+        const paths = [task.isolation.worktreePath, ...task.attempts.map((a) => a.worktreePath)]
+        for (const path of paths) {
+          if (path === undefined) continue
+          const real = await canonicalOrUndefined(path)
+          if (real !== undefined) this.published.add(real)
+        }
+        const base = task.isolation.baseCommit
+        const head = task.isolation.commit ?? task.isolation.branch
+        if (base !== undefined && head !== undefined) {
+          for (const change of task.facts.filesChanged) {
+            this.publishedDiffs.add(`${change.path}|${base}|${head}`)
+          }
         }
       }
     } catch (error) {

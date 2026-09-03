@@ -31,6 +31,8 @@ export interface ServiceView {
   readonly live?: LiveControlPlane
   /** `true` = o processo no ar e filho desta janela. */
   readonly owned: boolean
+  /** pid de um filho criado por esta janela que ainda nao saiu (dono confirmado ou nao). */
+  readonly childPid?: number
   readonly since: string
   readonly failure?: ServiceFailure
   /** Ultima verificacao (ISO). */
@@ -95,6 +97,7 @@ export class AgenticService {
       state: this.state,
       owned: this.ownsLive(),
       since: this.since,
+      ...(this.child !== undefined && !this.child.done ? { childPid: this.child.pid } : {}),
       ...(this.live === undefined ? {} : { live: this.live }),
       ...(this.failure === undefined ? {} : { failure: this.failure }),
       ...(this.checkedAt === undefined ? {} : { checkedAt: this.checkedAt }),
@@ -182,17 +185,33 @@ export class AgenticService {
     this.child = child
     this.deps.log(`agentic serve iniciado (pid ${child.pid}); aguardando /api/health`)
     const deadline = this.deps.now().getTime() + this.timeouts.startMs
+    let exitedZeroAt: number | undefined
     for (;;) {
+      const live = await this.deps.discover()
+      if (live !== undefined && live.pid === child.pid) {
+        this.adopt(live)
+        this.deps.log(`control plane no ar em ${live.url} (pid ${live.pid})`)
+        return this.view()
+      }
+      if (live !== undefined) {
+        // Outro processo venceu a corrida (outra janela, o terminal). O nosso filho e o
+        // perdedor: assenta ele PRIMEIRO, para nunca haver dois handles vivos, e so entao
+        // adota o vencedor.
+        await this.settleLoser(child)
+        this.deps.log(`ha dono em ${live.url} (pid ${live.pid ?? '?'}); reutilizando`)
+        this.adopt(live)
+        return this.view()
+      }
       if (child.done) {
         const exit = await child.exited
-        // Saida 0 sem publicar = "ja havia dono": outra janela venceu a corrida. O control
-        // plane existe; so nao e nosso filho.
-        const live = await this.deps.discover()
-        if (live !== undefined) {
-          this.child = undefined
-          this.deps.log(`serve saiu (${describeExit(exit)}) e ha dono em ${live.url}; reutilizando`)
-          this.adopt(live)
-          return this.view()
+        if (exit.code === 0) {
+          // Saida 0 sem publicar = "ja havia dono": o vencedor pode ainda nao ter publicado
+          // o endereco. Espera-se por ele ate o prazo, nao por uma unica consulta.
+          exitedZeroAt ??= this.deps.now().getTime()
+          if (this.deps.now().getTime() - exitedZeroAt < this.timeouts.stopMs) {
+            await this.deps.sleep(this.timeouts.pollMs)
+            continue
+          }
         }
         this.child = undefined
         this.fail(
@@ -200,12 +219,6 @@ export class AgenticService {
           `agentic serve encerrou (${describeExit(exit)}) sem publicar o control plane:\n${child.output()}`,
         )
         this.transition('STOPPED')
-        return this.view()
-      }
-      const live = await this.deps.discover()
-      if (live !== undefined) {
-        this.adopt(live)
-        this.deps.log(`control plane no ar em ${live.url} (pid ${live.pid ?? '?'})`)
         return this.view()
       }
       if (this.deps.now().getTime() > deadline) {
@@ -234,6 +247,24 @@ export class AgenticService {
     }
   }
 
+  /**
+   * O filho que perdeu a disputa sai sozinho com 0 ("ja havia dono"). Se nao sair, recebe
+   * SIGTERM; se ainda assim ficar, o handle e mantido em `child` e aparece em `childPid` —
+   * nunca e esquecido. Em nenhum caso o dono real e tocado.
+   */
+  private async settleLoser(child: SpawnedProcess): Promise<void> {
+    if (await this.waitUntil(() => child.done, this.timeouts.stopMs)) {
+      this.child = undefined
+      return
+    }
+    child.kill('SIGTERM')
+    if (await this.waitUntil(() => child.done, this.timeouts.stopMs)) {
+      this.child = undefined
+      return
+    }
+    this.deps.log(`filho perdedor (pid ${child.pid}) nao saiu; handle mantido`)
+  }
+
   private async doStop(): Promise<ServiceView> {
     if (this.state === 'STOPPED') return this.view()
     this.transition('STOPPING')
@@ -254,6 +285,16 @@ export class AgenticService {
         return this.view()
       }
       this.child = undefined
+      // O filho saiu; mas o control plane no ar pode ser OUTRO (o filho era um perdedor).
+      // STOPPED so quando a descoberta esta muda.
+      const remaining = await this.deps.discover()
+      if (remaining !== undefined) {
+        this.deps.log(
+          `filho encerrado, mas ha dono em ${remaining.url} (pid ${remaining.pid ?? '?'}); continua RUNNING`,
+        )
+        this.adopt(remaining)
+        return this.view()
+      }
       this.live = undefined
       this.failure = undefined
       this.transition('STOPPED')

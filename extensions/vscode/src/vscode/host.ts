@@ -90,14 +90,23 @@ export class AgenticHost implements vscode.Disposable {
     this.watcher = undefined
     // Um servico que possui um filho vivo nao e esquecido ao trocar de projeto: continua
     // alcancavel pelo encerramento da janela (stopOnWindowClose).
-    if (this.service !== undefined && this.service.view().owned) this.retired.push(this.service)
+    if (this.service?.view().childPid !== undefined) this.retired.push(this.service)
     this.service = undefined
     this.reports.clear()
     this.data = { missions: [] }
     if (detected !== undefined) {
       this.log.info(`projeto detectado: ${detected.name} (${detected.repoRoot})`)
       this.service = this.createService(detected)
-      this.disposables.push({ dispose: this.service.onDidChange(() => this.setContexts()) })
+      this.disposables.push({
+        dispose: this.service.onDidChange((view) => {
+          this.setContexts()
+          // Entrou ou saiu do ar: os dados mudam de fonte (control plane x disco). Recarrega
+          // FRESCO — uma carga em voo iniciada antes da transicao leu a fonte antiga.
+          if (view.state === 'RUNNING' || view.state === 'STOPPED') {
+            void this.loadData({ fresh: true }).then(() => this.notify())
+          }
+        }),
+      })
       this.watchRuntimeDir(detected)
     } else {
       this.log.info('nenhum .agentic/project.yaml nas pastas abertas')
@@ -129,7 +138,7 @@ export class AgenticHost implements vscode.Disposable {
           toolchain,
           projectDir: project.projectDir,
           repoRoot: project.repoRoot,
-          env: childEnv(process.env, toolchain.node, settings.get<string[]>('childEnvAllow', [])),
+          env: childEnv(process.env, toolchain.node),
           onLine: (line) => log.child(line),
           banner,
         })
@@ -190,8 +199,12 @@ export class AgenticHost implements vscode.Disposable {
   }
 
   /** Providers, missions e runs. Sem control plane: missions vem do disco, o resto e "nao apurado". */
-  async loadData(): Promise<void> {
-    if (this.loading !== undefined) return this.loading
+  async loadData(options: { readonly fresh?: boolean } = {}): Promise<void> {
+    if (this.loading !== undefined) {
+      if (!options.fresh) return this.loading
+      // Uma carga em voo pode ter lido a fonte errada; espera ela e faz outra, do zero.
+      await this.loading.catch(() => undefined)
+    }
     this.loading = this.doLoadData().finally(() => {
       this.loading = undefined
     })
@@ -306,7 +319,7 @@ export class AgenticHost implements vscode.Disposable {
       return service.view()
     } finally {
       this.busy = undefined
-      await this.loadData()
+      await this.loadData({ fresh: true })
       this.notify()
     }
   }
@@ -334,8 +347,10 @@ export class AgenticHost implements vscode.Disposable {
       .getConfiguration('agentic')
       .get<boolean>('stopOnWindowClose', true)
     if (!stopOnClose) return
+    // Todo filho VIVO criado por esta janela — dono confirmado, ainda em STARTING ou retido em
+    // FAILED — e alcancado; o dono externo, nunca.
     const owned = [...this.retired, ...(this.service === undefined ? [] : [this.service])].filter(
-      (service) => service.view().owned,
+      (service) => service.view().childPid !== undefined,
     )
     for (const service of owned) {
       this.log.info('janela fechando: encerrando o control plane desta janela')

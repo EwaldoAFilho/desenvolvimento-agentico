@@ -1,4 +1,4 @@
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import type { CompileReportDto, MissionListItem, RunHeaderDto } from './contracts.js'
 
 /**
@@ -52,10 +52,9 @@ export function missionFilesOnDisk(
     .sort()
     .map((name) => {
       const path = join(missionsDir, name)
-      const file = path.startsWith(repoRoot)
-        ? path.slice(repoRoot.length).replace(/^[\\/]/, '')
-        : path
-      return { file, path }
+      const rel = relative(repoRoot, path)
+      const inside = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+      return { file: inside ? rel.split(sep).join('/') : path, path }
     })
 }
 

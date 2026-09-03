@@ -204,14 +204,6 @@
           "type": "boolean",
           "default": true,
           "description": "Ao fechar esta janela, encerrar graciosamente o control plane que ELA iniciou. Um control plane iniciado por outra janela ou pelo terminal nunca é tocado."
-        },
-        "agentic.childEnvAllow": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "markdownDescription": "Nomes de variáveis de ambiente ADICIONAIS repassadas ao `agentic serve`. Por padrão só passa uma allowlist operacional (`PATH`, `HOME`, locale, proxy, certificados…); nenhum segredo herdado pelo VS Code é injetado (P17)."
         }
       }
     }
@@ -230,5 +222,8 @@
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.0",
     "esbuild": "^0.28.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0"
   }
 }

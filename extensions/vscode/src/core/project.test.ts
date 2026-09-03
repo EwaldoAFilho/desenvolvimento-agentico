@@ -78,6 +78,25 @@ describe('readProjectFacts', () => {
 
   it('arquivo sem as chaves nao quebra', () => {
     expect(readProjectFacts('kind: Project\n')).toEqual({})
+    expect(readProjectFacts('project: [\n')).toEqual({})
+  })
+
+  it('YAML valido em qualquer forma deriva os mesmos fatos que a CLI', () => {
+    expect(
+      readProjectFacts(
+        'project: { name: "x # nao e comentario", repoRoot: ../alvo }\nserver: { port: "4500" }\n',
+      ),
+    ).toEqual({
+      name: 'x # nao e comentario',
+      repoRoot: '../alvo',
+      port: 4500,
+    })
+    expect(
+      readProjectFacts("project:\n  name: 'aspas simples'\n  repoRoot: |-\n    ../b\n"),
+    ).toEqual({
+      name: 'aspas simples',
+      repoRoot: '../b',
+    })
   })
 })
 

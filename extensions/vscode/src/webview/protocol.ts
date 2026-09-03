@@ -60,18 +60,46 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
-/** Valida a mensagem INTEIRA: tipo conhecido e cada campo do payload com o formato esperado. */
+/** Ref de git que NUNCA vira opcao: sem `-` inicial, sem espaco, sem `..`/`:`; nomes e hashes so. */
+export const GIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
+
+export function isGitRef(value: unknown): value is string {
+  return (
+    nonEmpty(value) && GIT_REF_PATTERN.test(value) && !value.includes('..') && !value.endsWith('/')
+  )
+}
+
+/** Caminho de arquivo que nunca vira opcao do git nem sai por `..`. */
+export function isRepoPath(value: unknown): value is string {
+  return nonEmpty(value) && !value.startsWith('-') && !value.split(/[\\/]/).includes('..')
+}
+
+const SHAPES: Record<WebviewToHost['type'], readonly string[]> = {
+  ready: [],
+  refresh: [],
+  start: [],
+  stop: [],
+  restart: [],
+  showLog: [],
+  selectMission: ['file'],
+  openFile: ['path'],
+  openMissionFile: ['file'],
+  openDiff: ['path', 'base', 'head'],
+  openWorktree: ['path'],
+}
+
+/** Valida a mensagem INTEIRA: tipo conhecido, exatamente as chaves esperadas, cada campo no formato certo. */
 export function isWebviewToHost(raw: unknown): raw is WebviewToHost {
   if (typeof raw !== 'object' || raw === null) return false
   const message = raw as Record<string, unknown>
-  switch (message.type) {
-    case 'ready':
-    case 'refresh':
-    case 'start':
-    case 'stop':
-    case 'restart':
-    case 'showLog':
-      return true
+  const type = message.type
+  if (typeof type !== 'string' || !(type in SHAPES)) return false
+  const expected = SHAPES[type as WebviewToHost['type']]
+  const keys = Object.keys(message)
+    .filter((k) => k !== 'type')
+    .sort()
+  if (keys.join(',') !== [...expected].sort().join(',')) return false
+  switch (type) {
     case 'selectMission':
     case 'openMissionFile':
       return nonEmpty(message.file)
@@ -79,8 +107,8 @@ export function isWebviewToHost(raw: unknown): raw is WebviewToHost {
     case 'openWorktree':
       return nonEmpty(message.path)
     case 'openDiff':
-      return nonEmpty(message.path) && nonEmpty(message.base) && nonEmpty(message.head)
+      return isRepoPath(message.path) && isGitRef(message.base) && isGitRef(message.head)
     default:
-      return false
+      return true
   }
 }

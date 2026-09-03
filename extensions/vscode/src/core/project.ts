@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { PROJECT_FILE_NAME, RUNTIME_DIR_NAME } from './contracts.js'
 
 /**
@@ -53,44 +54,51 @@ interface ProjectYamlFacts {
   readonly port?: number
 }
 
-function unquote(raw: string): string {
-  const value = raw.replace(/\s+#.*$/, '').trim()
-  if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'"))) {
-    return value.slice(1, -1)
-  }
-  return value
+function section(doc: unknown, key: string): Record<string, unknown> | undefined {
+  if (typeof doc !== 'object' || doc === null) return undefined
+  const value = (doc as Record<string, unknown>)[key]
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function stringOf(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /**
- * Leitura minima do YAML: apenas `project.name`, `project.repoRoot`, `server.host` e
- * `server.port`, todos escalares de um nivel de indentacao. Qualquer coisa fora disso e
- * ignorada — nao e um parser, e uma extracao.
+ * Leitura de `project.name`, `project.repoRoot`, `server.host` e `server.port` com um parser
+ * YAML generico: flow mappings, escapes e `#` dentro de string sao YAML valido, e a CLI os
+ * aceita — a extensao precisa derivar a MESMA identidade (I14). Nada e validado alem
+ * disso: validar e trabalho do control plane. YAML invalido vira "sem fatos", e o `serve`
+ * dira linha e coluna.
  */
 export function readProjectFacts(text: string): ProjectYamlFacts {
-  let section: string | undefined
-  const facts: { name?: string; repoRoot?: string; host?: string; port?: number } = {}
-  for (const rawLine of text.split(/\r?\n/)) {
-    if (rawLine.trim().length === 0 || rawLine.trimStart().startsWith('#')) continue
-    const top = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(rawLine)
-    if (top !== null) {
-      section = top[1]
-      continue
-    }
-    const nested = /^\s+([A-Za-z][\w-]*):\s*(.*)$/.exec(rawLine)
-    if (nested === null || nested[1] === undefined || nested[2] === undefined) continue
-    const key = nested[1]
-    const value = unquote(nested[2])
-    if (section === 'project' && key === 'name' && facts.name === undefined) facts.name = value
-    if (section === 'project' && key === 'repoRoot' && facts.repoRoot === undefined) {
-      facts.repoRoot = value
-    }
-    if (section === 'server' && key === 'host' && facts.host === undefined) facts.host = value
-    if (section === 'server' && key === 'port' && facts.port === undefined) {
-      const port = Number.parseInt(value, 10)
-      if (Number.isInteger(port) && port > 0) facts.port = port
-    }
+  let doc: unknown
+  try {
+    doc = parseYaml(text)
+  } catch {
+    return {}
   }
-  return facts
+  const project = section(doc, 'project')
+  const server = section(doc, 'server')
+  const rawPort = server?.port
+  const port =
+    typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0
+      ? rawPort
+      : typeof rawPort === 'string' && /^\d+$/.test(rawPort)
+        ? Number.parseInt(rawPort, 10)
+        : undefined
+  const name = stringOf(project, 'name')
+  const repoRoot = stringOf(project, 'repoRoot')
+  const host = stringOf(server, 'host')
+  return {
+    ...(name === undefined ? {} : { name }),
+    ...(repoRoot === undefined ? {} : { repoRoot }),
+    ...(host === undefined ? {} : { host }),
+    ...(port === undefined ? {} : { port }),
+  }
 }
 
 /** Sobe a partir de `start` ate achar `<dir>/.agentic/project.yaml`. */

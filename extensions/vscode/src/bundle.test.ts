@@ -42,13 +42,16 @@ describe('bundle da extensao', () => {
   it('metafile: todo modulo empacotado e da extensao (ou projecao pura do dashboard)', () => {
     expect(inputs.length).toBeGreaterThan(0)
     // Caminhos relativos a extensions/vscode (absWorkingDir).
+    // `yaml` e biblioteca generica (parser), permitida pela regra de independencia.
     const allowed = (input: string): boolean =>
-      input.startsWith('src/') || input === '../../apps/web/src/lib/format.ts'
+      input.startsWith('src/') ||
+      input === '../../apps/web/src/lib/format.ts' ||
+      input.startsWith('../../node_modules/yaml/')
     expect(inputs.filter((input) => !allowed(input))).toEqual([])
-    // Em especial: nada de apps/server, apps/cli, packages/* nem node_modules em tempo de execucao.
+    expect(inputs.filter((input) => /(apps\/(server|cli)|packages\/)/.test(input))).toEqual([])
     expect(
-      inputs.some((input) => /(apps\/(server|cli)|packages\/|node_modules\/)/.test(input)),
-    ).toBe(false)
+      inputs.filter((input) => /node_modules\//.test(input) && !/node_modules\/yaml\//.test(input)),
+    ).toEqual([])
   })
 
   it('nao contem o core: nem servidor, nem banco, nem orquestrador', () => {
@@ -73,6 +76,6 @@ describe('bundle da extensao', () => {
   })
 
   it('e pequeno o bastante para ser so uma casca', () => {
-    expect(bundle.length).toBeLessThan(300_000)
+    expect(bundle.length).toBeLessThan(700_000)
   })
 })

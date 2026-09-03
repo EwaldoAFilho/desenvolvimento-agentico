@@ -84,6 +84,7 @@ step('status, providers e missions lidos do control plane', async (ctx) => {
     'providers',
     () => (ctx.api.host.data.providers ? ctx.api.host.data : undefined),
     60_000,
+    ctx,
   )
   assert.ok(data.providers.length > 0, 'ao menos um provider')
   for (const provider of data.providers) {
