@@ -89,7 +89,7 @@ resposta — e `GATE_FAILED` ficaria indistinguível de `REVIEW_FAILED` na obser
 | 10 | `REVIEW` | `INTEGRATING` | veredito `PASS` | `reviewer ≠ executor` ∧ `ReviewPolicy` satisfeita ou rebaixamento registrado (só em `cross-provider-preferred`) |
 | 11 | `REVIEW` | `FAILED` | veredito `FAIL` | — |
 | 12 | `REVIEW` | `BLOCKED` | veredito `ESCALATE` | — |
-| 12b | `VERIFYING` | `BLOCKED` | `cross-provider-required` sem segundo fornecedor apto | `kind: POLICY`, `reason: CROSS_PROVIDER_UNAVAILABLE`. **Nunca rebaixa em silêncio** |
+| 12b | `VERIFYING` | `BLOCKED` | política de revisão insatisfazível | `kind: POLICY`. `reason: CROSS_PROVIDER_UNAVAILABLE` — `cross-provider-required` sem segundo fornecedor apto, **nunca rebaixa em silêncio**; ou `reason: SIMULATED_REVIEWER_ONLY` — só restaram candidatos de ensaio (`kind: inprocess`), que não revisam tentativa real em política nenhuma |
 | 13 | `INTEGRATING` | `DONE` | merge concluído | predicado P06 satisfeito |
 | 14 | `INTEGRATING` | `FAILED` | `INTEGRATION_CONFLICT` | — |
 | 15 | `FAILED` | `RETRY` | política de retry | `attemptCount < maxAttempts` ∧ falha retentável ∧ run não pausado |

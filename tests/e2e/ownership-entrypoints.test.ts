@@ -9,6 +9,7 @@ import {
   spawnCli,
 } from './support/cross-process.js'
 import { type Fixture, materializeFixture } from './support/fixture.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * I14 pelos ENTRYPOINTS, nao pela primitiva.
@@ -28,27 +29,6 @@ import { type Fixture, materializeFixture } from './support/fixture.js'
  * A prova de que um comando NAO mutou por fora e fisica: um segundo `state.db` no diretorio
  * de configuracao e o rastro que o defeito deixa. Se ele existe, houve escritor a mais.
  */
-
-/** Fornecedores in-process: nenhuma CLI real e invocada, nenhuma quota e consumida. */
-function comAgentesInProcess(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
-}
 
 interface ProjetoDividido {
   /** Onde mora o `.agentic/project.yaml` — e SO ele. */
@@ -75,7 +55,7 @@ async function existe(path: string): Promise<boolean> {
  * arquivos de configuracao.
  */
 async function projetoComConfigForaDoRepo(): Promise<ProjetoDividido> {
-  const fixture = await materializeFixture({ project: comAgentesInProcess })
+  const fixture = await materializeFixture({ project: withScriptedProviders })
   const configRoot = await realpath(await mkdtemp(join(tmpdir(), 'agentic-config-')))
   const paraORepo = relative(configRoot, fixture.root)
   const projectText = fixture.sources.projectText

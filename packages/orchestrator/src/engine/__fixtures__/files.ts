@@ -124,10 +124,15 @@ export function projectYaml(project: ProjectFixture = {}): string {
     `  default: ${providers[0]?.id ?? 'mock'}`,
     '  registry:',
   ]
+  // `local-cli`, e nao `inprocess`: `inprocess` e a marca de ENSAIO no contrato, e agente
+  // de ensaio nao revisa tentativa real. O que torna estes fornecedores baratos e a
+  // substituicao do FACTORY pelo harness (`factoriesOf`) — nenhuma CLI e construida, o
+  // `command` abaixo nunca e executado — e nao uma declaracao que muda a semantica testada.
   for (const provider of providers) {
     lines.push(
       `    ${provider.id}:`,
-      '      kind: inprocess',
+      '      kind: local-cli',
+      `      command: agente-roteirizado-${provider.id}`,
       `      maxConcurrent: ${provider.maxConcurrent}`,
       '      roles: [executor, reviewer]',
     )

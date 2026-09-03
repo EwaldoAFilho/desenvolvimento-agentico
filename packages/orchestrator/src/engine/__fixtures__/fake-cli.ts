@@ -21,6 +21,8 @@ export interface FakeStep {
   readonly writePath?: string
   /** Silencio total em stdout/stderr: expoe o que sobra para o relato do agente. */
   readonly silent?: boolean
+  /** Ultima linha que a CLI escreve antes de sair: a CAUSA que o usuario precisa ler. */
+  readonly message?: string
   readonly stdoutBytes?: number
   readonly stderrBytes?: number
   /** Arquivo que um NETO escreve depois do atraso; prova se a arvore morreu ou nao. */
@@ -89,7 +91,7 @@ function act() {
     process.exit(0)
   }
   if (step.kind === 'exit') {
-    if (!step.silent) process.stderr.write(taskId + ': recusei a tarefa\\n')
+    if (!step.silent) process.stderr.write((step.message ?? taskId + ': recusei a tarefa') + '\\n')
     process.exit(step.exitCode ?? 1)
   }
   if (step.kind === 'kill') {

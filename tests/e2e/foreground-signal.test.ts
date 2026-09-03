@@ -6,6 +6,7 @@ import { acquireControlPlaneOwnership, openPersistence } from '@agentic/persiste
 import { afterAll, describe, expect, it } from 'vitest'
 import { runCli, spawnCli } from './support/cross-process.js'
 import { type Fixture, materializeFixture } from './support/fixture.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * STABILITY-SLICE-004 — Ctrl+C em `mission start` com trabalho em voo.
@@ -49,25 +50,9 @@ function vivo(pid: number): boolean {
 
 const marker = join(tmpdir(), `agentic-setup-${nodeProcess.pid}-${Date.now()}`)
 
-/** Fornecedores in-process e um setup que dorme 20s escrevendo o proprio pid. */
+/** Agentes roteirizados e um setup de worktree que dorme 20s escrevendo o proprio pid. */
 function projetoComSetupLento(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  const trocado = projectText.slice(0, inicio) + bloco + projectText.slice(fim)
+  const trocado = withScriptedProviders(projectText)
   const js = `require('node:fs').writeFileSync('${marker}', String(process.pid)); setTimeout(() => {}, 20000)`
   return trocado.replace(
     '    commands: []',

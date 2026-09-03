@@ -8,6 +8,7 @@ import { pass, review, type StepFn } from './support/agents.js'
 import { adopters, type SpawnedOwner, spawnOwner } from './support/cross-process.js'
 import { ENTREGAS } from './support/entregas.js'
 import { createMissionHarness, type MissionHarness } from './support/harness.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * STABILITY-SLICE-004 — o ciclo de vida do SERVICO, entre processos de verdade.
@@ -56,27 +57,6 @@ function vivo(pid: number): boolean {
   }
 }
 
-/** Fornecedores in-process no `project.yaml` do fixture: nenhuma CLI real, zero quota. */
-function comAgentesInProcess(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
-}
-
 /** Agente lento: fica em voo enquanto o control plane cai. */
 const lento: StepFn = (context) => {
   if (context.kind === 'review') return review('PASS')
@@ -110,7 +90,7 @@ function posseLivre(h: MissionHarness): boolean {
  * control plane que caiu no meio do trabalho.
  */
 async function projetoComRunEmVoo(): Promise<MissionHarness> {
-  const harness = await createMissionHarness({ step: lento, project: comAgentesInProcess })
+  const harness = await createMissionHarness({ step: lento, project: withScriptedProviders })
   await harness.start()
   harness.orchestrator.start()
   await esperar('uma task chegar a RUNNING', async () =>
@@ -235,7 +215,7 @@ function gatesComMissionGateTeimoso(marker: string): string {
  * que a adocao retoma iniciando o gate do zero (I12).
  */
 async function projetoEmVerifying(marker: string): Promise<MissionHarness> {
-  const harness = await createMissionHarness({ project: comAgentesInProcess })
+  const harness = await createMissionHarness({ project: withScriptedProviders })
   await writeFile(
     join(agenticDe(harness), 'gates.yaml'),
     gatesComMissionGateTeimoso(marker),

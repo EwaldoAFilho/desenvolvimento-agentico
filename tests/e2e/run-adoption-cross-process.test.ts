@@ -1,6 +1,7 @@
 import { ControlPlaneBusyError, startServer } from '@agentic/server'
 import { describe, expect, it } from 'vitest'
 import { createMissionHarness } from './support/harness.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * A garantia que faltava a I13, agora que I14 existe.
@@ -17,29 +18,9 @@ import { createMissionHarness } from './support/harness.js'
  * verdade esta em `control-plane-ownership.test.ts`.
  */
 
-function comAgentesInProcess(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
-}
-
 describe('I14 — a adocao tem dono unico tambem entre control planes', () => {
   it('o segundo control plane sobre o mesmo projeto e recusado, e o primeiro segue dono', async () => {
-    const h = await createMissionHarness({ project: comAgentesInProcess })
+    const h = await createMissionHarness({ project: withScriptedProviders })
     try {
       await h.start()
       await h.plane.pauseRun(h.runId, { actor: 'humano@estoque-cli' })

@@ -192,15 +192,25 @@ const reviewPassedByIndependentReviewer: TaskGuard = {
   },
 }
 
-const crossProviderUnavailable: TaskGuard = {
-  name: 'cross-provider-unavailable',
+/**
+ * Politica de revisao que NAO da para satisfazer com os fornecedores declarados.
+ *
+ * Duas causas, um destino. `cross-provider-required` sem segundo fornecedor apto nunca
+ * rebaixa (I10). E revisor de ENSAIO nao satisfaz politica nenhuma, nem `fresh-session`:
+ * um roteiro fixo nao e a segunda leitura independente que a revisao promete (P07).
+ * Nos dois casos o run para com motivo, em vez de girar em silencio ou aprovar de mentira.
+ */
+const reviewPolicyUnsatisfiable: TaskGuard = {
+  name: 'review-policy-unsatisfiable',
   check: (_taskRun, ctx) => {
     const review = ctx.review
     if (review === undefined || !review.requireReview) return false
-    if (review.policy !== 'cross-provider-required') return false
     const selection = review.selection
+    if (selection === undefined || selection.ok) return false
+    if (selection.reason === 'SIMULATED_REVIEWER_ONLY') return true
     return (
-      selection !== undefined && !selection.ok && selection.reason === 'CROSS_PROVIDER_UNAVAILABLE'
+      review.policy === 'cross-provider-required' &&
+      selection.reason === 'CROSS_PROVIDER_UNAVAILABLE'
     )
   },
 }
@@ -359,8 +369,9 @@ export const TASK_TRANSITIONS: readonly TaskTransition[] = [
     from: 'VERIFYING',
     to: 'BLOCKED',
     trigger: 'REVIEW_POLICY_UNSATISFIABLE',
-    guard: crossProviderUnavailable,
-    description: 'cross-provider-required sem segundo fornecedor apto; nunca rebaixa em silencio',
+    guard: reviewPolicyUnsatisfiable,
+    description:
+      'politica de revisao insatisfazivel: sem segundo fornecedor apto, ou so revisor de ensaio',
   },
   {
     id: '13',

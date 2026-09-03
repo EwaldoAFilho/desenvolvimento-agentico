@@ -302,11 +302,18 @@ export interface ControlPlane {
  */
 export type ControlPlaneAccess = 'owned' | 'readonly'
 
-/** Perfis declarados no projeto; sem declaracao, um por papel suportado pelo provider. */
+/**
+ * Perfis declarados no projeto; sem declaracao, um por papel suportado pelo provider.
+ *
+ * `simulated` sai do `kind` do fornecedor, o unico lugar onde a configuracao ja diz que o
+ * agente e in-process — nao de uma lista de nomes espalhada pelo codigo. O dominio recebe a
+ * marca pronta e nunca precisa saber quem e quem (P18).
+ */
 export function profilesOf(project: ProjectFile): AgentProfile[] {
   const profiles: AgentProfile[] = []
   for (const [id, config] of Object.entries(project.providers.registry)) {
     const providerId = toProviderId(id)
+    const simulated = config.kind === 'inprocess'
     const declared = Object.entries(config.profiles ?? {})
     if (declared.length > 0) {
       for (const [profileId, profile] of declared) {
@@ -317,6 +324,7 @@ export function profilesOf(project: ProjectFile): AgentProfile[] {
           model: profile.model,
           systemContextRef: profile.systemContextRef,
           tags: [...profile.tags],
+          simulated,
         })
       }
       continue
@@ -327,6 +335,7 @@ export function profilesOf(project: ProjectFile): AgentProfile[] {
         role,
         providerId,
         tags: [],
+        simulated,
       })
     }
   }

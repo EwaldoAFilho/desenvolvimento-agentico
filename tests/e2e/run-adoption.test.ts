@@ -10,6 +10,7 @@ import { missionStep, pass, review } from './support/agents.js'
 import { ENTREGAS } from './support/entregas.js'
 import { PROJECT_PATH } from './support/fixture.js'
 import { createMissionHarness, type MissionHarness } from './support/harness.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * D3 / I13 — RUN ADOPTION DEPOIS DE UM REINICIO DO CONTROL PLANE.
@@ -29,23 +30,7 @@ interface ProjectOptions {
 }
 
 function comAgentesInProcess(projectText: string, options: ProjectOptions = {}): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  const trocado = projectText.slice(0, inicio) + bloco + projectText.slice(fim)
+  const trocado = withScriptedProviders(projectText)
   if (options.missionSetupSleepMs === undefined) return trocado
   // O setup roda com `cwd` NA worktree recem-criada. Olhando o proprio cwd, o comando
   // segura so a worktree do gate da missao (`.../<runId>/mission`) e deixa as tentativas

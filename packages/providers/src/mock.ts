@@ -72,9 +72,20 @@ export interface MockAgentProviderOptions {
   readonly now?: () => number
 }
 
+/**
+ * Sem roteiro nenhum nao ha o que ensaiar — e fingir sucesso era o pior desfecho possivel.
+ *
+ * O `completed` de antes fazia a tentativa cair em `NO_CHANGES: a tentativa nao alterou
+ * nenhum arquivo` tres vezes seguidas ate `BLOCKED`, sem que nada na mensagem ligasse a
+ * causa ao agente de ensaio. Reprovar dizendo o nome do problema custa uma tentativa e
+ * economiza a investigacao inteira. O status continua vindo do provider, nunca do relato.
+ */
 export const MOCK_FALLBACK_STEP: MockScriptStep = {
-  status: 'completed',
-  claims: { summary: 'mock: nada a fazer neste roteiro' },
+  status: 'failed',
+  claims: {
+    summary:
+      'agente de ensaio sem roteiro: nao escreve codigo. Troque providers.default por uma CLI real',
+  },
 }
 
 export interface PlannedWrite {

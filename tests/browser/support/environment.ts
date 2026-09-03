@@ -39,20 +39,35 @@ export const MISSION_REF = 'EXEMPLO-001'
 export const LARGE_MISSION_REF = LARGE_MISSION_ID
 
 /**
- * Fornecedores in-process (MockAgentProvider) no lugar dos dois da CLI. Nenhum adapter de
- * CLI real chega a ser construido: a suite de navegador nao invoca agente real e nao
- * consome quota. Sao DOIS porque a missao tem uma task de risco alto com
- * `reviewPolicy: cross-provider-required` — com um so, a missao nem compilaria.
+ * Ids que esta suite substitui por agente roteirizado. Nenhum outro pode existir no
+ * registry: a substituicao e por id, e um id fora desta lista chegaria a uma CLI de verdade.
+ */
+export const SCRIPTED_PROVIDER_IDS = ['mock', 'mock-reviewer'] as const
+
+/**
+ * Dois fornecedores roteirizados no lugar dos dois da CLI. A substituicao acontece no
+ * `providerFactories` (ver `openControlPlane`), exatamente como no E2E: nenhum adapter de
+ * CLI real chega a ser construido, nenhuma quota e consumida.
+ *
+ * Sao DOIS porque a missao tem uma task de risco alto com `cross-provider-required` — com
+ * um so, a missao nem compilaria.
+ *
+ * E sao `local-cli`, e nao `inprocess`, de proposito: `inprocess` e a marca de ENSAIO, e
+ * agente de ensaio nao revisa tentativa real (dominio, `selectReviewer`). Declarar aqui o
+ * que o produto declara — fornecedor de CLI local — mantem esta suite exercitando a mesma
+ * configuracao do usuario; o que a torna barata e o roteiro, nao a mentira no arquivo.
  */
 const MOCK_PROVIDERS = `providers:
-  default: mock
+  default: ${SCRIPTED_PROVIDER_IDS[0]}
   registry:
-    mock:
-      kind: inprocess
+    ${SCRIPTED_PROVIDER_IDS[0]}:
+      kind: local-cli
+      command: agente-roteirizado
       maxConcurrent: 3
       roles: [executor, reviewer]
-    mock-reviewer:
-      kind: inprocess
+    ${SCRIPTED_PROVIDER_IDS[1]}:
+      kind: local-cli
+      command: agente-roteirizado-revisor
       maxConcurrent: 2
       roles: [executor, reviewer]
 `
@@ -75,8 +90,9 @@ export function withMockProviders(projectText: string): string {
 }
 
 /**
- * Guarda de quota: se a reescrita deixasse passar um provider `local-cli`, o control plane
- * tentaria falar com uma CLI de verdade. A suite recusa subir nesse estado.
+ * Guarda de quota: todo id do registry precisa ser um dos que esta suite SUBSTITUI. Um id
+ * que sobrasse da reescrita — `claude-code`, por exemplo — chegaria ao adapter de verdade e
+ * a suite falaria com uma CLI real. A suite recusa subir nesse estado.
  */
 export function assertZeroQuota(projectText: string): void {
   const parsed = parseProjectFile(projectText)
@@ -85,11 +101,12 @@ export function assertZeroQuota(projectText: string): void {
       `fixture: ${PROJECT_PATH} invalido apos a reescrita: ${JSON.stringify(parsed.issues)}`,
     )
   }
-  const real = Object.entries(parsed.value.providers.registry)
-    .filter(([, config]) => config.kind !== 'inprocess')
-    .map(([id]) => id)
-  if (real.length > 0) {
-    throw new Error(`fixture: provider fora de in-process apos a reescrita: ${real.join(', ')}`)
+  const substituidos = new Set<string>(SCRIPTED_PROVIDER_IDS)
+  const estranhos = Object.keys(parsed.value.providers.registry).filter(
+    (id) => !substituidos.has(id),
+  )
+  if (estranhos.length > 0) {
+    throw new Error(`fixture: provider nao roteirizado apos a reescrita: ${estranhos.join(', ')}`)
   }
 }
 
@@ -220,6 +237,8 @@ async function openControlPlane(projectRoot: string): Promise<RunningServer> {
     gatesFile: sources.gatesFile,
     repoRoot: sources.repoRoot,
     lease,
+    // A substituicao e por id e cobre o registry inteiro — `assertZeroQuota` ja provou, no
+    // texto do arquivo, que todo id aqui e um dos roteirizados.
     providerFactories: Object.fromEntries(
       Object.keys(sources.project.providers.registry).map((id) => [id, factory]),
     ),

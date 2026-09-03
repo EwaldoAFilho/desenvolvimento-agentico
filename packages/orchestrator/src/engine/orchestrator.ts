@@ -80,7 +80,7 @@ import {
 import { type EventContext, engineEvent, humanActor } from './events.js'
 import { gateEvidence, integrationEvidence, reviewEvidence, scopeEvidence } from './evidence.js'
 import { runGate } from './gate-run.js'
-import { attemptDirectory, observeAttempt } from './observe.js'
+import { agentFailureCause, attemptDirectory, observeAttempt } from './observe.js'
 import {
   ACTIVE_STATUSES,
   ATTEMPT_RESULT_OF,
@@ -1094,9 +1094,13 @@ export class Orchestrator {
     const parsed = parseReview(outcome?.claims)
 
     if (message.failure !== undefined || outcome === undefined || parsed.verdict === undefined) {
+      // Mesma regra do executor: a causa observada acompanha a falha. "revisor nao emitiu
+      // veredito" sozinho nao diz se a CLI recusou, expirou a sessao ou respondeu fora do
+      // contrato — e sem isso a pessoa so descobre abrindo o log.
+      const cause = agentFailureCause(outcome?.claims)
       const failure = message.failure ?? {
         code: 'AGENT_ERROR' as const,
-        detail: 'revisor nao emitiu veredito; revisao nao concluiu',
+        detail: `revisor nao emitiu veredito; revisao nao concluiu${cause === undefined ? '' : `: ${cause}`}`,
       }
       await this.#failAttempt(state, taskRun, inflight.attempt, failure, inflight)
       return
@@ -1867,6 +1871,9 @@ export class Orchestrator {
       model: profile.model,
       sessionRef: `review:${this.#tickCount}:${profile.providerId}:${profile.id}`,
       startedAt,
+      // A marca de ensaio VIAJA com a identidade: e ela que o dominio le para recusar uma
+      // revisao de mentira, e e ela que fica registrada na tentativa.
+      ...(profile.simulated === true ? { simulated: true } : {}),
     }))
   }
 
@@ -2205,6 +2212,12 @@ export class Orchestrator {
       return
     }
     inflight.phase = 'observing'
+    // A causa VIAJA, a decisao NAO: `agentCause` e texto para o humano ler; quem decide o
+    // codigo continua sendo `outcome.status`, que sai do exit do processo (P05/ADR-0006).
+    // Sem isto a falha real do fornecedor — CLI velha, sessao expirada, modelo invalido —
+    // chegava a tela como `AGENT_ERROR: agente encerrou com status failed`, e o unico
+    // caminho ate a causa era abrir o arquivo de log da tentativa.
+    const agentCause = agentFailureCause(outcome.claims)
     const observed = await observeAttempt({
       workspaces: this.#deps.workspaces,
       artifacts: this.#deps.artifacts,
@@ -2213,6 +2226,7 @@ export class Orchestrator {
       attemptNumber: inflight.attempt.attemptNumber,
       workspace: inflight.workspace,
       agentStatus: outcome.status,
+      ...(agentCause === undefined ? {} : { agentCause }),
       enforceTouches: inflight.enforceTouches,
       commitMessage: `${inflight.spec.id} a${inflight.attempt.attemptNumber}: ${inflight.spec.title}`,
     })
@@ -2386,7 +2400,14 @@ export class Orchestrator {
     })
   }
 
-  /** Transicao 12b: `cross-provider-required` sem segundo fornecedor apto nunca rebaixa. */
+  /**
+   * Transicao 12b: politica de revisao que os fornecedores declarados nao satisfazem.
+   *
+   * `cross-provider-required` sem segundo fornecedor apto nunca rebaixa (I10); e um agente
+   * de ENSAIO nunca vira revisor real, em politica nenhuma. A politica gravada e a que foi
+   * de fato resolvida para a task — inventar `cross-provider-required` aqui faria a tela
+   * mentir sobre o conserto.
+   */
   async #blockByPolicy(
     state: TickState,
     decision: Extract<SchedulerDecision, { kind: 'block-task' }>,
@@ -2395,6 +2416,10 @@ export class Orchestrator {
     if (taskRun === undefined || taskRun.status !== 'VERIFYING') return
     const inflight = [...this.#inflight.values()].find((item) => item.spec.id === decision.taskId)
     const now = this.#deps.clock.now()
+    const needs =
+      decision.reason === 'SIMULATED_REVIEWER_ONLY'
+        ? 'um fornecedor real declarado como revisor: agente de ensaio nao revisa tentativa real'
+        : 'segundo fornecedor apto a revisar, ou mudanca explicita da politica de revisao'
     await this.#blockTask(
       state,
       taskRun,
@@ -2405,13 +2430,13 @@ export class Orchestrator {
         reason: decision.reason,
         raisedBy: 'orchestrator',
         raisedAt: now,
-        needs: 'segundo fornecedor apto a revisar, ou mudanca explicita da politica de revisao',
+        needs,
       },
       [],
       {
         requireReview: true,
-        policy: 'cross-provider-required',
-        selection: { ok: false, policy: 'cross-provider-required', reason: decision.reason },
+        policy: decision.policy,
+        selection: { ok: false, policy: decision.policy, reason: decision.reason },
         reviewerSlotAvailable: false,
         providerCapacityAvailable: false,
       },

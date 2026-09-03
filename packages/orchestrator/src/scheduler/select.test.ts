@@ -361,8 +361,28 @@ describe('select — politica de revisao', () => {
       }),
     )
     expect(decisions).toEqual([
-      { kind: 'block-task', taskId: T('T01'), reason: 'CROSS_PROVIDER_UNAVAILABLE' },
+      {
+        kind: 'block-task',
+        taskId: T('T01'),
+        reason: 'CROSS_PROVIDER_UNAVAILABLE',
+        policy: 'cross-provider-required',
+      },
     ])
+  })
+
+  it('so revisor de ENSAIO vira block-task, em qualquer politica (U12)', () => {
+    const ensaio = { ...identity('rev-ensaio', GAMMA, 'reviewer'), simulated: true }
+    for (const policy of [
+      'fresh-session',
+      'cross-provider-preferred',
+      'cross-provider-required',
+    ] as const) {
+      expect(
+        select(review({ reviewCandidates: [ensaio], projectReviewPolicy: { default: policy } })),
+      ).toEqual([
+        { kind: 'block-task', taskId: T('T01'), reason: 'SIMULATED_REVIEWER_ONLY', policy },
+      ])
+    }
   })
 
   it('cross-provider-required nunca produz dispatch-reviewer sem segundo fornecedor', () => {

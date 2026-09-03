@@ -63,7 +63,12 @@ export type { GateOutcome, RunGateInput } from './gate-run.js'
 export { runGate } from './gate-run.js'
 export { SharedTreeIntegrator } from './integration.js'
 export type { ObserveInput, ObserveOutcome } from './observe.js'
-export { attemptDirectory, observeAttempt } from './observe.js'
+export {
+  AGENT_CAUSE_MAX_CHARS,
+  agentFailureCause,
+  attemptDirectory,
+  observeAttempt,
+} from './observe.js'
 export type {
   AbandonOptions,
   DrainOptions,

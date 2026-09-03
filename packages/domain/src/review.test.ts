@@ -139,6 +139,43 @@ describe('selectReviewer', () => {
     })
   })
 
+  describe('agente de ENSAIO nunca revisa tentativa real (U12)', () => {
+    const ensaio = { ...identity('session-ensaio', 'p-ensaio', 'reviewer'), simulated: true }
+
+    it.each(REVIEW_POLICIES)('recusa em %s, sem rebaixar e sem esperar', (policy) => {
+      expect(selectReviewer([ensaio], EXECUTOR, policy)).toEqual({
+        ok: false,
+        policy,
+        reason: 'SIMULATED_REVIEWER_ONLY',
+      })
+    })
+
+    it('CENARIO CRITICO: executor real + ensaio sob cross-provider-required', () => {
+      // O ensaio tem fornecedor DIFERENTE do executor: sem a marca ele passaria como
+      // revisor cruzado valido, e a revisao seria de mentira.
+      expect(selectReviewer([ensaio], EXECUTOR, 'cross-provider-required')).toMatchObject({
+        ok: false,
+        reason: 'SIMULATED_REVIEWER_ONLY',
+      })
+    })
+
+    it('um revisor real ao lado do ensaio continua sendo eleito', () => {
+      const real = identity('session-real', 'p-beta', 'reviewer')
+      expect(selectReviewer([ensaio, real], EXECUTOR, 'cross-provider-required')).toMatchObject({
+        ok: true,
+        reviewer: real,
+        policyOutcome: 'satisfied',
+      })
+    })
+
+    it('sem candidato nenhum continua sendo NO_REVIEWER_AVAILABLE, nao ensaio', () => {
+      expect(selectReviewer([], EXECUTOR, 'fresh-session')).toMatchObject({
+        ok: false,
+        reason: 'NO_REVIEWER_AVAILABLE',
+      })
+    })
+  })
+
   it('prefere perfil diferente do executor e e deterministico', () => {
     const mesmoPerfil = identity('session-r3', 'p-beta', 'executor')
     const perfilDistinto = identity('session-r4', 'p-beta', 'reviewer')

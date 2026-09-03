@@ -6,6 +6,7 @@ import nodeProcess from 'node:process'
 import { acquireControlPlaneOwnership, openPersistence } from '@agentic/persistence'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createMissionHarness, type MissionHarness } from './support/harness.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * STABILITY-SLICE-004 / D6 — INTEGRACAO em voo quando o control plane encerra.
@@ -42,27 +43,6 @@ async function esperar(
     if (Date.now() > limite) throw new Error(`esperei ${label} por ${timeoutMs}ms`)
     await sleep(25)
   }
-}
-
-/** Fornecedores in-process no `project.yaml` do fixture: nenhuma CLI real, zero quota. */
-function comAgentesInProcess(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
 }
 
 let shimDir: string
@@ -103,7 +83,7 @@ describe.skipIf(nodeProcess.platform === 'win32')('D6 — integracao em voo no e
   })
 
   it('o resultado observado da integracao e persistido antes de devolver o projeto', async () => {
-    harness = await createMissionHarness({ project: comAgentesInProcess })
+    harness = await createMissionHarness({ project: withScriptedProviders })
     const h = harness
     await h.start()
     h.orchestrator.start()
@@ -174,7 +154,7 @@ describe.skipIf(nodeProcess.platform === 'win32')(
       await rm(entrou, { force: true })
       await rm(segue, { force: true })
       harness = await createMissionHarness({
-        project: comAgentesInProcess,
+        project: withScriptedProviders,
         mission: missaoDeUmaTask,
       })
       const h = harness
@@ -221,7 +201,7 @@ describe.skipIf(nodeProcess.platform === 'win32')(
       await rm(entrou, { force: true })
       await rm(segue, { force: true })
       harness = await createMissionHarness({
-        project: comAgentesInProcess,
+        project: withScriptedProviders,
         mission: missaoDeUmaTask,
       })
       const h = harness

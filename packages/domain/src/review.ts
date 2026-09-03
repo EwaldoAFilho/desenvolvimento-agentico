@@ -104,7 +104,15 @@ export function resolveReviewPolicy(input: ReviewPolicyResolutionInput): Resolve
   )
 }
 
-export type ReviewerRejection = 'CROSS_PROVIDER_UNAVAILABLE' | 'NO_REVIEWER_AVAILABLE'
+export type ReviewerRejection =
+  | 'CROSS_PROVIDER_UNAVAILABLE'
+  | 'NO_REVIEWER_AVAILABLE'
+  /**
+   * So restaram candidatos de ENSAIO. Recusa explicita, e nao espera silenciosa: um roteiro
+   * fixo aprovando a propria evidencia seria revisao de mentira, e uma task parada sem
+   * motivo na tela e o defeito vizinho.
+   */
+  | 'SIMULATED_REVIEWER_ONLY'
 
 export interface ReviewerSelected {
   readonly ok: true
@@ -140,7 +148,14 @@ export function selectReviewer(
   executor: AgentIdentity,
   policy: ReviewPolicy,
 ): ReviewerSelection {
-  const eligible = candidates.filter((candidate) => !isSameAgentIdentity(candidate, executor))
+  const distinct = candidates.filter((candidate) => !isSameAgentIdentity(candidate, executor))
+  // Ensaio nao revisa, em politica nenhuma: `fresh-session` tambem exige um leitor de
+  // verdade. A recusa e separada de `NO_REVIEWER_AVAILABLE` porque o conserto e outro —
+  // ali falta capacidade, aqui falta um fornecedor real declarado.
+  const eligible = distinct.filter((candidate) => candidate.simulated !== true)
+  if (eligible.length === 0 && distinct.length > 0) {
+    return { ok: false, policy, reason: 'SIMULATED_REVIEWER_ONLY' }
+  }
   const crossProvider = eligible.filter((candidate) => candidate.providerId !== executor.providerId)
 
   if (policy === 'cross-provider-required') {

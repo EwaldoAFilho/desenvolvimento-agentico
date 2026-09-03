@@ -343,10 +343,12 @@ instalada e **todo** gate falha. Mas se `node_modules` estiver **rastreado pelo 
 criado; a guarda de aquisição de workspace reprova; e nenhuma task em `RUNNING` pode existir
 sem workspace válido. O run fica correto e parado ao mesmo tempo.
 
-**O que fazer.** Pare de versionar `node_modules` (é o que se espera de qualquer jeito):
+**O que fazer.** Pare de versionar `node_modules` (é o que se espera de qualquer jeito). Os
+padrões do estado local do Agentic o `agentic init` já acrescenta ao seu `.gitignore`;
+`node_modules` é do seu projeto:
 
 ```sh
-printf 'node_modules/\n.agentic/state.db\n.agentic/runs/\n.agentic/worktrees/\n.agentic/control-plane.json\n' >> .gitignore
+printf 'node_modules/\n' >> .gitignore
 git rm -r --cached node_modules
 git commit -m "para de versionar node_modules"
 ```
@@ -855,7 +857,20 @@ médio, cuja política é `cross-provider-preferred`: o scheduler procura um rev
 **outro** fornecedor — e o `mock` se qualifica, porque ele é, de fato, outro fornecedor. O
 `mock` é determinístico e não emite veredito, então a revisão nunca conclui.
 
-**O que fazer.** Não deixe o `mock` disponível como revisor num projeto real:
+**Consertado na 0.3.0.** Um fornecedor `kind: inprocess` é um agente de **ensaio**, e ensaio
+não revisa tentativa real — em política nenhuma, nem em `fresh-session`. O escalonamento
+recusa antes de despachar e a task vai para `BLOCKED` com o motivo e o conserto na tela, em
+vez de queimar o orçamento de tentativas:
+
+```console
+bloqueio: [POLICY] SIMULATED_REVIEWER_ONLY — precisa: um fornecedor real declarado como
+revisor: agente de ensaio nao revisa tentativa real
+```
+
+Não há mais nada a configurar para evitar o sintoma acima; `roles: [executor, reviewer]` num
+provider `inprocess` (inclusive o padrão, quando `roles` é omitido) não o torna revisor.
+
+**O que fazer** se você caiu nesse bloqueio: declare um fornecedor real no `registry`.
 
 ```yaml
 providers:
@@ -867,20 +882,9 @@ providers:
       versionArgs: ["--version"]
       maxConcurrent: 2
       roles: [executor, reviewer]
-    # sem `mock` aqui. Se você quiser mantê-lo para ensaios, use um project.yaml separado.
 ```
 
-Cuidado com o padrão: **`roles` omitido vale por `[executor, reviewer]`**. Declarar
-
-```yaml
-    mock:
-      kind: inprocess
-      maxConcurrent: 4
-```
-
-deixa o mock apto a revisar do mesmo jeito.
-
-Depois de retirar o `mock`, a mesma missão rodou até `COMPLETED`, com a revisão indo para
+Com o fornecedor real no lugar, a mesma missão rodou até `COMPLETED`, com a revisão indo para
 uma sessão nova do fornecedor real e o rebaixamento registrado:
 
 ```console

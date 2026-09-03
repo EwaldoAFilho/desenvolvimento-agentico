@@ -29,13 +29,16 @@ export function planReviews(
     // Viabilidade e questao de politica: avaliada sobre todos os candidatos, sem capacidade.
     const feasible = selectReviewer(input.reviewCandidates, pending.executor, resolved.policy)
     if (!feasible.ok) {
-      // I10: `cross-provider-required` vira BLOCKED, nunca rebaixa. Falta de revisor apto
-      // e transitoria e so espera o proximo tick.
-      if (feasible.reason === 'CROSS_PROVIDER_UNAVAILABLE') {
+      // I10: `cross-provider-required` vira BLOCKED, nunca rebaixa. Revisor de ENSAIO
+      // tambem vira BLOCKED, em qualquer politica: o conserto e humano (declarar um
+      // fornecedor real), e esperar o proximo tick nunca o traria. Falta de revisor apto
+      // por capacidade continua sendo transitoria e so espera.
+      if (feasible.reason !== 'NO_REVIEWER_AVAILABLE') {
         decisions.push({
           kind: 'block-task',
           taskId: pending.taskId,
-          reason: 'CROSS_PROVIDER_UNAVAILABLE',
+          reason: feasible.reason,
+          policy: resolved.policy,
         })
       }
       continue

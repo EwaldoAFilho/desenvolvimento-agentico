@@ -11,6 +11,7 @@ import {
   spawnOwner,
 } from './support/cross-process.js'
 import { createMissionHarness, type MissionHarness } from './support/harness.js'
+import { withScriptedProviders } from './support/providers.js'
 
 /**
  * I14 — para um `repoRoot` canonico existe no maximo UM control plane owner.
@@ -25,33 +26,12 @@ import { createMissionHarness, type MissionHarness } from './support/harness.js'
  * nao o socket — `agentic serve --port N` tem de esbarrar na mesma parede.
  */
 
-/** Fornecedores in-process no `project.yaml` do fixture: nenhuma CLI real, zero quota. */
-function comAgentesInProcess(projectText: string): string {
-  const inicio = projectText.indexOf('  default: claude-code')
-  const fim = projectText.indexOf('\ngates:')
-  if (inicio === -1 || fim === -1) throw new Error('fixture: bloco de providers nao encontrado')
-  const bloco = [
-    '  default: alfa',
-    '  registry:',
-    '    alfa:',
-    '      kind: inprocess',
-    '      maxConcurrent: 3',
-    '      roles: [executor, reviewer]',
-    '    beta:',
-    '      kind: inprocess',
-    '      maxConcurrent: 2',
-    '      roles: [executor, reviewer]',
-    '',
-  ].join('\n')
-  return projectText.slice(0, inicio) + bloco + projectText.slice(fim)
-}
-
 /**
  * Projeto descartavel com UM run em `PAUSED` — recuperavel, portanto adotavel no boot, e sem
  * nada em voo. Estado parado deixa a medicao ser sobre POSSE, nao sobre quem correu mais.
  */
 async function projetoComRunRecuperavel(): Promise<MissionHarness> {
-  const harness = await createMissionHarness({ project: comAgentesInProcess })
+  const harness = await createMissionHarness({ project: withScriptedProviders })
   await harness.start()
   await harness.plane.pauseRun(harness.runId, { actor: 'diagnostico@D4' })
   const run = await harness.run()

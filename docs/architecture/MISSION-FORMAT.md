@@ -246,7 +246,7 @@ providers:
         executor: { role: executor }
         reviewer: { role: reviewer }
     mock:
-      kind: inprocess
+      kind: inprocess            # agente de ENSAIO: roteiro fixo, sem processo e sem quota
       maxConcurrent: 8
 
 gates:
@@ -257,6 +257,21 @@ server:
   host: 127.0.0.1
   port: 4317
 ```
+
+### `kind: inprocess` é ensaio, e ensaio não revisa
+
+`local-cli` é um agente de verdade: processo local, sessão do usuário, resultado imprevisível.
+`inprocess` é um roteiro determinístico — existe para teste, demonstração e preview.
+
+A diferença tem consequência de produto, e não só de implementação: **um fornecedor
+`inprocess` nunca satisfaz revisão de tentativa real**, em política nenhuma, nem em
+`fresh-session`. Revisão é a segunda leitura independente da evidência (P07), e um roteiro
+não lê nada. O escalonamento recusa antes de despachar e a task vai para `BLOCKED` com
+`reason: SIMULATED_REVIEWER_ONLY` (transição 12b em
+[STATE-MACHINES.md](STATE-MACHINES.md)) — nunca com uma revisão de mentira.
+
+`roles: [executor, reviewer]` num provider `inprocess` não muda isso, e nem precisa ser
+retirado: a inelegibilidade vem do `kind`.
 
 ---
 
